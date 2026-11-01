@@ -12,6 +12,7 @@ plugins = ["dep:wasmtime", "dep:wasmtime-wasi"]
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+libc = "0.2"
 thiserror.workspace = true
 uniffi = { workspace = true, optional = true }
 wasmtime = { version = "50", optional = true, default-features = false, features = ["cranelift", "component-model", "runtime", "std"] }

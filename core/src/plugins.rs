@@ -81,7 +81,8 @@ impl LoadedPlugin {
         let summary = match &event.kind {
             EventKind::TaskCreated { subject, .. } => subject.clone(),
             EventKind::TaskUpdated { status, .. } => Some(status.clone()),
-            EventKind::ToolRan { tool_name, .. } | EventKind::SubagentTool { tool_name } => Some(tool_name.clone()),
+            EventKind::ToolRan { tool } => Some(tool.tool_name.clone()),
+            EventKind::SubagentTool { tool_name } => Some(tool_name.clone()),
             _ => None,
         };
         let ev = wit::AgentEvent {
