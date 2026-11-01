@@ -17,6 +17,64 @@ pub fn event_name(event: AgentEvent) -> String {
     event.kind.name().to_owned()
 }
 
+pub use haunt_core::{CoreError, Progress, SidebarGroup, Row, RowKind, SidebarSnapshot, Subrow, SurfaceEnv};
+
+/// Called after any change to the snapshot, on the thread that caused it (often the socket thread).
+#[uniffi::export(callback_interface)]
+pub trait CoreListener: Send + Sync {
+    fn changed(&self);
+}
+
+/// The sidebar model and hook intake. See docs/core-api.md.
+#[derive(uniffi::Object)]
+pub struct HauntCore {
+    core: haunt_core::Core,
+}
+
+#[uniffi::export]
+impl HauntCore {
+    #[uniffi::constructor]
+    pub fn new(config_dir: String) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self { core: haunt_core::Core::new(config_dir) })
+    }
+
+    pub fn start(&self) -> Result<(), CoreError> {
+        self.core.start()
+    }
+
+    pub fn register_surface(&self, cwd: String) -> SurfaceEnv {
+        self.core.register_surface(&cwd)
+    }
+
+    pub fn unregister_surface(&self, surface_id: String) {
+        self.core.unregister_surface(&surface_id);
+    }
+
+    pub fn set_surface_info(&self, surface_id: String, title: String, cwd: String, git_branch: Option<String>) {
+        self.core.set_surface_info(&surface_id, &title, &cwd, git_branch);
+    }
+
+    pub fn select_surface(&self, surface_id: String) {
+        self.core.select_surface(&surface_id);
+    }
+
+    pub fn on_osc_notification(&self, surface_id: String, title: String, body: String) {
+        self.core.on_osc_notification(&surface_id, &title, &body);
+    }
+
+    pub fn snapshot(&self) -> SidebarSnapshot {
+        self.core.snapshot()
+    }
+
+    pub fn set_listener(&self, listener: Box<dyn CoreListener>) {
+        self.core.set_listener(std::sync::Arc::new(move || listener.changed()));
+    }
+
+    pub fn answer_permission(&self, surface_id: String, allow: bool) -> Option<Vec<u8>> {
+        self.core.answer_permission(&surface_id, allow)
+    }
+}
+
 #[cfg(feature = "plugins")]
 pub use haunt_core::plugins::{Decoration, LoadStats};
 
@@ -62,5 +120,48 @@ impl PluginHandle {
 
     pub fn take_logs(&self) -> Vec<String> {
         self.plugin.lock().unwrap().take_logs()
+    }
+}
+
+pub use haunt_core::intake::Delivery;
+
+#[uniffi::export(with_foreign)]
+pub trait IntakeListener: Send + Sync {
+    /// Called on the intake thread; hop to the main actor before touching UI.
+    fn on_delivery(&self, delivery: Delivery);
+}
+
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum IntakeBindError {
+    #[error("{reason}")]
+    Failed { reason: String },
+}
+
+/// Hook-event socket at `<dir>/sock`; dropping it closes and unlinks the socket.
+#[derive(uniffi::Object)]
+pub struct HauntIntake {
+    inner: haunt_core::intake::Intake,
+}
+
+#[uniffi::export]
+impl HauntIntake {
+    #[uniffi::constructor]
+    pub fn bind(dir: String, listener: std::sync::Arc<dyn IntakeListener>) -> Result<std::sync::Arc<Self>, IntakeBindError> {
+        let sink: haunt_core::intake::Sink = std::sync::Arc::new(move |d| listener.on_delivery(d));
+        haunt_core::intake::Intake::bind(dir.as_ref(), Default::default(), sink)
+            .map(|inner| std::sync::Arc::new(Self { inner }))
+            .map_err(|e| IntakeBindError::Failed { reason: e.to_string() })
+    }
+
+    pub fn path(&self) -> String {
+        self.inner.path().display().to_string()
+    }
+
+    pub fn register_surface(&self, surface_id: String, nonce: String) {
+        self.inner.register_surface(&surface_id, &nonce);
+    }
+
+    pub fn unregister_surface(&self, surface_id: String) {
+        self.inner.unregister_surface(&surface_id);
     }
 }

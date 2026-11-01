@@ -7,12 +7,19 @@ version.workspace = true
 [features]
 default = ["plugins"]
 ffi = ["dep:uniffi"]
-plugins = ["dep:wasmtime", "dep:wasmtime-wasi"]
+plugins = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:sha2", "dep:hmac", "dep:getrandom"]
 
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+libc = "0.2"
 thiserror.workspace = true
 uniffi = { workspace = true, optional = true }
 wasmtime = { version = "50", optional = true, default-features = false, features = ["cranelift", "component-model", "runtime", "std"] }
+sha2 = { version = "0.10", optional = true }
+hmac = { version = "0.12", optional = true }
+getrandom = { version = "0.3", optional = true }
 wasmtime-wasi = { version = "50", optional = true, default-features = false, features = ["p2"] }
+
+[dev-dependencies]
+wasmtime = { version = "50", default-features = false, features = ["cranelift", "component-model", "runtime", "std", "wat"] }

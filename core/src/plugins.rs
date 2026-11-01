@@ -1,6 +1,5 @@
 //! wasmtime host for `haunt:plugin@0.1` components. Phase 0: one plugin, no capabilities.
 
-use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::time::Instant;
 
@@ -10,6 +9,7 @@ use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::event::{AgentEvent, EventKind};
+use crate::plugin_cache::{CacheError, CwasmCache, cache_name};
 
 mod bindings {
     wasmtime::component::bindgen!({ path: "../wit/haunt-plugin.wit", world: "plugin" });
@@ -42,6 +42,11 @@ pub struct PluginError(pub String);
 impl From<wasmtime::Error> for PluginError {
     fn from(e: wasmtime::Error) -> Self {
         Self(format!("{e:#}"))
+    }
+}
+impl From<CacheError> for PluginError {
+    fn from(e: CacheError) -> Self {
+        Self(e.to_string())
     }
 }
 impl From<std::io::Error> for PluginError {
@@ -81,7 +86,8 @@ impl LoadedPlugin {
         let summary = match &event.kind {
             EventKind::TaskCreated { subject, .. } => subject.clone(),
             EventKind::TaskUpdated { status, .. } => Some(status.clone()),
-            EventKind::ToolRan { tool_name, .. } | EventKind::SubagentTool { tool_name } => Some(tool_name.clone()),
+            EventKind::ToolRan { tool } => Some(tool.tool_name.clone()),
+            EventKind::SubagentTool { tool_name } => Some(tool_name.clone()),
             _ => None,
         };
         let ev = wit::AgentEvent {
@@ -123,25 +129,26 @@ impl PluginHost {
         Ok(Self { engine: Engine::new(&config)? })
     }
 
-    /// Loads a component, reusing a serialised compile from `cache_dir` when present.
+    /// Compiles `wasm`, or loads it from `cache` when an HMAC-verified artefact exists.
+    pub fn compile_cached(&self, wasm: &[u8], cache: &CwasmCache) -> Result<(Component, bool), PluginError> {
+        let name = cache_name(&self.engine, wasm);
+        if let Some(art) = cache.get(&name) {
+            // Safety: the bytes verified under our per-install key, so we serialised them.
+            if let Ok(c) = unsafe { Component::deserialize(&self.engine, &art) } {
+                return Ok((c, true));
+            }
+        }
+        let c = Component::new(&self.engine, wasm)?;
+        cache.put(&name, &c.serialize()?)?;
+        Ok((c, false))
+    }
+
+    /// Loads a component, reusing a verified compile from `cache_dir` when present.
     pub fn load(&self, wasm: &Path, cache_dir: &Path) -> Result<(LoadedPlugin, LoadStats), PluginError> {
         let bytes = std::fs::read(wasm)?;
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        bytes.hash(&mut h);
-        self.engine.precompile_compatibility_hash().hash(&mut h);
-        let cached = cache_dir.join(format!("{:016x}.cwasm", h.finish()));
-
+        let cache = CwasmCache::open(cache_dir)?;
         let t = Instant::now();
-        let from_cache = cached.exists();
-        let component = if from_cache {
-            // Safety: the file is one we serialised for this engine; the name is keyed on its config hash.
-            unsafe { Component::deserialize_file(&self.engine, &cached)? }
-        } else {
-            let c = Component::new(&self.engine, &bytes)?;
-            std::fs::create_dir_all(cache_dir)?;
-            std::fs::write(&cached, c.serialize()?)?;
-            c
-        };
+        let (component, from_cache) = self.compile_cached(&bytes, &cache)?;
         let compile_ms = t.elapsed().as_secs_f64() * 1e3;
 
         let t = Instant::now();
@@ -157,5 +164,34 @@ impl PluginHost {
             LoadedPlugin { store, bindings },
             LoadStats { wasm_bytes: bytes.len() as u64, from_cache, compile_ms, instantiate_ms },
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tampered_cwasm_is_rejected_and_recompiled() {
+        let dir = std::env::temp_dir().join(format!("haunt-host-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let host = PluginHost::new().unwrap();
+        let cache = CwasmCache::open(&dir).unwrap();
+        // Text form; the dev-only `wat` feature lets Component::new parse it.
+        let wasm = b"(component)".to_vec();
+
+        assert!(!host.compile_cached(&wasm, &cache).unwrap().1);
+        assert!(host.compile_cached(&wasm, &cache).unwrap().1);
+
+        let name = cache_name(&host.engine, &wasm);
+        let art = dir.join(format!("{name}.cwasm"));
+        let mut bytes = std::fs::read(&art).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xff;
+        std::fs::write(&art, bytes).unwrap();
+
+        assert!(!host.compile_cached(&wasm, &cache).unwrap().1, "tampered artefact must not load");
+        assert!(host.compile_cached(&wasm, &cache).unwrap().1, "recompiled artefact is cached again");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
