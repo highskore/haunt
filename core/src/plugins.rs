@@ -33,7 +33,6 @@ const MAX_LOGS: usize = 1000;
 const MAX_STR: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct Decoration {
     pub badge: Option<String>,
     pub style: String,
@@ -41,7 +40,6 @@ pub struct Decoration {
 }
 
 #[derive(Debug, Clone, Default)]
-#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct LoadStats {
     pub wasm_bytes: u64,
     pub from_cache: bool,

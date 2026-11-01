@@ -144,8 +144,6 @@ A request keeps its command or file path exactly as sent. Its `preview` hides no
 
 **OSC 777 fallback**: `haunt://cli-agent` and `warp://cli-agent` bodies go through the same parser, but they count for status only. The haunt hook sends a stripped-down status body there (no nonce, at most 250 bytes).
 
-The app must not bind `HauntIntake` (the spike's standalone export) at the same time: `HauntCore.start()` owns the socket, and a second bind fails with "in use".
-
 ## Plugins (`HauntPlugins`, feature `plugins`)
 
 Installed with `haunt plugin install <path>` (cli/), which shows the capabilities, asks y/N (`--yes` for scripts) and pins sha256 of the wasm and manifest in `~/.haunt/plugins.lock`. A plugin whose files no longer match is not loaded until `haunt plugin approve <id>`.

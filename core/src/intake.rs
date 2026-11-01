@@ -45,7 +45,6 @@ impl Default for Limits {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct Delivery {
     /// Empty when the line had no usable `surface_id`.
     pub surface_id: String,
