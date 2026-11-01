@@ -181,7 +181,7 @@ fn plain_glob(g: &str) -> String {
     g.replace("${cwd}", "<agent folder>")
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     let parts: Vec<&str> = id.split('.').collect();
     parts.len() >= 2
         && id.len() <= 128
