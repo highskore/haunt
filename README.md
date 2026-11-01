@@ -23,7 +23,7 @@ Claude Code ──hooks──▶ ~/.haunt/sock ──▶ haunt-core (Rust) ─�
                                              └─ WASM plugins (wasmtime)
 ```
 
-- **`hooks/`** is a Claude Code plugin. It sends session, task, subagent, tool and permission events as JSON lines to a private Unix socket.
+- **Agent adapters** live in their own repos and all follow one agent-neutral event spec. The Claude Code adapter, [haunt-claude](../haunt-plugins/haunt-claude), is a Claude Code plugin. It sends session, task, subagent, tool and permission events as JSON lines to a private Unix socket.
   - Each tab gets its own surface id and a random nonce in its environment.
   - Events without the right nonce only update status. They can never create a permission request.
 - **`core/`** holds the agent model, sidebar layout, decision log, allowlist suggestions and plugin host. It has no UI code, so future Windows and Linux front ends can share it.
@@ -43,16 +43,18 @@ macos/build.sh && macos/make-app.sh     # builds core, bindings and build/haunt.
 open build/haunt.app
 ```
 
+`make-app.sh` needs the Claude adapter checked out (see below).
+
 Signing: set `HAUNT_SIGN_ID`, or put your identity in a `.sign-id` file (gitignored). Without either, the app is signed ad hoc.
 
 ## Set up Claude Code
 
 ```sh
-claude plugin marketplace add ./hooks
+claude plugin marketplace add ../haunt-plugins/haunt-claude
 claude plugin install haunt@haunt
 ```
 
-Or try it without installing: `claude --plugin-dir ./hooks`. Needs `jq` 1.6+ and `nc`, both on macOS by default.
+The adapter is the haunt-claude repo, cloned next to this one as `../haunt-plugins/haunt-claude`. `make-app.sh` also bundles a copy into `haunt.app/Contents/Resources/adapters/claude`; set `HAUNT_CLAUDE_ADAPTER` to use a checkout somewhere else. Or try it without installing: `claude --plugin-dir ../haunt-plugins/haunt-claude`. Needs `jq` 1.6+ and `nc`, both on macOS by default.
 
 Optional: `shell/install.sh` installs a matching Claude Code theme and prints the zsh lines for a minimal prompt inside Haunt. It never edits your `~/.zshrc`.
 
@@ -84,8 +86,8 @@ Each plugin lives in its own repo. `haunt plugin new my-plugin [--dir <path>] [-
 ## Tests
 
 ```sh
-cargo test --workspace
-hooks/tests/run.sh
+cargo test --workspace                   # hook_e2e skips if the adapter isn't checked out
+../haunt-plugins/haunt-claude/tests/run.sh
 macos/fidelity.sh        # pixel check against the mockups
 ```
 
