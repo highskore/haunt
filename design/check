@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Compare an app capture against a mockup screen: check <capture.png> <screen>
+set -euo pipefail
+exec uv run --quiet --no-project --with pillow "$(dirname "$0")/tools/check.py" "$@"

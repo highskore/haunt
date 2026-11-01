@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Reference renders must pass, altered copies must fail
+set -euo pipefail
+exec uv run --quiet --no-project --with pillow "$(dirname "$0")/tools/selftest.py" "$@"
