@@ -372,4 +372,65 @@ mod tests {
         assert_eq!(parse_body(r#"{"v":1,"event":"stop"}"#).unwrap().agent, "claude", "the legacy hook sends none");
     }
 
+    /// Variants without a name of their own in the parser are listed here, so a new one won't compile
+    /// until it is counted, and the spec test then wants an example of it.
+    fn variant(k: &EventKind) -> Option<usize> {
+        use EventKind::*;
+        Some(match k {
+            SessionStart { .. } => 0,
+            PromptSubmit { .. } => 1,
+            TaskCreated { .. } => 2,
+            TaskUpdated { .. } => 3,
+            SubagentSpawn { .. } => 4,
+            SubagentStart => 5,
+            SubagentStop => 6,
+            SubagentResult { .. } => 7,
+            SubagentTool { .. } => 8,
+            ToolStart { .. } => 9,
+            ToolDone { .. } => 10,
+            ToolFailed { .. } => 11,
+            ToolRan { .. } => 12,
+            PermissionSeen { .. } => 13,
+            Notification { .. } => 14,
+            PlanExit { .. } => 15,
+            QuestionAnswered { .. } => 16,
+            TodosWritten { .. } => 17,
+            FileEdited { .. } => 18,
+            Stop => 19,
+            Unknown { .. } => return None,
+        })
+    }
+    const VARIANTS: usize = 20;
+    const SPEC_UNKNOWN: [&str; 2] = ["question_asked", "stop_failure"];
+
+    #[test]
+    fn the_spec_examples_parse_and_cover_every_event() {
+        let spec = include_str!("../../docs/agent-events.md");
+        let section = |start: &str, end: &str| spec.split_once(start).and_then(|(_, r)| r.split_once(end)).map(|(s, _)| s).unwrap();
+        let table: Vec<&str> = section("| event | fields | core effect |\n", "\n\n")
+            .lines()
+            .filter_map(|l| l.strip_prefix("| `")?.split_once('`').map(|(name, _)| name))
+            .collect();
+        let examples: Vec<&str> = section("```jsonl\n", "```").lines().collect();
+
+        let mut names = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for line in &examples {
+            let e = parse_body(line).unwrap_or_else(|err| panic!("{line}: {err}"));
+            assert!(matches!(Agent::from(e.agent.as_str()), Agent::Claude | Agent::Codex), "{line}");
+            match variant(&e.kind) {
+                Some(i) => assert!(seen.insert(i), "two examples of {}", e.kind.name()),
+                None => assert!(SPEC_UNKNOWN.contains(&e.kind.name()), "{} would fall into Unknown", e.kind.name()),
+            }
+            names.push(e.kind.name().to_owned());
+        }
+        assert_eq!(seen.len(), VARIANTS, "every parsed event has an example");
+        let mut sorted = names.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len(), "one example per event");
+        let mut table_sorted: Vec<String> = table.iter().map(|s| (*s).to_owned()).collect();
+        table_sorted.sort();
+        assert_eq!(sorted, table_sorted, "the events table and the examples list the same events");
+    }
 }
