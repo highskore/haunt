@@ -6,14 +6,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
-use crate::event::{AgentEvent, parse_line, parse_osc};
+use crate::event::{AgentEvent, parse_osc};
+use crate::intake::{Delivery, Intake, IntakeError, Limits, SOCKET_NAME};
 use crate::layout::{self, SidebarSnapshot, SurfaceView};
 use crate::session::Session;
-use crate::socket::{self, Server};
 
-/// Socket events a surface may send per second, and the burst on top.
-const RATE_PER_SEC: f64 = 100.0;
-const RATE_BURST: f64 = 200.0;
 const MAX_SURFACES: usize = 512;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -23,6 +20,16 @@ pub enum CoreError {
     Insecure { reason: String },
     #[error("io: {reason}")]
     Io { reason: String },
+}
+
+impl From<IntakeError> for CoreError {
+    fn from(e: IntakeError) -> Self {
+        let reason = e.to_string();
+        match e {
+            IntakeError::Io(_) | IntakeError::InUse(_) | IntakeError::PathTooLong(_) => Self::Io { reason },
+            _ => Self::Insecure { reason },
+        }
+    }
 }
 
 /// What the UI puts in a surface's pty environment.
@@ -36,31 +43,12 @@ pub struct SurfaceEnv {
 
 pub type Listener = Arc<dyn Fn() + Send + Sync>;
 
-struct Bucket {
-    tokens: f64,
-    at: Instant,
-}
-
-impl Bucket {
-    fn take(&mut self, now: Instant) -> bool {
-        let dt = now.saturating_duration_since(self.at).as_secs_f64();
-        self.tokens = (self.tokens + dt * RATE_PER_SEC).min(RATE_BURST);
-        self.at = now;
-        if self.tokens < 1.0 {
-            return false;
-        }
-        self.tokens -= 1.0;
-        true
-    }
-}
-
 struct Surface {
     id: String,
     nonce: String,
     cwd: String,
     branch: Option<String>,
     session: Session,
-    bucket: Bucket,
 }
 
 #[derive(Default)]
@@ -76,15 +64,17 @@ impl State {
         self.surfaces.iter_mut().find(|s| s.id == id)
     }
 
-    /// One socket line; only a matching nonce makes the event verified.
+    /// One intake delivery; the intake already checked the nonce and the rate limit.
+    pub(crate) fn deliver(&mut self, d: &Delivery, now: Instant) -> bool {
+        let Some(event) = &d.event else { return false };
+        self.surface(&d.surface_id).is_some_and(|s| s.session.apply(event, d.verified, now))
+    }
+
+    /// A socket line as the intake would deliver it, minus the socket and the rate limit.
+    #[cfg(test)]
     pub(crate) fn handle_line(&mut self, line: &str, now: Instant) -> bool {
-        let Ok((id, event)) = parse_line(line) else { return false };
-        let Some(s) = self.surface(&id) else { return false };
-        if !s.bucket.take(now) {
-            return false;
-        }
-        let verified = event.nonce.as_deref().is_some_and(|n| same(n.as_bytes(), s.nonce.as_bytes()));
-        s.session.apply(&event, verified, now)
+        let nonces = self.surfaces.iter().map(|s| (s.id.clone(), s.nonce.clone())).collect();
+        self.deliver(&crate::intake::decode(line, &nonces), now)
     }
 
     fn apply_unverified(&mut self, id: &str, event: &AgentEvent, now: Instant) -> bool {
@@ -105,10 +95,6 @@ impl State {
             .collect();
         layout::snapshot(&views, self.home.as_deref(), now)
     }
-}
-
-fn same(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 fn random_bytes() -> [u8; 16] {
@@ -134,7 +120,7 @@ fn uuid() -> String {
 pub struct Core {
     dir: PathBuf,
     state: Arc<Mutex<State>>,
-    server: Mutex<Option<Server>>,
+    intake: Mutex<Option<Intake>>,
 }
 
 fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
@@ -144,31 +130,41 @@ fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
 impl Core {
     pub fn new(config_dir: impl Into<PathBuf>) -> Self {
         let state = State { home: std::env::var("HOME").ok(), ..State::default() };
-        Self { dir: config_dir.into(), state: Arc::new(Mutex::new(state)), server: Mutex::new(None) }
+        Self { dir: config_dir.into(), state: Arc::new(Mutex::new(state)), intake: Mutex::new(None) }
     }
 
     pub fn socket_path(&self) -> PathBuf {
-        self.dir.join(socket::SOCKET_NAME)
+        self.dir.join(SOCKET_NAME)
     }
 
-    /// Binds the socket; a second call is a no-op.
+    /// Binds the intake socket and registers every surface's nonce with it; a second call is a no-op.
     pub fn start(&self) -> Result<(), CoreError> {
-        let mut server = self.server.lock().unwrap_or_else(|e| e.into_inner());
-        if server.is_some() {
+        let mut intake = self.intake.lock().unwrap_or_else(|e| e.into_inner());
+        if intake.is_some() {
             return Ok(());
         }
         let state = self.state.clone();
-        let handler = Arc::new(move |line: &str| {
+        let sink = Arc::new(move |d: Delivery| {
             let mut st = lock(&state);
-            let changed = st.handle_line(line, Instant::now());
+            let changed = st.deliver(&d, Instant::now());
             let listener = st.listener.clone();
             drop(st);
             if changed && let Some(l) = listener {
                 l();
             }
         });
-        *server = Some(Server::bind(&self.dir, socket::uid(), handler)?);
+        let bound = Intake::bind(&self.dir, Limits::default(), sink).map_err(CoreError::from)?;
+        for s in &lock(&self.state).surfaces {
+            bound.register_surface(&s.id, &s.nonce);
+        }
+        *intake = Some(bound);
         Ok(())
+    }
+
+    fn with_intake(&self, f: impl FnOnce(&Intake)) {
+        if let Some(i) = self.intake.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            f(i);
+        }
     }
 
     /// Runs `f` on the state and fires the listener if it reports a change.
@@ -189,24 +185,22 @@ impl Core {
             nonce: hex(&random_bytes()),
             socket_path: self.socket_path().to_string_lossy().into_owned(),
         };
-        self.update(|st, now| {
+        let added = self.update(|st, now| {
             if st.surfaces.len() >= MAX_SURFACES {
                 return false;
             }
-            st.surfaces.push(Surface {
-                id: env.surface_id.clone(),
-                nonce: env.nonce.clone(),
-                cwd: cwd.to_owned(),
-                branch: None,
-                session: Session::new(now),
-                bucket: Bucket { tokens: RATE_BURST, at: now },
-            });
+            let (id, nonce, cwd) = (env.surface_id.clone(), env.nonce.clone(), cwd.to_owned());
+            st.surfaces.push(Surface { id, nonce, cwd, branch: None, session: Session::new(now) });
             true
         });
+        if added {
+            self.with_intake(|i| i.register_surface(&env.surface_id, &env.nonce));
+        }
         env
     }
 
     pub fn unregister_surface(&self, surface_id: &str) {
+        self.with_intake(|i| i.unregister_surface(surface_id));
         self.update(|st, _| {
             let before = st.surfaces.len();
             st.surfaces.retain(|s| s.id != surface_id);
@@ -375,22 +369,6 @@ mod tests {
             let now = Instant::now();
             assert!(!st.handle_line(r#"{"v":1,"surface_id":"ghost","event":"stop"}"#, now));
             assert!(!st.handle_line("not json", now));
-        });
-    }
-
-    #[test]
-    fn rate_limit_per_surface() {
-        let c = core();
-        let a = c.register_surface("/a");
-        let b = c.register_surface("/b");
-        let t = Instant::now();
-        let tool = |i: usize| format!(r#""event":"todos_written","tool_count":{}"#, i + 1);
-        let accepted = c.with_state(|st| (0..300).filter(|i| st.handle_line(&line(&a, Some(&a.nonce), &tool(*i)), t)).count());
-        assert_eq!(accepted, RATE_BURST as usize);
-        c.with_state(|st| {
-            assert!(st.handle_line(&line(&b, Some(&b.nonce), &tool(0)), t), "other surfaces are unaffected");
-            assert!(!st.handle_line(&line(&a, Some(&a.nonce), &tool(1000)), t));
-            assert!(st.handle_line(&line(&a, Some(&a.nonce), &tool(1001)), t + Duration::from_millis(20)), "refills");
         });
     }
 

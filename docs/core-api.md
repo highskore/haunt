@@ -23,8 +23,8 @@ callback interface CoreListener { fn changed() }
 record SurfaceEnv { surface_id: string, nonce: string, socket_path: string }
 error  CoreError { Insecure { reason }, Io { reason } }
 
-record SidebarSnapshot { groups: sequence<Group> }
-record Group { label: string, rows: sequence<Row> }
+record SidebarSnapshot { groups: sequence<SidebarGroup> }
+record SidebarGroup { label: string, rows: sequence<Row> }
 record Row {
   surface_id: string, kind: RowKind, name: string, meta: string, status_text: string,
   needs_you: bool, progress: Option<Progress>, subagents: sequence<Subrow>, selected: bool
@@ -34,7 +34,7 @@ record Progress { done: u64, total: u64 }
 record Subrow { label: string, meta: string }
 ```
 
-`select_surface` is an addition to the contract as first agreed, because `Row.selected` needs a source.
+`select_surface` is an addition to the contract as first agreed, because `Row.selected` needs a source. `SidebarGroup` was renamed from `Group` because a Swift `struct Group` would shadow SwiftUI's `Group`.
 
 In Swift, the generated `Progress` struct shadows `Foundation.Progress` inside the module. Write `Foundation.Progress` if you need the other one.
 
@@ -80,16 +80,18 @@ A surface becomes a Claude row with its first agent event and stays one until it
 
 ## Transport and security
 
-**Socket** (`core/src/socket.rs`): `<config_dir>/sock`.
+**Socket** (`core/src/intake.rs`, owned by `HauntCore`): `<config_dir>/sock`. The debug/CLI socket is `<config_dir>/ctl`.
 
-- The directory is created with mode 0700. `start` refuses (`CoreError::Insecure`) a directory that is a symlink, is owned by another uid, or has any group or other permission bits. The socket is chmod 0600 and checked the same way after `bind`.
-- A leftover socket of ours is replaced. Anything else at that path is refused, and so is a socket that still accepts connections (another haunt is running).
-- Every connection's peer uid (`getpeereid`) must equal ours. At most 32 connections are open at once, each with a 2 s read timeout.
-- Messages are newline-delimited JSON of at most 64 KB. A longer line drops the connection.
-- Each line is the hook's v1 envelope (`hooks/README.md`) plus `surface_id`. Lines for an unknown surface are dropped. Each surface is rate-limited to 100 events/s with a burst of 200; extra events are dropped.
+- The directory is created with mode 0700. `start` refuses (`CoreError::Insecure`) a directory that is a symlink or is owned by another uid. If it has group or other bits, it is ours, so they are removed. The socket is chmod 0600, and its owner and mode are checked after `bind`.
+- A leftover socket of ours is replaced. `start` refuses anything else at that path, a socket owned by another uid, and a socket that still accepts connections (`CoreError::Io`: another haunt is running). It also refuses a path longer than `sun_path` allows.
+- Every connection's peer uid (`getpeereid`) must equal ours. At most 32 connections are open at once, each with a 5 s read timeout.
+- Messages are newline-delimited JSON of at most 64 KB. A longer line is discarded, and the stream continues with the next line.
+- Each line is the hook's v1 envelope (`hooks/README.md`) plus `surface_id`. Lines for a surface that isn't registered are dropped before rate limiting, so random ids cost nothing. Each surface is rate-limited to 50 events/s with a burst of 200; extra lines are dropped and counted.
 
 **Nonce gating** (`core/src/session.rs`): an event is *verified* only if it came over the socket and its `nonce` matches that surface's nonce, compared in constant time. Unverified events (wrong or missing nonce, or any OSC 777 event) may change status and progress, but never the permission request. Only a verified request can be answered. Unverified events can't set, replace or clear one. `answer_permission` also requires the surface to be in `needs you` at that moment.
 
 A request resolves when a verified `tool_ran`, `tool_done` or `tool_failed` matches it. The match is on `tool_use_id` when both sides have one (the id is taken from the matching `tool_start`), otherwise on tool name plus exact command or file path. An event with `truncated: true` never matches. A verified `stop` or `prompt_submit`, or an answer, also clears the request.
 
-**OSC 777 fallback**: `haunt://cli-agent` and `warp://cli-agent` bodies go through the same parser, but they count for status only.
+**OSC 777 fallback**: `haunt://cli-agent` and `warp://cli-agent` bodies go through the same parser, but they count for status only. The haunt hook sends a stripped-down status body there (no nonce, under 255 bytes).
+
+The app must not bind `HauntIntake` (the spike's standalone export) at the same time: `HauntCore.start()` owns the socket, and a second bind fails with "in use".

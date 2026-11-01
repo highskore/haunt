@@ -5,6 +5,7 @@ import Foundation
 final class HauntBridge {
     private let log: FileHandle?
     private let plugin: PluginHandle?
+    private(set) var intake: HauntIntake?
 
     init() {
         let dir = (("~/.haunt/logs") as NSString).expandingTildeInPath
@@ -26,6 +27,13 @@ final class HauntBridge {
         plugin = loaded
         write("start plugin=\(plugin.map { String(describing: $0.stats()) } ?? "none")")
 
+        do {
+            intake = try HauntIntake.bind(dir: ("~/.haunt" as NSString).expandingTildeInPath, listener: IntakeLog(bridge: self))
+            write("intake listening at \(intake!.path())")
+        } catch {
+            write("intake failed: \(error)")
+        }
+
         Ghostty.App.desktopNotificationHook = { [weak self] view, title, body in
             self?.handle(surface: view.id, title: title, body: body) ?? false
         }
@@ -46,8 +54,29 @@ final class HauntBridge {
         }
     }
 
-    private func write(_ line: String) {
+    /// Socket deliveries; `verified` gates everything beyond status.
+    fileprivate func handle(_ d: Delivery) {
+        if let event = d.event {
+            let deco = try? plugin?.onEvent(event: event)
+            // Spike-only visible proof that Swift got the event.
+            NSApp.windows.first { $0.contentView is Ghostty.SurfaceView }?.title = "haunt · \(eventName(event: event)) · \(d.verified ? "verified" : "status-only")"
+            write("sock surface=\(d.surfaceId) verified=\(d.verified) bytes=\(d.bytes) dropped_before=\(d.droppedBefore) kind=\(eventName(event: event)) decoration=\(String(describing: deco ?? nil))")
+        } else {
+            write("sock-reject surface=\(d.surfaceId) bytes=\(d.bytes) error=\(d.error ?? "?")")
+        }
+    }
+
+    func write(_ line: String) {
         let stamp = ISO8601DateFormatter().string(from: Date())
         log?.write("\(stamp) \(line)\n".data(using: .utf8)!)
+    }
+}
+
+private final class IntakeLog: IntakeListener, @unchecked Sendable {
+    private weak var bridge: HauntBridge?
+    init(bridge: HauntBridge) { self.bridge = bridge }
+
+    func onDelivery(delivery: Delivery) {
+        DispatchQueue.main.async { [weak bridge] in bridge?.handle(delivery) }
     }
 }

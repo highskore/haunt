@@ -12,7 +12,8 @@ Timings were taken while other sessions kept the machine at load average 30+ on 
 | libghostty builds from official source? | **Yes** | 531 s Zig build (incl. dependency fetch); `libghostty.a` 26.5 MB stripped (`strip -S`); `_ghostty_init` present |
 | Bare window + one surface + login shell? | **Yes** | `docs/spike/window-1.png`: zsh login shell with the user's prompt, Metal rendering, cursor |
 | UniFFI core reachable from Swift? | **Yes** | `parseOsc` / `PluginHandle` called from the app |
-| Hook events via `DESKTOP_NOTIFICATION`? | **Partly. Blocker.** | 255-byte body cap, 1 notification/s app-wide, OSC > ~2 KB dropped |
+| Hook events via `DESKTOP_NOTIFICATION`? | **No** (status-only fallback) | 255-byte body cap, 1 notification/s app-wide, OSC > ~2 KB dropped |
+| Hook events via Unix socket? | **Yes** (decided transport) | all real hook events verified; 10 KB intact; 300-event burst → 200 delivered + drop count; forged nonce status-only |
 | wasmtime component plugin? | **Yes** | +13.6 MB stripped; 44 ms cold compile, 0.8 ms cached load, ~30 µs per event |
 
 ## Toolchain on Xcode 16.3
@@ -74,7 +75,7 @@ All inside `~/code/haunt` unless noted.
 
 Safe to delete when space is short: `.cache/zig-local` (rebuilt on the next Ghostty bump) and `target/`.
 
-## OSC 777 findings (blocker)
+## OSC 777 findings
 
 I measured this in the running app with `scripts/osc-probe.sh`, typed into the surface's pty through `SurfaceConfiguration.initialInput` (no GUI automation). The raw log is in `docs/spike/probe-events.log`. The probe runs the real `qs-hook.sh` (copy at `~/code/haunt-reference/pawr/code/pawr/claude-plugin/scripts/`) and then bodies of fixed sizes.
 
@@ -86,9 +87,43 @@ All three limits live in Ghostty core (Zig), not the Swift wrapper, so we can't 
 
 Real hook bodies today are 168–249 bytes, so size alone is borderline. The rate limit makes OSC 777 unusable as the primary transport: Claude Code fires several hooks per second during tool use.
 
-**Needs a decision.** Recommended: bring the plan's Phase 3 Unix-socket intake (`~/.haunt/sock`, events carrying `HAUNT_SURFACE_ID` + nonce) forward to Phase 1 as the hook transport. Keep OSC 777 as a status-only fallback for the official Warp plugin. That needs zero Ghostty patches. The alternative, a Ghostty patch (bigger body, rate-limit exemption for the `cli-agent` title), breaks the zero-fork rule. Growing the body array also grows every surface mailbox message, so upstream is unlikely to take it.
+**Decided (user, 2026-11-01): option A.** The Unix-socket intake is the hook transport from Phase 1; OSC 777 stays a status-only fallback; no Ghostty patches. The spike already implements it (next section). Consequence for `hooks/`: the OSC fallback must keep bodies under 255 bytes, not the 2,000 its `MAX_BYTES` uses today.
+
+## Socket intake (proven)
+
+`core/src/intake.rs`, exposed as `HauntIntake` + an `IntakeListener` callback through UniFFI. The app binds `~/.haunt/sock` at launch, and gives the surface `HAUNT_SURFACE_ID` (its UUID), `HAUNT_HOOK_NONCE` (128-bit random, registered with the core) and `HAUNT_SOCK`.
+
+- `~/.haunt` is created 0700 (tightened if ours and looser; refused if someone else owns it); the socket is 0600; a non-socket at the path is refused, a stale socket replaced.
+- `getpeereid` must return our uid, otherwise the connection is closed unread.
+- Newline-delimited JSON, one `v:1` body plus `surface_id` per line. Lines over 64 KB are rejected and skipped; the connection carries on.
+- A per-surface token bucket (200 burst, 50/s); drops are counted and reported on the next delivery. At most 32 connections, 5 s read timeout.
+- `verified` only when the line's `nonce` matches the one registered for its `surface_id` (constant-time compare). Everything else is status-only.
+
+Measured in the app with `scripts/sock-probe.sh` (runs the real `hooks/scripts/haunt-hook.sh`, captures its bodies through `HAUNT_HOOK_TTY`, tags them and sends them with `nc -U`). Log: `docs/spike/sock-events.log`; screenshot `docs/spike/window-sock.png` (the window title shows the last event Swift received).
+
+| case | result |
+|---|---|
+| 4 hook calls, 6 events (incl. `pre_tool` → `tool_start` + `subagent_spawn`) | 6/6 delivered, all `verified=true` |
+| 300 events in one connection | 200 delivered; the next delivery reports `dropped_before=101` |
+| 10,135-byte line (OSC would drop it) | delivered intact, verified |
+| 100 KB line | rejected (`line over 65536 bytes`), stream continued |
+| wrong nonce / no nonce | delivered `verified=false` (status-only) |
+
+Unit tests cover the same cases (`cargo test -p haunt-core intake`): nonce per surface (a nonce is not valid for another surface), 0700/0600 modes, oversize-then-normal line on one stream, per-surface rate limiting that leaves other surfaces alone, refusing a regular file at the socket path.
 
 What did work end to end: OSC 777 → libghostty → `GHOSTTY_ACTION_DESKTOP_NOTIFICATION` → a one-line `desktopNotificationHook` patch in the vendored `Ghostty.App.swift` → `HauntBridge` → Rust `parse_osc` (UniFFI) → WASM plugin `on-event` → decoration back in Swift. The event is swallowed so no macOS notification appears. Non-agent titles fall through to Ghostty's normal notification path.
+
+## Plugin cache security (fixed; Phase 2 requirement)
+
+The first spike version trusted any `.cwasm` in the cache dir and passed it to `unsafe Component::deserialize_file`, i.e. anything that could write there got native code execution in haunt. Fixed in `core/src/plugin_cache.rs`, and the following is a **Phase 2 requirement for the plugin host**:
+
+- Cache name = SHA-256(wasm bytes) + `engine.precompile_compatibility_hash()`, hex.
+- Cache dir created 0700; refused unless owned by the current user and not group/world writable.
+- Artefacts written atomically: temp file `O_EXCL | O_NOFOLLOW`, 0600, fsync, rename.
+- A sidecar `.cwasm.mac` holds HMAC-SHA256 over the artefact under a per-install 32-byte key (`hmac.key`, 0600, refused if readable by others; Keychain later). The bytes are verified in memory and passed to `Component::deserialize`, so there is no gap between check and load.
+- Any mismatch, missing MAC or deserialize failure deletes the entry and recompiles with `Component::new`.
+
+Tests: tampered artefact rejected and recompiled (end to end through the host), planted artefact without a MAC rejected, world- and group-writable dirs refused, readable key refused, files created 0600 and dir 0700. Cached load is still 0.3–1.3 ms.
 
 ## UniFFI ergonomics
 
@@ -117,5 +152,6 @@ Good. The core types carry `#[cfg_attr(feature = "ffi", derive(uniffi::Record/En
 
 ## Blockers
 
-1. **OSC 777 transport** (above): decide between bringing the socket intake forward (recommended) and patching Ghostty.
-2. None for the toolchain. Xcode 26 isn't required.
+None left. The OSC 777 limits are worked around by the socket intake (decided and proven); the toolchain works on Xcode 16.3.
+
+Open for Phase 1: the hook script writing to the socket itself (today the probe does it on its behalf), the self-signed certificate, a real `claude` session in the surface, and the fidelity check (`design/check`) once there is UI to check.

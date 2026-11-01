@@ -7,12 +7,12 @@ use crate::session::{Session, Status};
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct SidebarSnapshot {
-    pub groups: Vec<Group>,
+    pub groups: Vec<SidebarGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
-pub struct Group {
+pub struct SidebarGroup {
     pub label: String,
     pub rows: Vec<Row>,
 }
@@ -68,7 +68,7 @@ pub struct SurfaceView<'a> {
 /// Groups rows as NEEDS YOU, RUNNING, IDLE (done, failed and shells included); empty groups are left out.
 /// `surfaces` come in tab order; within a group the latest status change comes first.
 pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, now: Instant) -> SidebarSnapshot {
-    let mut groups: Vec<Group> = [NEEDS_YOU, RUNNING, IDLE].iter().map(|l| Group { label: (*l).to_owned(), rows: vec![] }).collect();
+    let mut groups: Vec<SidebarGroup> = [NEEDS_YOU, RUNNING, IDLE].iter().map(|l| SidebarGroup { label: (*l).to_owned(), rows: vec![] }).collect();
     let mut order: Vec<&SurfaceView> = surfaces.iter().collect();
     // Stable, so equal times keep tab order.
     order.sort_by_key(|s| std::cmp::Reverse(s.session.status_changed));

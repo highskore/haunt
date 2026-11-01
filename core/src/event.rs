@@ -74,17 +74,15 @@ pub fn parse_osc(title: &str, body: &str) -> Result<AgentEvent, ParseError> {
     if !TITLES.contains(&title) {
         return Err(ParseError::NotAgentTitle { title: title.to_owned() });
     }
+    parse_body(body)
+}
+
+/// Parses one v1 event body, from OSC 777 or a socket line.
+pub fn parse_body(body: &str) -> Result<AgentEvent, ParseError> {
     if body.chars().any(char::is_control) {
         return Err(ParseError::ControlCharacter);
     }
     parse_value(&parse_json(body)?)
-}
-
-/// Parses one socket line: the v1 envelope plus `surface_id`.
-pub fn parse_line(line: &str) -> Result<(String, AgentEvent), ParseError> {
-    let v = parse_json(line)?;
-    let surface = str_field(&v, "surface_id").ok_or_else(|| missing("surface_id"))?;
-    Ok((surface, parse_value(&v)?))
 }
 
 fn parse_json(body: &str) -> Result<Value, ParseError> {
@@ -240,14 +238,8 @@ mod tests {
 
     #[test]
     fn escaped_control_chars_are_stripped() {
-        let (surface, e) = parse_line(r#"{"v":1,"surface_id":"s\u0007x","event":"prompt_submit","query":"a\u001b[2Jb"}"#).unwrap();
-        assert_eq!(surface, "sx");
-        assert_eq!(e.kind, EventKind::PromptSubmit { query: Some("a[2Jb".into()) });
-    }
-
-    #[test]
-    fn socket_line_requires_surface_id() {
-        assert_eq!(parse_line(r#"{"v":1,"event":"stop"}"#), Err(ParseError::MissingField { field: "surface_id".into() }));
+        let e = parse_body(r#"{"v":1,"event":"prompt_submit","query":"a\u001b[2Jb\u0007c\nd"}"#).unwrap();
+        assert_eq!(e.kind, EventKind::PromptSubmit { query: Some("a[2Jbc d".into()) });
     }
 
     #[test]
