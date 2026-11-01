@@ -1,5 +1,6 @@
 //! UniFFI surface of haunt-core for the Swift app.
 
+#[cfg(feature = "plugins")]
 use std::sync::Mutex;
 
 pub use haunt_core::{AgentEvent, EventKind, ParseError};
