@@ -24,6 +24,8 @@ pub struct ToolCall {
     pub tool_name: String,
     pub tool_use_id: Option<String>,
     pub command: Option<String>,
+    /// `command` as sent, before invisible characters were removed; never shown, only compared.
+    pub raw_command: Option<String>,
     pub url: Option<String>,
     pub file_path: Option<String>,
 }
@@ -128,6 +130,7 @@ fn parse_value(v: &Value) -> Result<AgentEvent, ParseError> {
             tool_name: req("tool_name")?,
             tool_use_id: s("tool_use_id"),
             command: input("command"),
+            raw_command: v.get("tool_input").and_then(|i| i.get("command")).and_then(Value::as_str).map(str::to_owned),
             url: input("url"),
             file_path: input("file_path"),
         })
@@ -217,7 +220,7 @@ mod tests {
     #[test]
     fn parses_tool_ran_input() {
         let e = parse_osc("haunt://cli-agent", &format!(r#"{{{B},"event":"tool_ran","tool_name":"Bash","tool_use_id":"tu1","tool_input":{{"command":"ls"}},"truncated":true}}"#)).unwrap();
-        let tool = ToolCall { tool_name: "Bash".into(), tool_use_id: Some("tu1".into()), command: Some("ls".into()), ..Default::default() };
+        let tool = ToolCall { tool_name: "Bash".into(), tool_use_id: Some("tu1".into()), command: Some("ls".into()), raw_command: Some("ls".into()), ..Default::default() };
         assert_eq!(e.kind, EventKind::ToolRan { tool });
         assert!(e.truncated);
     }
@@ -233,7 +236,7 @@ mod tests {
         assert!(matches!(p(r#""event":"tool_done","tool_name":"Bash","tool_input":{}"#), EventKind::ToolDone { .. }));
         assert_eq!(
             p(r#""event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm -rf build"}"#),
-            EventKind::PermissionSeen { tool: ToolCall { tool_name: "Bash".into(), command: Some("rm -rf build".into()), ..Default::default() } }
+            EventKind::PermissionSeen { tool: ToolCall { tool_name: "Bash".into(), command: Some("rm -rf build".into()), raw_command: Some("rm -rf build".into()), ..Default::default() } }
         );
         assert_eq!(
             p(r#""event":"notification","notification_type":"permission_prompt","message":"m""#),

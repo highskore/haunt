@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
 use serde_json::{Value, json};
@@ -34,6 +34,8 @@ pub enum AllowError {
     #[error("{0} is a symlink")]
     Symlink(String),
     #[error("{0}")]
+    Unsafe(&'static str),
+    #[error("{0}")]
     Invalid(&'static str),
     #[error("{0}")]
     Io(#[from] std::io::Error),
@@ -53,36 +55,71 @@ fn is_approval(d: &Decision) -> bool {
     matches!(d.outcome, Outcome::AllowedInHaunt | Outcome::AnsweredInTerminal)
 }
 
+/// The command an approval may count for: the raw one, and only if cleaning changed nothing, so
+/// a rule never allows a variant of what was approved.
+fn approved_command(d: &Decision) -> Option<&str> {
+    d.command.as_deref().filter(|raw| *raw == d.preview && rule_for(raw).is_some())
+}
+
 /// Commands approved at least `SUGGEST_AFTER` times in the same project, most recently approved first.
-/// `skip(project, command)` filters out ones already accepted or dismissed.
-pub fn suggestions<'a>(log: impl Iterator<Item = &'a Decision>, skip: impl Fn(&str, &str) -> bool) -> Vec<AllowSuggestion> {
+/// `project_ok` vets the project path (see `check_project`); `skip(project, command)` filters out
+/// ones already accepted or dismissed.
+pub fn suggestions<'a>(
+    log: impl Iterator<Item = &'a Decision>,
+    project_ok: impl Fn(&str) -> bool,
+    skip: impl Fn(&str, &str) -> bool,
+) -> Vec<AllowSuggestion> {
     let mut counts: Vec<(String, String, u32)> = Vec::new();
     for d in log.filter(|d| is_approval(d) && d.tool == "Bash") {
-        let Some(project) = d.cwd.as_deref().filter(|c| c.starts_with('/')) else { continue };
-        match counts.iter().position(|(p, c, _)| p == project && *c == d.preview) {
+        let (Some(project), Some(command)) = (d.cwd.as_deref(), approved_command(d)) else { continue };
+        match counts.iter().position(|(p, c, _)| p == project && c == command) {
             Some(i) => {
                 let mut hit = counts.remove(i);
                 hit.2 += 1;
                 counts.push(hit);
             }
-            None => counts.push((project.to_owned(), d.preview.clone(), 1)),
+            None => counts.push((project.to_owned(), command.to_owned(), 1)),
         }
     }
     counts
         .into_iter()
         .rev()
-        .filter(|(p, c, n)| *n >= SUGGEST_AFTER && !skip(p, c))
+        .filter(|(p, c, n)| *n >= SUGGEST_AFTER && !skip(p, c) && project_ok(p))
         .filter_map(|(project, command, approvals)| Some(AllowSuggestion { rule: rule_for(&command)?, project, command, approvals }))
         .collect()
+}
+
+/// A project path a rule may be written under: absolute, no `.` or `..`, already canonical (so no
+/// symlinked component), and a directory we own.
+pub fn check_project(path: &str) -> Result<(), AllowError> {
+    check_project_as(path, crate::intake::uid())
+}
+
+fn check_project_as(path: &str, me: u32) -> Result<(), AllowError> {
+    if !path.starts_with('/') {
+        return Err(AllowError::Invalid("project path is not absolute"));
+    }
+    if path.split('/').any(|c| c == "." || c == "..") {
+        return Err(AllowError::Invalid("project path has . or .. components"));
+    }
+    if std::fs::canonicalize(path)?.as_os_str() != std::ffi::OsStr::new(path) {
+        return Err(AllowError::Unsafe("project path is not canonical (a symlink in it?)"));
+    }
+    let meta = std::fs::symlink_metadata(path)?;
+    if !meta.is_dir() {
+        return Err(AllowError::Invalid("project is not a directory"));
+    }
+    if meta.uid() != me {
+        return Err(AllowError::Unsafe("project is not owned by the current user"));
+    }
+    Ok(())
 }
 
 /// Adds `rule` to `<project>/.claude/settings.local.json`; false if it was already there.
 /// Refuses a symlinked `.claude` or settings file, and replaces the file by rename, so a checked-out
 /// repo cannot redirect the write.
 pub fn add_rule(project: &Path, rule: &str) -> Result<bool, AllowError> {
-    if !project.is_absolute() {
-        return Err(AllowError::Invalid("project path is not absolute"));
-    }
+    check_project(project.to_str().ok_or(AllowError::Invalid("project path is not utf-8"))?)?;
     let root = open_at(None, &CString::new(project.as_os_str().as_bytes()).map_err(|_| AllowError::Invalid("bad path"))?, libc::O_DIRECTORY)?;
     let dir = match open_dir_nofollow(&root, CLAUDE_DIR) {
         Err(AllowError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -197,11 +234,12 @@ mod tests {
         let d = PathBuf::from(format!("/tmp/ha-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
-        d
+        // /tmp is a symlink on macOS, and project paths must be canonical.
+        fs::canonicalize(d).unwrap()
     }
 
     fn approval(cwd: &str, cmd: &str, outcome: Outcome) -> Decision {
-        Decision { at_ms: 0, surface_id: "s".into(), tool: "Bash".into(), preview: cmd.into(), cwd: Some(cwd.into()), outcome }
+        Decision { at_ms: 0, surface_id: "s".into(), tool: "Bash".into(), preview: cmd.into(), command: Some(cmd.into()), cwd: Some(cwd.into()), outcome }
     }
 
     #[test]
@@ -214,11 +252,11 @@ mod tests {
             approval("/p", "cargo test", DeniedInHaunt),
             approval("/p", "cargo test", Superseded),
         ];
-        assert!(suggestions(log.iter(), |_, _| false).is_empty(), "2 approvals in /p, 1 in /q");
+        assert!(suggestions(log.iter(), |_| true, |_, _| false).is_empty(), "2 approvals in /p, 1 in /q");
         log.push(approval("/p", "cargo test", AllowedInHaunt));
-        let s = suggestions(log.iter(), |_, _| false);
+        let s = suggestions(log.iter(), |_| true, |_, _| false);
         assert_eq!(s, [AllowSuggestion { project: "/p".into(), command: "cargo test".into(), rule: "Bash(cargo test)".into(), approvals: 3 }]);
-        assert!(suggestions(log.iter(), |p, c| p == "/p" && c == "cargo test").is_empty());
+        assert!(suggestions(log.iter(), |_| true, |p, c| p == "/p" && c == "cargo test").is_empty());
     }
 
     #[test]
@@ -228,9 +266,9 @@ mod tests {
             assert_eq!(rule_for(bad), None, "{bad:?}");
         }
         let log: Vec<_> = (0..3).map(|_| approval("/p", "rm -rf *", Outcome::AllowedInHaunt)).collect();
-        assert!(suggestions(log.iter(), |_, _| false).is_empty());
+        assert!(suggestions(log.iter(), |_| true, |_, _| false).is_empty());
         let other_tool = Decision { tool: "Edit".into(), ..approval("/p", "/p/a.rs", Outcome::AllowedInHaunt) };
-        assert!(suggestions([other_tool.clone(), other_tool.clone(), other_tool].iter(), |_, _| false).is_empty());
+        assert!(suggestions([other_tool.clone(), other_tool.clone(), other_tool].iter(), |_| true, |_, _| false).is_empty());
     }
 
     #[test]
@@ -288,5 +326,56 @@ mod tests {
         assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
         fs::remove_dir_all(d).unwrap();
         fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[test]
+    fn counts_the_raw_command_only_when_cleaning_changed_nothing() {
+        let with_raw = |raw: &str| Decision { command: Some(raw.into()), ..approval("/p", "ls -la", Outcome::AllowedInHaunt) };
+        for raw in ["ls\u{200b} -la", "ls\n-la", "ls -la\n"] {
+            let log = [with_raw(raw), with_raw(raw), with_raw(raw)];
+            assert!(suggestions(log.iter(), |_| true, |_, _| false).is_empty(), "{raw:?}");
+        }
+        let no_raw = Decision { command: None, ..approval("/p", "ls -la", Outcome::AllowedInHaunt) };
+        assert!(suggestions([no_raw.clone(), no_raw.clone(), no_raw].iter(), |_| true, |_, _| false).is_empty(), "old log lines");
+        let log = [with_raw("ls\u{200b} -la"), with_raw("ls -la"), with_raw("ls -la")];
+        assert!(suggestions(log.iter(), |_| true, |_, _| false).is_empty(), "the variant does not count toward the clean one");
+    }
+
+    #[test]
+    fn suggestions_skip_projects_that_fail_the_check() {
+        let log: Vec<_> = (0..3).map(|_| approval("/p", "ls", Outcome::AllowedInHaunt)).collect();
+        assert!(suggestions(log.iter(), |p| p != "/p", |_, _| false).is_empty());
+    }
+
+    #[test]
+    fn project_paths_must_be_canonical_dirs_we_own() {
+        let d = project("canon");
+        let s = d.to_str().unwrap();
+        check_project(s).unwrap();
+        for bad in [format!("{s}/.."), format!("{s}/./x"), format!("{s}/../{}", d.file_name().unwrap().to_str().unwrap()), "rel/dir".into()] {
+            assert!(matches!(check_project(&bad), Err(AllowError::Invalid(_))), "{bad}");
+        }
+        assert!(matches!(check_project(&format!("{s}/")), Err(AllowError::Unsafe(_))), "trailing slash is not canonical");
+        assert!(matches!(check_project_as(s, crate::intake::uid() + 1), Err(AllowError::Unsafe(_))));
+        fs::write(d.join("file"), b"").unwrap();
+        assert!(matches!(check_project(&format!("{s}/file")), Err(AllowError::Invalid(_))));
+        assert!(matches!(check_project(&format!("{s}/missing")), Err(AllowError::Io(_))));
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn refuses_a_symlinked_project_dir() {
+        let real = project("realproj");
+        let parent = project("linkparent");
+        let link = parent.join("proj");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(matches!(check_project(link.to_str().unwrap()), Err(AllowError::Unsafe(_))));
+        assert!(matches!(add_rule(&link, "Bash(ls)"), Err(AllowError::Unsafe(_))));
+        assert!(!real.join(".claude").exists(), "nothing written through the link");
+        let nested = parent.join("proj/sub");
+        fs::create_dir(real.join("sub")).unwrap();
+        assert!(matches!(check_project(nested.to_str().unwrap()), Err(AllowError::Unsafe(_))), "a symlink higher up counts too");
+        fs::remove_dir_all(real).unwrap();
+        fs::remove_dir_all(parent).unwrap();
     }
 }

@@ -20,6 +20,9 @@ pub struct Decision {
     pub surface_id: String,
     pub tool: String,
     pub preview: String,
+    /// The Bash command exactly as sent, which may differ from the cleaned `preview`.
+    #[serde(default)]
+    pub command: Option<String>,
     pub cwd: Option<String>,
     pub outcome: Outcome,
 }
@@ -27,7 +30,15 @@ pub struct Decision {
 impl Decision {
     pub fn new(surface_id: &str, p: &Permission, outcome: Outcome) -> Self {
         let at_ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-        Self { at_ms, surface_id: surface_id.to_owned(), tool: p.tool.clone(), preview: p.preview(), cwd: p.cwd.clone(), outcome }
+        Self {
+            at_ms,
+            surface_id: surface_id.to_owned(),
+            tool: p.tool.clone(),
+            preview: p.preview(),
+            command: p.raw_command.clone(),
+            cwd: p.cwd.clone(),
+            outcome,
+        }
     }
 
     fn matches(&self, needle: &str) -> bool {
@@ -130,7 +141,7 @@ mod tests {
     }
 
     fn decision(preview: &str, outcome: Outcome) -> Decision {
-        Decision { at_ms: 1, surface_id: "s".into(), tool: "Bash".into(), preview: preview.into(), cwd: Some("/p".into()), outcome }
+        Decision { at_ms: 1, surface_id: "s".into(), tool: "Bash".into(), preview: preview.into(), command: None, cwd: Some("/p".into()), outcome }
     }
 
     #[test]
