@@ -69,6 +69,8 @@ In Swift, the generated `Progress` struct shadows `Foundation.Progress` inside t
 ### UI must call
 
 - `onUserInput(surfaceId)` on every keyDown routed to a surface (before or as it goes to the pty). Once the user types at the terminal, the prompt may already be answered and the tool running until `PostToolUse` arrives, so a late Allow (`1`) or Deny (Esc) from haunt would be typed into the running session. The call retires the surface's live request: `pending` disappears, `answerPermission` returns `nil`, and the request is logged when its outcome is known (`AnsweredInTerminal` if the matching tool runs, else `Superseded`).
+- `try registerSurface(cwd:)`: it throws now (past 512 surfaces), so `CoreAPI.registerSurface` must be `throws` and its callers need `try`.
+- `gatePluginRequest(request:)` for every `.ptyAnswer` from `HauntPlugins.takeRequests()`, writing only the bytes it returns (see Plugins).
 
 Elapsed times in subrow meta are computed when `snapshot()` runs. A UI that wants them to tick can call `snapshot()` once a second while any row is running.
 
@@ -90,7 +92,7 @@ Requests only exist for verified events, so unverified events never add an entry
 
 Nothing is allowed by default; the core only suggests. After 3 approvals in haunt (`AllowedInHaunt`; `AnsweredInTerminal` never counts, see the nonce limit below) of the same Bash command with the same hook cwd, `allow_suggestions()` lists it with the exact rule `Bash(<command>)`, most recently approved first.
 
-- Counting uses `Decision.command`, the command exactly as the hook sent it (`ToolCall.raw_command`), not the cleaned `preview`. An approval counts only if the two are equal, so a command that had invisible characters, tabs or newlines removed never counts, and a rule can't allow a cleaned variant of what was approved. Log lines without `command` (written before it existed) don't count.
+- Counting uses `Decision.command`, the command exactly as the hook sent it (`ToolCall.raw_command`), not the shown `preview`. An approval counts only if the two are equal, so a command with invisible characters, tabs or newlines (which the preview shows as markers) never counts, and a rule can't allow a variant of what was approved. Log lines without `command` (written before it existed) don't count.
 - Wildcards are never suggested: a command containing `*`, `(` or `)`, anything outside printable ASCII, leading or trailing spaces, or over 1024 bytes gets no suggestion.
 - The project (the hook cwd) must be absolute with no `.` or `..` components, equal byte for byte to its canonical path (so no symlink anywhere in it, and no trailing or doubled slash), and a directory owned by the current uid. This is checked when suggesting and again when accepting (`Invalid` or `Insecure` if it fails).
 
