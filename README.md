@@ -79,7 +79,7 @@ haunt plugin list | remove <id> | approve <id>
 
 ## Plugins
 
-`examples/hello` is a minimal plugin that adds a ⌘K palette item. Build it with `cargo build --release --target wasm32-wasip2`, then run `haunt plugin install ./examples/hello`. See `docs/core-api.md` for the host API and limits: 50 ms CPU per call, 64 MB memory, 10 MB storage.
+Each plugin lives in its own repo. `haunt plugin new my-plugin [--dir <path>] [--id <reverse-dns id>]` scaffolds one from the built-in template (a minimal plugin that adds a ⌘K palette item, with the WIT this haunt implements) and runs `git init`. Build it with `cargo build --release --target wasm32-wasip2`, then run `haunt plugin install .`. The scaffold's README lists the capabilities and how to update the WIT pin. See `docs/core-api.md` for the host API and limits: 50 ms CPU per call, 64 MB memory, 10 MB storage.
 
 ## Tests
 

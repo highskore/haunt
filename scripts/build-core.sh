@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds haunt-ffi (static lib) and its Swift bindings into build/uniffi, plus the hello plugin.
+# Builds haunt-ffi (static lib) and its Swift bindings into build/uniffi.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -15,4 +15,3 @@ module haunt_coreFFI { header "haunt_coreFFI.h"
 module haunt_ffiFFI { header "haunt_ffiFFI.h"
  export * }
 MM
-(cd examples/hello && cargo build --release --target wasm32-wasip2)

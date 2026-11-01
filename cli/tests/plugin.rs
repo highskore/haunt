@@ -1,6 +1,7 @@
-//! Phase 2 gate: `haunt plugin install ./examples/hello` end to end.
+//! Phase 2 gate: `haunt plugin new` scaffolds a plugin that builds and installs end to end.
 
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
@@ -9,26 +10,81 @@ use std::time::Instant;
 use haunt_core::plugin_store::Store;
 use haunt_core::plugins::PluginHost;
 
-fn hello_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/hello").canonicalize().unwrap()
-}
+const WASM: &str = "target/wasm32-wasip2/release/haunt_plugin.wasm";
 
-/// Builds the example with the spike's toolchain (wasm32-wasip2, wit-bindgen) once per run.
+/// Scaffolds `dev.haunt.hello` from the embedded template and builds it for wasm32-wasip2, once per run.
 fn hello() -> PathBuf {
     static BUILT: OnceLock<PathBuf> = OnceLock::new();
     BUILT
         .get_or_init(|| {
-            let dir = hello_dir();
+            let parent = home("scaffold");
+            std::fs::create_dir_all(&parent).unwrap();
+            let dir = parent.canonicalize().unwrap().join("hello");
+            let o = haunt(&parent, &["plugin", "new", "hello", "--id", "dev.haunt.hello", "--dir", dir.to_str().unwrap()], "");
+            assert!(o.status.success(), "{}", text(&o));
             let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
                 .args(["build", "--release", "--target", "wasm32-wasip2"])
                 .current_dir(&dir)
                 .env_remove("CARGO_TARGET_DIR")
                 .status()
                 .unwrap();
-            assert!(status.success(), "hello plugin build failed");
+            assert!(status.success(), "scaffolded plugin build failed");
+            // Keep only the wasm so each run leaves kilobytes in the temp dir, not a full target/.
+            let wasm = std::fs::read(dir.join(WASM)).unwrap();
+            std::fs::remove_dir_all(dir.join("target")).unwrap();
+            std::fs::create_dir_all(dir.join(WASM).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(WASM), wasm).unwrap();
             dir
         })
         .clone()
+}
+
+#[test]
+fn scaffold_fills_placeholders_and_inits_git() {
+    let dir = hello();
+    for f in ["haunt-plugin.toml", "Cargo.toml", "README.md", "src/lib.rs", "wit/haunt-plugin.wit"] {
+        assert!(!std::fs::read_to_string(dir.join(f)).unwrap().contains("{{"), "{f} still has a placeholder");
+    }
+    let manifest = std::fs::read_to_string(dir.join("haunt-plugin.toml")).unwrap();
+    assert!(manifest.contains("id = \"dev.haunt.hello\"") && manifest.contains("name = \"hello\""), "{manifest}");
+    assert!(manifest.contains(&format!("entry = \"{WASM}\"")), "{manifest}");
+    assert!(dir.join(WASM).is_file());
+    assert_eq!(
+        std::fs::read_to_string(dir.join("wit/haunt-plugin.wit")).unwrap(),
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../wit/haunt-plugin.wit")).unwrap()
+    );
+    assert!(dir.join(".git").is_dir());
+    assert_eq!(std::fs::metadata(dir.join("build.sh")).unwrap().permissions().mode() & 0o111, 0o111);
+}
+
+#[test]
+fn new_refuses_bad_ids_and_non_empty_folders() {
+    let home = home("new-refuse");
+    std::fs::create_dir_all(&home).unwrap();
+    let dir = home.join("p");
+    let dir_arg = dir.to_str().unwrap();
+    for args in [
+        vec!["plugin", "new", "p", "--dir", dir_arg, "--id", "Dev.Haunt"],
+        vec!["plugin", "new", "p", "--dir", dir_arg, "--id", "single"],
+        vec!["plugin", "new", "p", "--dir", dir_arg, "--id", "../evil"],
+        vec!["plugin", "new", "Bad Name", "--dir", dir_arg],
+    ] {
+        let o = haunt(&home, &args, "");
+        assert_eq!(o.status.code(), Some(1), "{args:?}: {}", text(&o));
+        assert!(!dir.exists(), "{args:?}");
+    }
+
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("keep.txt"), "mine").unwrap();
+    let o = haunt(&home, &["plugin", "new", "p", "--dir", dir_arg], "");
+    assert_eq!(o.status.code(), Some(1));
+    assert!(text(&o).contains("is not an empty folder"), "{}", text(&o));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+
+    std::fs::remove_file(dir.join("keep.txt")).unwrap();
+    assert!(haunt(&home, &["plugin", "new", "p", "--dir", dir_arg], "").status.success());
+    assert!(std::fs::read_to_string(dir.join("haunt-plugin.toml")).unwrap().contains("id = \"dev.haunt.p\""));
+    std::fs::remove_dir_all(home).unwrap();
 }
 
 fn home(tag: &str) -> PathBuf {
@@ -121,10 +177,10 @@ fn manifest_asking_for_terminal_read_is_rejected() {
     let home = home("termread");
     let bad = home.join("src");
     std::fs::create_dir_all(&bad).unwrap();
-    std::fs::copy(src.join("target/wasm32-wasip2/release/hello_plugin.wasm"), bad.join("plugin.wasm")).unwrap();
+    std::fs::copy(src.join(WASM), bad.join("plugin.wasm")).unwrap();
     let manifest = std::fs::read_to_string(src.join("haunt-plugin.toml"))
         .unwrap()
-        .replace("target/wasm32-wasip2/release/hello_plugin.wasm", "plugin.wasm")
+        .replace(WASM, "plugin.wasm")
         .replace("[capabilities]", "[capabilities]\nterminal_read = true");
     std::fs::write(bad.join("haunt-plugin.toml"), manifest).unwrap();
 
@@ -143,10 +199,10 @@ fn same_id_from_another_path_prompts_as_a_replacement() {
 
     let other = home.join("other");
     std::fs::create_dir_all(&other).unwrap();
-    std::fs::copy(src.join("target/wasm32-wasip2/release/hello_plugin.wasm"), other.join("plugin.wasm")).unwrap();
+    std::fs::copy(src.join(WASM), other.join("plugin.wasm")).unwrap();
     let manifest = std::fs::read_to_string(src.join("haunt-plugin.toml"))
         .unwrap()
-        .replace("target/wasm32-wasip2/release/hello_plugin.wasm", "plugin.wasm");
+        .replace(WASM, "plugin.wasm");
     std::fs::write(other.join("haunt-plugin.toml"), manifest).unwrap();
 
     let o = haunt(&home, &["plugin", "install", other.to_str().unwrap()], "n\n");
