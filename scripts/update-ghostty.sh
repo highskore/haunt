@@ -42,11 +42,15 @@ cd "$SRC"
 
 XCF="$SRC/macos/GhosttyKit.xcframework"
 LIB="$(find "$XCF" -name '*.a' | head -1)"
-rm -rf "$OUT" && mkdir -p "$OUT/lib" "$OUT/include" "$OUT/share"
+rm -rf "$OUT" && mkdir -p "$OUT/lib" "$OUT/include" "$OUT/share/ghostty"
 cp "$LIB" "$OUT/lib/libghostty.a"
 strip -S "$OUT/lib/libghostty.a"
 cp -R "$(dirname "$LIB")/Headers/." "$OUT/include/"
-cp -R "$ROOT/.cache/ghostty-out/share/." "$OUT/share/" 2>/dev/null || true
+# Only what the runtime reads: shell integration, themes, terminfo.
+cp -R "$ROOT/.cache/ghostty-out/share/ghostty/shell-integration" "$ROOT/.cache/ghostty-out/share/ghostty/themes" "$OUT/share/ghostty/"
+cp -R "$ROOT/.cache/ghostty-out/share/terminfo" "$OUT/share/"
 echo "$GHOSTTY_TAG $GHOSTTY_COMMIT" > "$OUT/GHOSTTY_VERSION"
-nm "$OUT/lib/libghostty.a" 2>/dev/null | grep -q ' T _ghostty_init$' || { echo "_ghostty_init missing" >&2; exit 1; }
+# Not `nm | grep -q`: grep exiting early SIGPIPEs nm and pipefail turns that into a failure.
+syms="$(nm "$OUT/lib/libghostty.a" 2>/dev/null)"
+grep -q ' T _ghostty_init$' <<<"$syms" || { echo "_ghostty_init missing" >&2; exit 1; }
 ls -l "$OUT/lib/libghostty.a"
