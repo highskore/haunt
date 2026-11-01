@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 use crate::event::{AgentEvent, parse_body};
 
 pub const SOCKET_NAME: &str = "sock";
+// macOS `sun_path` is 104 bytes including the terminator.
+const MAX_PATH: usize = 103;
 
 #[derive(Debug, Clone)]
 pub struct Limits {
@@ -50,6 +52,12 @@ pub enum IntakeError {
     UnsafeDir(PathBuf, &'static str),
     #[error("{0} exists and is not a socket")]
     NotASocket(PathBuf),
+    #[error("{0}: {1}")]
+    UnsafeSocket(PathBuf, String),
+    #[error("{0} is in use by another haunt")]
+    InUse(PathBuf),
+    #[error("socket path too long: {0}")]
+    PathTooLong(PathBuf),
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
@@ -79,17 +87,17 @@ pub struct Intake {
 impl Intake {
     /// Binds `<dir>/sock` (0600) in a 0700 dir we own, and serves it on a background thread.
     pub fn bind(dir: &Path, limits: Limits, sink: Sink) -> Result<Self, IntakeError> {
-        secure_dir(dir)?;
+        let me = uid();
+        secure_dir(dir, me)?;
         let path = dir.join(SOCKET_NAME);
-        match fs::symlink_metadata(&path) {
-            Ok(m) if m.file_type().is_socket() => fs::remove_file(&path)?,
-            Ok(_) => return Err(IntakeError::NotASocket(path)),
-            Err(e) if e.kind() == ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
+        if path.as_os_str().len() > MAX_PATH {
+            return Err(IntakeError::PathTooLong(path));
         }
+        remove_stale(&path, me)?;
         let listener = UnixListener::bind(&path)?;
         // The 0700 dir already keeps others out; 0600 is the second wall.
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        check_socket(&path, me)?;
 
         let shared = Arc::new(Shared {
             nonces: Mutex::new(HashMap::new()),
@@ -127,14 +135,43 @@ impl Drop for Intake {
     }
 }
 
-fn secure_dir(dir: &Path) -> Result<(), IntakeError> {
+pub fn uid() -> u32 {
+    // SAFETY: getuid has no preconditions and cannot fail.
+    unsafe { libc::getuid() }
+}
+
+/// Removes a leftover socket of ours; refuses anything else, and a socket that still answers.
+fn remove_stale(path: &Path, me: u32) -> Result<(), IntakeError> {
+    match fs::symlink_metadata(path) {
+        Ok(m) if !m.file_type().is_socket() => Err(IntakeError::NotASocket(path.to_owned())),
+        Ok(m) if m.uid() != me => Err(IntakeError::UnsafeSocket(path.to_owned(), format!("owned by uid {}", m.uid()))),
+        Ok(_) if UnixStream::connect(path).is_ok() => Err(IntakeError::InUse(path.to_owned())),
+        Ok(_) => Ok(fs::remove_file(path)?),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn check_socket(path: &Path, me: u32) -> Result<(), IntakeError> {
+    let m = fs::symlink_metadata(path)?;
+    let bad = |why: String| Err(IntakeError::UnsafeSocket(path.to_owned(), why));
+    if m.uid() != me {
+        return bad(format!("owned by uid {}", m.uid()));
+    }
+    if m.mode() & 0o777 != 0o600 {
+        return bad(format!("mode {:o}", m.mode() & 0o777));
+    }
+    Ok(())
+}
+
+fn secure_dir(dir: &Path, me: u32) -> Result<(), IntakeError> {
     let unsafe_dir = |why| IntakeError::UnsafeDir(dir.to_owned(), why);
     DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     let meta = fs::symlink_metadata(dir)?;
     if !meta.is_dir() {
         return Err(unsafe_dir("not a directory"));
     }
-    if meta.uid() != unsafe { libc::getuid() } {
+    if meta.uid() != me {
         return Err(unsafe_dir("not owned by the current user"));
     }
     if meta.mode() & 0o077 != 0 {
@@ -144,20 +181,25 @@ fn secure_dir(dir: &Path) -> Result<(), IntakeError> {
     Ok(())
 }
 
+fn peer_allowed(stream: &UnixStream, me: u32) -> bool {
+    peer_uid(stream) == Some(me)
+}
+
 fn peer_uid(stream: &UnixStream) -> Option<u32> {
     let (mut uid, mut gid) = (0, 0);
+    // SAFETY: the fd is a live socket owned by `stream`; uid and gid are valid out-pointers.
     let rc = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
     (rc == 0).then_some(uid)
 }
 
 fn accept_loop(listener: UnixListener, s: Arc<Shared>) {
-    let me = unsafe { libc::getuid() };
+    let me = uid();
     for stream in listener.incoming() {
         if s.stop.load(Ordering::SeqCst) {
             return;
         }
         let Ok(stream) = stream else { continue };
-        if peer_uid(&stream) != Some(me) {
+        if !peer_allowed(&stream, me) {
             continue;
         }
         if s.conns.fetch_add(1, Ordering::SeqCst) >= s.limits.max_conns {
@@ -177,7 +219,7 @@ fn accept_loop(listener: UnixListener, s: Arc<Shared>) {
 
 fn serve(stream: UnixStream, s: &Shared) {
     // Hooks write a few lines and hang up; an idle peer cannot pin a thread forever.
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let mut r = BufReader::new(stream);
     let mut line = Vec::new();
     loop {
@@ -226,26 +268,38 @@ fn handle_line(line: &[u8], s: &Shared) {
     let Ok(text) = std::str::from_utf8(line) else {
         return (s.sink)(reject(String::new(), line.len(), "not utf-8".into()));
     };
-    let surface_id = serde_json::from_str::<serde_json::Value>(text)
+    let surface_id = surface_of(text);
+    // Unknown ids get no bucket, so random ids cannot grow the map.
+    if !s.nonces.lock().unwrap().contains_key(&surface_id) {
+        return;
+    }
+    let Some(dropped_before) = take_token(s, &surface_id) else { return };
+    let mut d = decode(text, &s.nonces.lock().unwrap());
+    d.dropped_before = dropped_before;
+    (s.sink)(d);
+}
+
+fn surface_of(text: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(text)
         .ok()
         .and_then(|v| v.get("surface_id").and_then(|x| x.as_str()).map(str::to_owned))
         .filter(|id| !id.is_empty() && id.len() <= 64)
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
 
-    let Some(dropped_before) = take_token(s, &surface_id) else { return };
-    let mut d = match parse_body(text) {
+/// Parses one line and checks its nonce against `nonces` (surface id to nonce).
+pub(crate) fn decode(text: &str, nonces: &HashMap<String, String>) -> Delivery {
+    let surface_id = surface_of(text);
+    match parse_body(text) {
         Ok(event) => {
-            let verified = !surface_id.is_empty()
-                && match (&event.nonce, s.nonces.lock().unwrap().get(&surface_id)) {
-                    (Some(got), Some(want)) => ct_eq(got.as_bytes(), want.as_bytes()),
-                    _ => false,
-                };
-            Delivery { surface_id, verified, bytes: line.len() as u64, event: Some(event), error: None, dropped_before: 0 }
+            let verified = match (&event.nonce, nonces.get(&surface_id)) {
+                (Some(got), Some(want)) => !surface_id.is_empty() && ct_eq(got.as_bytes(), want.as_bytes()),
+                _ => false,
+            };
+            Delivery { surface_id, verified, bytes: text.len() as u64, event: Some(event), error: None, dropped_before: 0 }
         }
-        Err(e) => reject(surface_id, line.len(), e.to_string()),
-    };
-    d.dropped_before = dropped_before;
-    (s.sink)(d);
+        Err(e) => reject(surface_id, text.len(), e.to_string()),
+    }
 }
 
 /// Token bucket per surface; None means drop. Returns the drop count to report on success.
@@ -304,6 +358,7 @@ mod tests {
     fn verifies_nonce_per_surface() {
         let (intake, rx, d) = start("nonce", Limits::default());
         intake.register_surface("s1", "n1");
+        intake.register_surface("other", "n2");
         send(intake.path(), format!("{{{EV},\"surface_id\":\"s1\",\"nonce\":\"n1\"}}\n").as_bytes());
         let ok = recv(&rx);
         assert!(ok.verified && ok.event.is_some(), "{ok:?}");
@@ -313,6 +368,17 @@ mod tests {
         assert!(!recv(&rx).verified);
         send(intake.path(), format!("{{{EV},\"surface_id\":\"other\",\"nonce\":\"n1\"}}\n").as_bytes());
         assert!(!recv(&rx).verified, "a nonce is only good for its own surface");
+        drop(intake);
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn unknown_surfaces_are_dropped() {
+        let (intake, rx, d) = start("ghost", Limits::default());
+        intake.register_surface("s1", "n1");
+        send(intake.path(), format!("{{{EV},\"surface_id\":\"ghost\",\"nonce\":\"n1\"}}\n{{{EV},\"surface_id\":\"s1\"}}\n").as_bytes());
+        assert_eq!(recv(&rx).surface_id, "s1");
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
         drop(intake);
         fs::remove_dir_all(d).unwrap();
     }
@@ -334,6 +400,7 @@ mod tests {
     fn oversize_line_is_rejected_and_stream_continues() {
         let limits = Limits { max_line: 1024, ..Limits::default() };
         let (intake, rx, d) = start("big", limits);
+        intake.register_surface("s1", "n1");
         let big = format!("{{{EV},\"pad\":\"{}\"}}\n", "x".repeat(4000));
         let small = format!("{{{EV},\"surface_id\":\"s1\"}}\n");
         send(intake.path(), format!("{big}{small}").as_bytes());
@@ -347,6 +414,8 @@ mod tests {
     fn floods_are_rate_limited_per_surface() {
         let limits = Limits { per_sec: 0.001, burst: 5.0, ..Limits::default() };
         let (intake, rx, d) = start("rate", limits);
+        intake.register_surface("s1", "n1");
+        intake.register_surface("s2", "n2");
         let line = format!("{{{EV},\"surface_id\":\"s1\"}}\n");
         send(intake.path(), line.repeat(20).as_bytes());
         send(intake.path(), format!("{{{EV},\"surface_id\":\"s2\"}}\n").as_bytes());
@@ -365,6 +434,50 @@ mod tests {
         fs::create_dir_all(&d).unwrap();
         fs::write(d.join(SOCKET_NAME), b"").unwrap();
         assert!(matches!(Intake::bind(&d, Limits::default(), Arc::new(|_| {})), Err(IntakeError::NotASocket(_))));
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn refuses_dir_or_socket_of_another_uid() {
+        let d = dir("uid");
+        let _ = fs::remove_dir_all(&d);
+        assert!(matches!(secure_dir(&d, uid() + 1), Err(IntakeError::UnsafeDir(..))));
+        let intake = Intake::bind(&d, Limits::default(), Arc::new(|_| {})).unwrap();
+        assert!(matches!(check_socket(intake.path(), uid() + 1), Err(IntakeError::UnsafeSocket(..))));
+        assert!(matches!(remove_stale(intake.path(), uid() + 1), Err(IntakeError::UnsafeSocket(..))));
+        drop(intake);
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn refuses_symlinked_dir() {
+        let real = dir("real");
+        let link = dir("link");
+        let _ = fs::remove_dir_all(&real);
+        let _ = fs::remove_file(&link);
+        fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(matches!(Intake::bind(&link, Limits::default(), Arc::new(|_| {})), Err(IntakeError::UnsafeDir(..))));
+        fs::remove_file(&link).unwrap();
+        fs::remove_dir_all(real).unwrap();
+    }
+
+    #[test]
+    fn peer_of_another_uid_is_refused() {
+        let (a, _b) = UnixStream::pair().unwrap();
+        assert!(peer_allowed(&a, uid()));
+        assert!(!peer_allowed(&a, uid() + 1));
+    }
+
+    #[test]
+    fn replaces_a_stale_socket_but_not_a_live_one() {
+        let d = dir("stale");
+        let _ = fs::remove_dir_all(&d);
+        secure_dir(&d, uid()).unwrap();
+        drop(UnixListener::bind(d.join(SOCKET_NAME)).unwrap());
+        let intake = Intake::bind(&d, Limits::default(), Arc::new(|_| {})).expect("stale socket replaced");
+        assert!(matches!(Intake::bind(&d, Limits::default(), Arc::new(|_| {})), Err(IntakeError::InUse(_))));
+        drop(intake);
         fs::remove_dir_all(d).unwrap();
     }
 }

@@ -1,4 +1,4 @@
-//! OSC 777 `notify;<title>;<body>` hook events from the Claude Code plugin.
+//! v1 hook events: OSC 777 `notify;<title>;<body>` bodies and socket lines share one JSON envelope.
 
 use serde_json::Value;
 
@@ -13,7 +13,19 @@ pub struct AgentEvent {
     pub agent_id: Option<String>,
     pub agent_type: Option<String>,
     pub nonce: Option<String>,
+    pub truncated: bool,
     pub kind: EventKind,
+}
+
+/// The `tool_name` and `tool_input` preview of one tool call.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
+pub struct ToolCall {
+    pub tool_name: String,
+    pub tool_use_id: Option<String>,
+    pub command: Option<String>,
+    pub url: Option<String>,
+    pub file_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -28,10 +40,15 @@ pub enum EventKind {
     SubagentStop,
     SubagentResult { description: Option<String>, tool_count: Option<u64>, duration_ms: Option<u64> },
     SubagentTool { tool_name: String },
-    ToolRan { tool_name: String, command: Option<String>, file_path: Option<String> },
+    ToolStart { tool: ToolCall },
+    ToolDone { tool: ToolCall },
+    ToolFailed { tool: ToolCall },
+    ToolRan { tool: ToolCall },
+    PermissionSeen { tool: ToolCall },
+    Notification { notification_type: Option<String>, message: Option<String> },
     PlanExit { summary: Option<String> },
     QuestionAnswered { summary: Option<String> },
-    TodosWritten { count: Option<u64> },
+    TodosWritten { count: Option<u64>, done: Option<u64> },
     FileEdited { tool_name: Option<String>, file_path: Option<String> },
     Stop,
     Unknown { event: String },
@@ -65,16 +82,56 @@ pub fn parse_body(body: &str) -> Result<AgentEvent, ParseError> {
     if body.chars().any(char::is_control) {
         return Err(ParseError::ControlCharacter);
     }
-    let v: Value =
-        serde_json::from_str(body).map_err(|e| ParseError::InvalidJson { reason: e.to_string() })?;
+    parse_value(&parse_json(body)?)
+}
+
+fn parse_json(body: &str) -> Result<Value, ParseError> {
+    serde_json::from_str(body).map_err(|e| ParseError::InvalidJson { reason: e.to_string() })
+}
+
+fn missing(field: &str) -> ParseError {
+    ParseError::MissingField { field: field.to_owned() }
+}
+
+// JSON escapes can still decode to control characters, so every string is cleaned after decoding.
+/// Drops control and format (Cf) characters, so bidi overrides and zero-widths cannot disguise text.
+pub fn clean(s: &str) -> String {
+    s.chars()
+        .filter_map(|c| if c.is_whitespace() && !is_format(c) { Some(' ') } else { (!c.is_control() && !is_format(c)).then_some(c) })
+        .collect()
+}
+
+/// Unicode General_Category Cf (Unicode 16).
+pub fn is_format(c: char) -> bool {
+    matches!(c as u32,
+        0xAD | 0x600..=0x605 | 0x61C | 0x6DD | 0x70F | 0x890..=0x891 | 0x8E2 | 0x180E
+        | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB
+        | 0x110BD | 0x110CD | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A
+        | 0xE0001 | 0xE0020..=0xE007F)
+}
+
+fn str_field(v: &Value, k: &str) -> Option<String> {
+    v.get(k).and_then(Value::as_str).map(clean)
+}
+
+fn parse_value(v: &Value) -> Result<AgentEvent, ParseError> {
     let version = v.get("v").and_then(Value::as_i64).unwrap_or(0);
     if version != 1 {
         return Err(ParseError::UnsupportedVersion { version });
     }
-    let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+    let s = |k: &str| str_field(v, k);
     let n = |k: &str| v.get(k).and_then(Value::as_u64);
-    let req = |k: &str| s(k).ok_or_else(|| ParseError::MissingField { field: k.to_owned() });
-    let input = |k: &str| v.get("tool_input").and_then(|i| i.get(k)).and_then(Value::as_str).map(str::to_owned);
+    let req = |k: &str| s(k).ok_or_else(|| missing(k));
+    let input = |k: &str| v.get("tool_input").and_then(|i| str_field(i, k));
+    let tool = || -> Result<ToolCall, ParseError> {
+        Ok(ToolCall {
+            tool_name: req("tool_name")?,
+            tool_use_id: s("tool_use_id"),
+            command: input("command"),
+            url: input("url"),
+            file_path: input("file_path"),
+        })
+    };
 
     let event = req("event")?;
     let kind = match event.as_str() {
@@ -91,14 +148,15 @@ pub fn parse_body(body: &str) -> Result<AgentEvent, ParseError> {
             duration_ms: n("duration_ms"),
         },
         "subagent_tool" => EventKind::SubagentTool { tool_name: req("tool_name")? },
-        "tool_ran" => EventKind::ToolRan {
-            tool_name: req("tool_name")?,
-            command: input("command"),
-            file_path: input("file_path"),
-        },
+        "tool_start" => EventKind::ToolStart { tool: tool()? },
+        "tool_done" => EventKind::ToolDone { tool: tool()? },
+        "tool_failed" => EventKind::ToolFailed { tool: tool()? },
+        "tool_ran" => EventKind::ToolRan { tool: tool()? },
+        "permission_seen" => EventKind::PermissionSeen { tool: tool()? },
+        "notification" => EventKind::Notification { notification_type: s("notification_type"), message: s("message") },
         "plan_exit" => EventKind::PlanExit { summary: s("summary") },
         "question_answered" => EventKind::QuestionAnswered { summary: s("summary") },
-        "todos_written" => EventKind::TodosWritten { count: n("tool_count") },
+        "todos_written" => EventKind::TodosWritten { count: n("tool_count"), done: n("todos_done") },
         "file_edited" => EventKind::FileEdited { tool_name: s("tool_name"), file_path: input("file_path") },
         "stop" => EventKind::Stop,
         _ => EventKind::Unknown { event },
@@ -110,6 +168,7 @@ pub fn parse_body(body: &str) -> Result<AgentEvent, ParseError> {
         agent_id: s("agent_id"),
         agent_type: s("agent_type"),
         nonce: s("nonce"),
+        truncated: v.get("truncated").and_then(Value::as_bool).unwrap_or(false),
         kind,
     })
 }
@@ -126,7 +185,12 @@ impl EventKind {
             Self::SubagentStop => "subagent_stop",
             Self::SubagentResult { .. } => "subagent_result",
             Self::SubagentTool { .. } => "subagent_tool",
+            Self::ToolStart { .. } => "tool_start",
+            Self::ToolDone { .. } => "tool_done",
+            Self::ToolFailed { .. } => "tool_failed",
             Self::ToolRan { .. } => "tool_ran",
+            Self::PermissionSeen { .. } => "permission_seen",
+            Self::Notification { .. } => "notification",
             Self::PlanExit { .. } => "plan_exit",
             Self::QuestionAnswered { .. } => "question_answered",
             Self::TodosWritten { .. } => "todos_written",
@@ -152,14 +216,49 @@ mod tests {
 
     #[test]
     fn parses_tool_ran_input() {
-        let e = parse_osc("haunt://cli-agent", &format!(r#"{{{B},"event":"tool_ran","tool_name":"Bash","tool_input":{{"command":"ls"}}}}"#)).unwrap();
-        assert_eq!(e.kind, EventKind::ToolRan { tool_name: "Bash".into(), command: Some("ls".into()), file_path: None });
+        let e = parse_osc("haunt://cli-agent", &format!(r#"{{{B},"event":"tool_ran","tool_name":"Bash","tool_use_id":"tu1","tool_input":{{"command":"ls"}},"truncated":true}}"#)).unwrap();
+        let tool = ToolCall { tool_name: "Bash".into(), tool_use_id: Some("tu1".into()), command: Some("ls".into()), ..Default::default() };
+        assert_eq!(e.kind, EventKind::ToolRan { tool });
+        assert!(e.truncated);
+    }
+
+    #[test]
+    fn parses_new_variants() {
+        let p = |body: &str| parse_osc("haunt://cli-agent", &format!("{{{B},{body}}}")).unwrap().kind;
+        assert_eq!(
+            p(r#""event":"tool_start","tool_name":"WebFetch","tool_input":{"url":"https://x.dev"}"#),
+            EventKind::ToolStart { tool: ToolCall { tool_name: "WebFetch".into(), url: Some("https://x.dev".into()), ..Default::default() } }
+        );
+        assert!(matches!(p(r#""event":"tool_failed","tool_name":"Bash","tool_input":{}"#), EventKind::ToolFailed { .. }));
+        assert!(matches!(p(r#""event":"tool_done","tool_name":"Bash","tool_input":{}"#), EventKind::ToolDone { .. }));
+        assert_eq!(
+            p(r#""event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm -rf build"}"#),
+            EventKind::PermissionSeen { tool: ToolCall { tool_name: "Bash".into(), command: Some("rm -rf build".into()), ..Default::default() } }
+        );
+        assert_eq!(
+            p(r#""event":"notification","notification_type":"permission_prompt","message":"m""#),
+            EventKind::Notification { notification_type: Some("permission_prompt".into()), message: Some("m".into()) }
+        );
+        assert_eq!(p(r#""event":"todos_written","tool_count":3,"todos_done":1"#), EventKind::TodosWritten { count: Some(3), done: Some(1) });
     }
 
     #[test]
     fn rejects_other_titles_and_control_chars() {
         assert!(matches!(parse_osc("Build done", "{}"), Err(ParseError::NotAgentTitle { .. })));
         assert_eq!(parse_osc("haunt://cli-agent", "{\"v\":1,\u{1b}}"), Err(ParseError::ControlCharacter));
+    }
+
+    #[test]
+    fn escaped_control_chars_are_stripped() {
+        let e = parse_body(r#"{"v":1,"event":"prompt_submit","query":"a\u001b[2Jb\u0007c\nd"}"#).unwrap();
+        assert_eq!(e.kind, EventKind::PromptSubmit { query: Some("a[2Jbc d".into()) });
+    }
+
+    #[test]
+    fn format_characters_are_stripped() {
+        let raw = "{\"v\":1,\"event\":\"prompt_submit\",\"query\":\"rm -rf \u{202E}/ \u{2066}x\u{2069}\u{200B}\u{200F}\u{2060}\u{FEFF}\u{AD}\u{E0041}y\"}";
+        assert_eq!(parse_body(raw).unwrap().kind, EventKind::PromptSubmit { query: Some("rm -rf / xy".into()) });
+        assert!(!is_format('a') && !is_format('é') && !is_format('👻'));
     }
 
     #[test]
