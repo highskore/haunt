@@ -1,0 +1,22 @@
+[package]
+name = "haunt-ffi"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["staticlib", "lib"]
+name = "haunt_ffi"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[features]
+default = ["plugins"]
+plugins = ["haunt-core/plugins"]
+
+[dependencies]
+haunt-core = { path = "../core", default-features = false, features = ["ffi"] }
+uniffi = { workspace = true, features = ["cli"] }
+thiserror.workspace = true

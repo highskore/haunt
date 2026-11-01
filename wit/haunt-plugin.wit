@@ -1,0 +1,26 @@
+// Phase 0 sketch of the plugin API; the real one grows per plan section 3.3.
+package haunt:plugin@0.1.0;
+
+interface types {
+  record agent-event {
+    kind: string,
+    session-id: option<string>,
+    agent-id: option<string>,
+    cwd: option<string>,
+    summary: option<string>,
+  }
+
+  enum style { meta, needs, dot, hollow-dot, kbd, mono }
+
+  record decoration {
+    badge: option<string>,
+    style: style,
+    meta-suffix: option<string>,
+  }
+}
+
+world plugin {
+  use types.{agent-event, decoration};
+  import log: func(msg: string);
+  export on-event: func(event: agent-event) -> option<decoration>;
+}

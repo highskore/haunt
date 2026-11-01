@@ -1,0 +1,18 @@
+[package]
+name = "haunt-core"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[features]
+default = ["plugins"]
+ffi = ["dep:uniffi"]
+plugins = ["dep:wasmtime", "dep:wasmtime-wasi"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uniffi = { workspace = true, optional = true }
+wasmtime = { version = "50", optional = true, default-features = false, features = ["cranelift", "component-model", "runtime", "std"] }
+wasmtime-wasi = { version = "50", optional = true, default-features = false, features = ["p2"] }
