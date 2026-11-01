@@ -3,7 +3,7 @@ import Foundation
 /// The haunt-core UniFFI object as the UI uses it; `HauntCore` (real) and `MockCore` both conform.
 protocol CoreAPI: AnyObject {
     func start() throws
-    func registerSurface(cwd: String) -> SurfaceEnv
+    func registerSurface(cwd: String) throws -> SurfaceEnv
     func unregisterSurface(surfaceId: String)
     func setSurfaceInfo(surfaceId: String, title: String, cwd: String, gitBranch: String?)
     func selectSurface(surfaceId: String)

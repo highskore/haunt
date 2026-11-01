@@ -105,7 +105,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func newTab(cwd: String? = nil, select selectIt: Bool = true) {
         guard let app = ghostty.app else { return }
         let dir = cwd ?? tabs.first { $0.env.surfaceId == selectedId }?.view.pwd ?? NSHomeDirectory()
-        let env = core.registerSurface(cwd: dir)
+        // The core refuses past its surface cap; no tab beats an unverifiable one.
+        guard let env = try? core.registerSurface(cwd: dir) else { NSSound.beep(); return }
         var config = Ghostty.SurfaceConfiguration()
         config.workingDirectory = dir
         config.environmentVariables = [

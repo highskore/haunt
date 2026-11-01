@@ -21,7 +21,7 @@ final class MockCore: CoreAPI {
 
     func start() throws {}
 
-    func registerSurface(cwd: String) -> SurfaceEnv {
+    func registerSurface(cwd: String) throws -> SurfaceEnv {
         let id = "s\(nextId)"
         nextId += 1
         surfaces.append(Surface(id: id, cwd: cwd))
