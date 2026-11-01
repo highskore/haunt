@@ -10,9 +10,15 @@ use std::path::{Component, Path, PathBuf};
 pub const FILE_CAP: usize = 4 << 20;
 const MAX_CWDS: usize = 256;
 const CWD: &str = "${cwd}";
+const GLOB_CAP: usize = 256;
+const STAR_CAP: usize = 8;
+const PATH_CAP: usize = libc::PATH_MAX as usize;
 
 /// Globs are absolute or start with `${cwd}/`; `*` and `?` match within one path segment.
 pub fn validate_glob(g: &str) -> Result<(), String> {
+    if g.len() > GLOB_CAP || g.matches('*').count() > STAR_CAP {
+        return Err(format!("fs glob {g:?}: at most {GLOB_CAP} bytes and {STAR_CAP} '*'"));
+    }
     let rest = g.strip_prefix(CWD).unwrap_or(g);
     if !rest.starts_with('/') {
         return Err(format!("fs glob {g:?} must be absolute or start with ${{cwd}}/"));
@@ -26,14 +32,28 @@ pub fn validate_glob(g: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Iterative wildcard match, O(len(pat) * len(s)): it runs on the host, outside the CPU budget.
 fn seg_match(pat: &[u8], s: &[u8]) -> bool {
-    match (pat.first(), s.first()) {
-        (None, None) => true,
-        (Some(b'*'), _) => seg_match(&pat[1..], s) || (!s.is_empty() && seg_match(pat, &s[1..])),
-        (Some(b'?'), Some(_)) => seg_match(&pat[1..], &s[1..]),
-        (Some(p), Some(c)) if p == c => seg_match(&pat[1..], &s[1..]),
-        _ => false,
+    let (mut p, mut i) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while i < s.len() {
+        if p < pat.len() && pat[p] == b'*' {
+            while p < pat.len() && pat[p] == b'*' {
+                p += 1;
+            }
+            star = Some((p, i));
+        } else if p < pat.len() && (pat[p] == b'?' || pat[p] == s[i]) {
+            p += 1;
+            i += 1;
+        } else if let Some((sp, si)) = star {
+            p = sp;
+            i = si + 1;
+            star = Some((sp, si + 1));
+        } else {
+            return false;
+        }
     }
+    pat[p..].iter().all(|&c| c == b'*')
 }
 
 fn segments(p: &Path) -> Vec<Vec<u8>> {
@@ -55,8 +75,10 @@ pub struct FsScope {
 }
 
 impl FsScope {
+    /// Globs that fail `validate_glob` are dropped, so a hand-edited lockfile can't bypass the caps.
     pub fn new(read: &[String], write: &[String]) -> Self {
-        Self { read: read.to_vec(), write: write.to_vec(), cwds: Vec::new() }
+        let valid = |gs: &[String]| gs.iter().filter(|g| validate_glob(g).is_ok()).cloned().collect();
+        Self { read: valid(read), write: valid(write), cwds: Vec::new() }
     }
 
     /// `${cwd}` expands to the cwd of agents the plugin has seen events for.
@@ -91,10 +113,14 @@ impl FsScope {
         if !self.allowed(&self.read, &full) {
             return Err(denied(path));
         }
-        let fd = open_at(&dir, &name, libc::O_RDONLY | libc::O_NOFOLLOW, 0).map_err(|e| io_err(path, e))?;
+        // O_NONBLOCK so a FIFO can't block the host before the regular-file check.
+        let fd = open_at(&dir, &name, libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK, 0).map_err(|e| io_err(path, e))?;
         let mut f = std::fs::File::from(fd);
         if !f.metadata().map_err(|e| io_err(path, e))?.is_file() {
             return Err(format!("{path}: not a regular file"));
+        }
+        if unsafe { libc::fcntl(f.as_raw_fd(), libc::F_SETFL, 0) } != 0 {
+            return Err(io_err(path, io::Error::last_os_error()));
         }
         let mut buf = Vec::new();
         Read::by_ref(&mut f).take(FILE_CAP as u64 + 1).read_to_end(&mut buf).map_err(|e| io_err(path, e))?;
@@ -171,6 +197,9 @@ fn io_err(path: &str, e: io::Error) -> String {
 }
 
 fn canonical(path: &str) -> Result<PathBuf, String> {
+    if path.len() > PATH_CAP {
+        return Err(format!("path longer than {PATH_CAP} bytes"));
+    }
     let p = Path::new(path);
     if !p.is_absolute() || p.components().any(|c| matches!(c, Component::ParentDir)) {
         return Err(format!("{path}: must be absolute without .."));
@@ -180,6 +209,9 @@ fn canonical(path: &str) -> Result<PathBuf, String> {
 
 /// The opened canonical parent, the final name, and the canonical full path.
 fn resolve(path: &str) -> Result<(OwnedFd, CString, PathBuf), String> {
+    if path.len() > PATH_CAP {
+        return Err(format!("path longer than {PATH_CAP} bytes"));
+    }
     let p = Path::new(path);
     let name = match p.components().next_back() {
         Some(Component::Normal(n)) => n.to_owned(),
@@ -250,6 +282,50 @@ mod tests {
         assert!(validate_glob("${cwd}/../x").is_err());
         assert!(validate_glob("${cwd}/**/x").is_err());
         assert!(validate_glob("/a/${cwd}/x").is_err());
+    }
+
+    #[test]
+    fn matcher_is_correct_and_linear() {
+        for (p, s, m) in [("*.json", "a.json", true), ("*.json", "a.jsonx", false), ("a?c", "abc", true), ("a**c", "ac", true), ("", "", true), ("*", "", true), ("x*", "", false), ("*a*b", "zzazb", true), ("*a*b", "zzab_", false)] {
+            assert_eq!(seg_match(p.as_bytes(), s.as_bytes()), m, "{p} vs {s}");
+        }
+        let pat = "*a".repeat(8) + "b";
+        let s = "a".repeat(4096);
+        let t = std::time::Instant::now();
+        assert!(!seg_match(pat.as_bytes(), s.as_bytes()));
+        assert!(t.elapsed() < std::time::Duration::from_millis(50), "{:?}", t.elapsed());
+        let mut pat = "*a".repeat(200);
+        pat.push('b');
+        let t = std::time::Instant::now();
+        assert!(!seg_match(pat.as_bytes(), s.as_bytes()), "uncapped pattern still finishes");
+        assert!(t.elapsed() < std::time::Duration::from_millis(200), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn glob_and_path_lengths_are_capped() {
+        assert!(validate_glob(&format!("${{cwd}}/{}", "*a".repeat(9))).is_err());
+        assert!(validate_glob(&format!("/{}", "a".repeat(300))).is_err());
+        let s = FsScope::new(&[format!("/{}", "*a".repeat(20))], &[]);
+        assert!(s.read.is_empty(), "invalid granted glob dropped");
+        assert!(s.read(&format!("/{}", "a".repeat(PATH_CAP + 1))).unwrap_err().contains("longer than"));
+    }
+
+    #[test]
+    fn fifo_is_refused_without_blocking() {
+        let root = tempdir("fifo");
+        let fifo = root.join("proj/.claude/settings.local.json");
+        let c = CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let s = scope(&root);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = fifo.to_str().unwrap().to_owned();
+        std::thread::spawn(move || {
+            let _ = tx.send((s.read(&path), s.write(&path, b"x")));
+        });
+        let (r, w) = rx.recv_timeout(std::time::Duration::from_secs(2)).expect("fs on a FIFO must not block");
+        assert!(r.unwrap_err().contains("not a regular file"));
+        assert!(w.unwrap_err().contains("not a regular file"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
