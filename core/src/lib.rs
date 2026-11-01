@@ -7,6 +7,12 @@ pub mod model;
 #[cfg(feature = "plugins")]
 pub mod plugin_cache;
 #[cfg(feature = "plugins")]
+pub mod plugin_fs;
+#[cfg(feature = "plugins")]
+pub mod plugin_manifest;
+#[cfg(feature = "plugins")]
+pub mod plugin_store;
+#[cfg(feature = "plugins")]
 pub mod plugins;
 pub mod progress;
 pub mod session;

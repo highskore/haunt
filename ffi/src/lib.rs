@@ -123,6 +123,47 @@ impl PluginHandle {
     }
 }
 
+#[cfg(feature = "plugins")]
+pub use haunt_core::plugins::{HostRequest, NotifyAction, PaletteItem};
+
+/// Installed plugins from `<haunt_dir>/plugins`, each with only the capabilities the user granted.
+#[cfg(feature = "plugins")]
+#[derive(uniffi::Object)]
+pub struct HauntPlugins {
+    set: Mutex<haunt_core::plugin_store::PluginSet>,
+}
+
+#[cfg(feature = "plugins")]
+#[uniffi::export]
+impl HauntPlugins {
+    /// Plugins that fail verification (hash mismatch, link error) are skipped and listed in `load_errors`.
+    #[uniffi::constructor]
+    pub fn load(haunt_dir: String) -> Result<std::sync::Arc<Self>, HostError> {
+        let fail = |e: haunt_core::plugin_store::StoreError| HostError::Failed { reason: e.to_string() };
+        let host = haunt_core::plugins::PluginHost::new()?;
+        let set = haunt_core::plugin_store::Store::open(haunt_dir.as_ref()).map_err(fail)?.load_all(&host).map_err(fail)?;
+        Ok(std::sync::Arc::new(Self { set: Mutex::new(set) }))
+    }
+
+    pub fn load_errors(&self) -> Vec<String> {
+        self.set.lock().unwrap().errors().to_vec()
+    }
+
+    /// No mode: registered commands and modes. A mode word: that mode's items for `query`.
+    pub fn palette_items(&self, mode: Option<String>, query: String) -> Vec<PaletteItem> {
+        self.set.lock().unwrap().palette_items(mode.as_deref(), &query)
+    }
+
+    pub fn invoke_palette_item(&self, plugin_id: String, item_id: String) -> Result<(), HostError> {
+        Ok(self.set.lock().unwrap().invoke(&plugin_id, &item_id)?)
+    }
+
+    /// Notifications and pty writes plugins asked for since the last call.
+    pub fn take_requests(&self) -> Vec<HostRequest> {
+        self.set.lock().unwrap().take_requests()
+    }
+}
+
 pub use haunt_core::intake::Delivery;
 
 #[uniffi::export(with_foreign)]

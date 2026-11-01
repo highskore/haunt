@@ -102,3 +102,18 @@ A request resolves when a verified `tool_ran`, `tool_done` or `tool_failed` matc
 **OSC 777 fallback**: `haunt://cli-agent` and `warp://cli-agent` bodies go through the same parser, but they count for status only. The haunt hook sends a stripped-down status body there (no nonce, at most 250 bytes).
 
 The app must not bind `HauntIntake` (the spike's standalone export) at the same time: `HauntCore.start()` owns the socket, and a second bind fails with "in use".
+
+## Plugins (`HauntPlugins`, feature `plugins`)
+
+Installed with `haunt plugin install <path>` (cli/), which shows the capabilities, asks y/N (`--yes` for scripts) and pins sha256 of the wasm and manifest in `~/.haunt/plugins.lock`. A plugin whose files no longer match is not loaded until `haunt plugin approve <id>`.
+
+| call | what |
+|---|---|
+| `HauntPlugins.load(hauntDir:)` | loads every pinned plugin from `<hauntDir>/plugins` with only its granted imports; runs `init` |
+| `loadErrors()` | plugins skipped, with the reason (hash mismatch, link error, trap) |
+| `paletteItems(mode: nil, query:)` | registered commands and modes (`isMode`), title-filtered by `query` |
+| `paletteItems(mode: "word", query:)` | the items that mode's plugin returns for `query` |
+| `invokePaletteItem(pluginId:itemId:)` | calls the plugin's `on-action(itemId, "")` |
+| `takeRequests()` | `HostRequest.notify` / `.ptyAnswer` / `.ptyText` queued by plugins; pty writes go through `ptygate` |
+
+Each call runs under a 50 ms CPU budget and 64 MB of memory; a trap or timeout disables that plugin until the next load.
