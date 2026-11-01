@@ -36,12 +36,15 @@ pub struct Permission {
 }
 
 /// How a verified permission request ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 pub enum Outcome {
     AllowedInHaunt,
     DeniedInHaunt,
+    /// A plugin answered through `ptygate`, not the user; never counts as an approval.
+    AllowedByPlugin { plugin_id: String },
+    DeniedByPlugin { plugin_id: String },
     /// The matching call ran, so it was allowed at the terminal prompt.
     AnsweredInTerminal,
     Superseded,
@@ -238,10 +241,15 @@ impl Session {
     /// Consumes the live permission if `key` names it; false for a stale or unknown key, and for a
     /// suspicious request, which stays live for the terminal to answer.
     pub fn answer(&mut self, key: u64, allow: bool, now: Instant) -> bool {
+        self.answer_as(key, if allow { Outcome::AllowedInHaunt } else { Outcome::DeniedInHaunt }, now)
+    }
+
+    /// `answer`, logging `outcome` (an `…InHaunt` or `…ByPlugin` one).
+    pub fn answer_as(&mut self, key: u64, outcome: Outcome, now: Instant) -> bool {
         if self.live_permission().is_none_or(|p| p.key() != key || p.suspicious()) {
             return false;
         }
-        self.end_permission(if allow { Outcome::AllowedInHaunt } else { Outcome::DeniedInHaunt });
+        self.end_permission(outcome);
         self.set(Status::Running, now);
         true
     }
@@ -454,7 +462,7 @@ mod tests {
         assert!(p.suspicious());
         assert!(!s.answer(p.key(), true, now) && !s.answer(p.key(), false, now));
         s.apply(&ev(r#"{"event":"tool_ran","tool_name":"Bash","tool_input":{"command":"ls #\nrm -rf ~/x"}}"#), true, now);
-        assert_eq!(s.take_ended().last().map(|(_, o)| *o), Some(Outcome::AnsweredInTerminal));
+        assert_eq!(s.take_ended().last().map(|(_, o)| o.clone()), Some(Outcome::AnsweredInTerminal));
     }
 
     #[test]
@@ -498,12 +506,12 @@ mod tests {
         assert!(!s.answer(key, true, now), "the tool may be running: haunt must not type into it");
         assert_eq!(s.status, Status::NeedsYou);
         s.apply(&ev(RAN), true, now);
-        assert_eq!(s.take_ended().iter().map(|(_, o)| *o).collect::<Vec<_>>(), [Outcome::AnsweredInTerminal]);
+        assert_eq!(s.take_ended().iter().map(|(_, o)| o.clone()).collect::<Vec<_>>(), [Outcome::AnsweredInTerminal]);
 
         s.apply(&ev(PERM), true, now);
         s.user_input();
         s.apply(&ev(r#"{"event":"stop"}"#), true, now);
-        assert_eq!(s.take_ended().iter().map(|(_, o)| *o).collect::<Vec<_>>(), [Outcome::Superseded], "denied at the terminal");
+        assert_eq!(s.take_ended().iter().map(|(_, o)| o.clone()).collect::<Vec<_>>(), [Outcome::Superseded], "denied at the terminal");
         assert!(!s.user_input(), "nothing pending");
     }
 
@@ -539,7 +547,7 @@ mod tests {
         s.apply(&ev(PERM), false, now);
         s.close();
         let ended = s.take_ended();
-        let outcomes: Vec<_> = ended.iter().map(|(_, o)| *o).collect();
+        let outcomes: Vec<_> = ended.iter().map(|(_, o)| o.clone()).collect();
         assert_eq!(outcomes, [Superseded, AnsweredInTerminal, AllowedInHaunt, DeniedInHaunt, Superseded], "an unverified prompt is no request");
         assert_eq!(ended[0].0.cwd.as_deref(), Some("/p"));
         assert!(s.take_ended().is_empty());

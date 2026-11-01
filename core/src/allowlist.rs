@@ -358,6 +358,13 @@ mod tests {
     }
 
     #[test]
+    fn plugin_answers_never_count() {
+        let by_plugin = || approval("/p", "ls", Outcome::AllowedByPlugin { plugin_id: "dev.x.y".into() });
+        let log = [by_plugin(), by_plugin(), by_plugin(), approval("/p", "ls", Outcome::AllowedInHaunt)];
+        assert!(suggestions(log.iter(), |_| true, |_, _| false).is_empty());
+    }
+
+    #[test]
     fn suggestions_skip_projects_that_fail_the_check() {
         let log: Vec<_> = (0..3).map(|_| approval("/p", "ls", Outcome::AllowedInHaunt)).collect();
         assert!(suggestions(log.iter(), |p| p != "/p", |_, _| false).is_empty());

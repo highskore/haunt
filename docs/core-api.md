@@ -41,7 +41,7 @@ record Progress { done: u64, total: u64 }
 record Subrow { label: string, meta: string }
 
 record Decision { at_ms: u64, surface_id: string, tool: string, preview: string, command: Option<string>, cwd: Option<string>, outcome: Outcome }
-enum   Outcome { AllowedInHaunt, DeniedInHaunt, AnsweredInTerminal, Superseded }
+enum   Outcome { AllowedInHaunt, DeniedInHaunt, AllowedByPlugin { plugin_id: string }, DeniedByPlugin { plugin_id: string }, AnsweredInTerminal, Superseded }
 record AllowSuggestion { project: string, command: string, rule: string, approvals: u32 }
 ```
 
@@ -81,6 +81,7 @@ Every verified permission request is recorded once, when it ends, with its outco
 | outcome | when |
 |---|---|
 | `AllowedInHaunt` / `DeniedInHaunt` | `answer_permission` with the live key |
+| `AllowedByPlugin` / `DeniedByPlugin` | a plugin's `.ptyAnswer` through `gate_plugin_request`; in `decisions.jsonl` it is `{"allowed_by_plugin":{"plugin_id":…}}` |
 | `AnsweredInTerminal` | a verified `tool_ran`/`tool_done`/`tool_failed` matched it, so it was allowed at the terminal prompt |
 | `Superseded` | anything else ended it: a newer prompt, leaving `needs you` (including a denial typed in the terminal, which then shows up as the next prompt or stop), or the surface closing |
 
@@ -90,7 +91,7 @@ Requests only exist for verified events, so unverified events never add an entry
 
 ## Allowlist suggestions
 
-Nothing is allowed by default; the core only suggests. After 3 approvals in haunt (`AllowedInHaunt`; `AnsweredInTerminal` never counts, see the nonce limit below) of the same Bash command with the same hook cwd, `allow_suggestions()` lists it with the exact rule `Bash(<command>)`, most recently approved first.
+Nothing is allowed by default; the core only suggests. After 3 approvals in haunt (`AllowedInHaunt`; `AllowedByPlugin` and `AnsweredInTerminal` never count, see the nonce limit below) of the same Bash command with the same hook cwd, `allow_suggestions()` lists it with the exact rule `Bash(<command>)`, most recently approved first.
 
 - Counting uses `Decision.command`, the command exactly as the hook sent it (`ToolCall.raw_command`), not the shown `preview`. An approval counts only if the two are equal, so a command with invisible characters, tabs or newlines (which the preview shows as markers) never counts, and a rule can't allow a variant of what was approved. Log lines without `command` (written before it existed) don't count.
 - Wildcards are never suggested: a command containing `*`, `(` or `)`, anything outside printable ASCII, leading or trailing spaces, or over 1024 bytes gets no suggestion.

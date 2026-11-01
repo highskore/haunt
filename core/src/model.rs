@@ -15,7 +15,7 @@ use crate::decisions::{Decision, DecisionLog};
 use crate::event::{AgentEvent, parse_osc};
 use crate::intake::{Delivery, Intake, IntakeError, Limits, SOCKET_NAME};
 use crate::layout::{self, SidebarSnapshot, SurfaceView};
-use crate::session::Session;
+use crate::session::{Outcome, Session};
 
 const MAX_SURFACES: usize = 512;
 
@@ -374,8 +374,19 @@ impl Core {
     /// prompt maps to its first option, "Yes", wherever the highlight is; Enter would take the
     /// highlighted one, which may be "don't ask again" or "No". Deny is Esc.
     pub fn answer_permission(&self, surface_id: &str, request_key: u64, allow: bool) -> Option<Vec<u8>> {
+        self.answer_by(surface_id, request_key, allow, None)
+    }
+
+    /// `answer_permission`, logged as the plugin's answer when `plugin_id` is set.
+    pub(crate) fn answer_by(&self, surface_id: &str, request_key: u64, allow: bool, plugin_id: Option<&str>) -> Option<Vec<u8>> {
+        let outcome = match (plugin_id, allow) {
+            (None, true) => Outcome::AllowedInHaunt,
+            (None, false) => Outcome::DeniedInHaunt,
+            (Some(id), true) => Outcome::AllowedByPlugin { plugin_id: id.to_owned() },
+            (Some(id), false) => Outcome::DeniedByPlugin { plugin_id: id.to_owned() },
+        };
         let answered = self.update(|st, now| {
-            let answered = st.surface(surface_id).is_some_and(|s| s.session.answer(request_key, allow, now));
+            let answered = st.surface(surface_id).is_some_and(|s| s.session.answer_as(request_key, outcome, now));
             st.settle();
             answered
         });
@@ -525,7 +536,7 @@ mod tests {
         let env = blocked(&c, true);
         c.unregister_surface(&env.surface_id);
         let d = c.decisions("", 10);
-        assert_eq!((d.len(), d[0].outcome, d[0].surface_id.as_str()), (1, crate::Outcome::Superseded, env.surface_id.as_str()));
+        assert_eq!((d.len(), d[0].outcome.clone(), d[0].surface_id.as_str()), (1, crate::Outcome::Superseded, env.surface_id.as_str()));
     }
 
     fn canonical_dir(tag: &str) -> String {

@@ -16,8 +16,8 @@ impl Core {
     /// that surface's live request, so a plugin can't answer another surface, a stale prompt or a
     /// suspicious one. Anything else writes nothing.
     pub fn gate_plugin_request(&self, request: &HostRequest) -> Option<PtyWrite> {
-        let HostRequest::PtyAnswer { surface, allow, request_id, .. } = request else { return None };
-        let bytes = self.answer_permission(surface, *request_id, *allow)?;
+        let HostRequest::PtyAnswer { plugin_id, surface, allow, request_id } = request else { return None };
+        let bytes = self.answer_by(surface, *request_id, *allow, Some(plugin_id))?;
         Some(PtyWrite { surface_id: surface.clone(), bytes })
     }
 }
@@ -51,5 +51,6 @@ mod tests {
         let w = c.gate_plugin_request(&answer(&a.surface_id, key)).unwrap();
         assert_eq!((w.surface_id.as_str(), w.bytes.as_slice()), (a.surface_id.as_str(), b"1".as_slice()));
         assert_eq!(c.gate_plugin_request(&answer(&a.surface_id, key)), None, "consumed");
+        assert_eq!(c.decisions("", 1)[0].outcome, crate::Outcome::AllowedByPlugin { plugin_id: "p".into() });
     }
 }
