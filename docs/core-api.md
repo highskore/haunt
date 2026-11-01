@@ -164,6 +164,8 @@ Installed with `haunt plugin install <path>` (cli/), which shows the capabilitie
 
 Each call runs under a 50 ms CPU budget and 64 MB of memory; a trap or timeout disables that plugin until the next load.
 
+**fs grants**: `${cwd}` in an `fs_read`/`fs_write` glob expands only to cwds of verified events. A cwd that is `$HOME`, an ancestor of it, inside the haunt dir or containing it is ignored, and if `$HOME` can't be resolved `${cwd}` expands to nothing. No path inside the haunt dir is ever readable, writable or listable, whatever the globs say.
+
 **pty writes** (`pty_write`): a plugin can only call `pty.answer(surface, allow, request-id: u64)`, where `request-id` is the `key` of that surface's pending request. There is no free-form text: a plugin typing arbitrary text with ESC or `\r` could drive the session. Pass every `.ptyAnswer` to `gatePluginRequest` and write exactly the bytes it returns to `surfaceId`; it goes through `answer_permission`, so the key must be the live request of that very surface, not suspicious and not retired by typing, and it is consumed. Never write anything for a request it returns `nil` for. The agent events plugins receive don't carry the key yet, so no plugin can use this until they do.
 
 ## Control socket and CLI

@@ -72,10 +72,11 @@ pub struct FsScope {
     read: Vec<String>,
     write: Vec<String>,
     cwds: Vec<PathBuf>,
-    /// Canonical `$HOME`: `${cwd}` may never be it or one of its ancestors.
+    /// Canonical `$HOME`: `${cwd}` may never be it or one of its ancestors. Unknown means no `${cwd}`.
     home: Option<PathBuf>,
-    /// Canonical haunt dir: `${cwd}` may never be inside it.
-    haunt: Option<PathBuf>,
+    /// Canonical haunt dir: no path inside it is ever readable or writable, and `${cwd}` may
+    /// neither be inside it nor contain it.
+    haunt: PathBuf,
 }
 
 impl FsScope {
@@ -85,18 +86,20 @@ impl FsScope {
         let valid = |gs: &[String]| gs.iter().filter(|g| validate_glob(g).is_ok()).cloned().collect();
         let home = std::env::var_os("HOME").and_then(|h| Path::new(&h).canonicalize().ok());
         let haunt = haunt_dir.map_or_else(crate::plugin_store::default_home, Path::to_owned);
-        let haunt = haunt.canonicalize().ok().or(Some(haunt));
+        let haunt = haunt.canonicalize().unwrap_or(haunt);
         Self { read: valid(read), write: valid(write), cwds: Vec::new(), home, haunt }
     }
 
     /// `${cwd}` expands to the cwd of agents the plugin has seen verified events for. A cwd that is
-    /// `$HOME`, an ancestor of it, or inside the haunt dir is ignored: a grant there would reach
-    /// every project, or haunt's own lockfile and plugins.
+    /// `$HOME`, an ancestor of it, inside the haunt dir or containing it is ignored: a grant there
+    /// would reach every project, or haunt's own lockfile and plugins. Without a known `$HOME`
+    /// nothing is added.
     pub fn add_cwd(&mut self, cwd: &str) {
+        let Some(home) = &self.home else { return };
         let Ok(c) = Path::new(cwd).canonicalize() else { return };
-        let too_wide = c.parent().is_none() || self.home.as_deref().is_some_and(|h| h.starts_with(&c));
-        let haunt_owned = self.haunt.as_deref().is_some_and(|d| c.starts_with(d));
-        if !too_wide && !haunt_owned && !self.cwds.contains(&c) && self.cwds.len() < MAX_CWDS {
+        let too_wide = c.parent().is_none() || home.starts_with(&c);
+        let haunt = c.starts_with(&self.haunt) || self.haunt.starts_with(&c);
+        if !too_wide && !haunt && !self.cwds.contains(&c) && self.cwds.len() < MAX_CWDS {
             self.cwds.push(c);
         }
     }
@@ -113,7 +116,11 @@ impl FsScope {
         out
     }
 
+    /// `path` is canonical; nothing in the haunt dir is ever allowed, whatever the globs say.
     fn allowed(&self, globs: &[String], path: &Path) -> bool {
+        if path.starts_with(&self.haunt) {
+            return false;
+        }
         let segs = segments(path);
         self.patterns(globs).iter().any(|p| p.len() == segs.len() && p.iter().zip(&segs).all(|(p, s)| seg_match(p, s)))
     }
@@ -181,6 +188,9 @@ impl FsScope {
     /// Entry names under `path` that themselves match a read glob.
     pub fn list(&self, path: &str) -> Result<Vec<String>, String> {
         let full = canonical(path)?;
+        if full.starts_with(&self.haunt) {
+            return Err(denied(path));
+        }
         open_dir_nofollow(&full).map_err(|e| io_err(path, e))?;
         let depth = segments(&full).len() + 1;
         if !self.patterns(&self.read).iter().any(|p| p.len() == depth) {
@@ -393,7 +403,7 @@ mod tests {
         std::fs::create_dir_all(home.join("code/p")).unwrap();
         std::fs::create_dir_all(home.join(".haunt/plugins")).unwrap();
         let mut s = FsScope::new(&["${cwd}/*".into()], &[], Some(&home.join(".haunt")));
-        s.home = Some(home.clone());
+        s.home = Some(home.canonicalize().unwrap());
         for wide in [home.clone(), root.join("Users"), root.clone(), PathBuf::from("/"), home.join(".haunt"), home.join(".haunt/plugins")] {
             s.add_cwd(wide.to_str().unwrap());
         }
@@ -401,6 +411,44 @@ mod tests {
         assert!(s.cwds.is_empty(), "{:?}", s.cwds);
         s.add_cwd(home.join("code/p").to_str().unwrap());
         assert_eq!(s.cwds, [home.join("code/p")]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cwd_that_contains_the_haunt_dir_is_ignored() {
+        let root = tempdir("contains");
+        std::fs::create_dir_all(root.join("proj/.haunt")).unwrap();
+        let mut s = FsScope::new(&["${cwd}/*".into()], &[], Some(&root.join("proj/.haunt")));
+        s.home = Some(PathBuf::from("/nonexistent/home"));
+        s.add_cwd(root.join("proj").to_str().unwrap());
+        assert!(s.cwds.is_empty(), "{:?}", s.cwds);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unknown_home_means_no_cwd_at_all() {
+        let root = tempdir("nohome");
+        let mut s = FsScope::new(&["${cwd}/.claude/*.json".into()], &[], None);
+        s.home = None;
+        s.add_cwd(root.join("proj").to_str().unwrap());
+        assert!(s.cwds.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_haunt_dir_is_off_limits_whatever_the_grant() {
+        let root = tempdir("hauntfs");
+        let haunt = root.join("haunt");
+        std::fs::create_dir_all(haunt.join("plugins")).unwrap();
+        std::fs::write(haunt.join("plugins.lock"), "x").unwrap();
+        let g = format!("{}/*", haunt.display());
+        let s = FsScope::new(&[g.clone(), format!("{}/*", root.display())], std::slice::from_ref(&g), Some(&haunt));
+        let lock = haunt.join("plugins.lock");
+        assert!(s.read(lock.to_str().unwrap()).unwrap_err().contains("not covered"));
+        assert!(s.write(lock.to_str().unwrap(), b"pwned").unwrap_err().contains("not covered"));
+        assert_eq!(std::fs::read(&lock).unwrap(), b"x");
+        assert!(s.list(haunt.to_str().unwrap()).is_err());
+        assert_eq!(s.list(root.to_str().unwrap()).unwrap(), ["proj"], "the haunt dir is not listed either");
         std::fs::remove_dir_all(root).unwrap();
     }
 }
