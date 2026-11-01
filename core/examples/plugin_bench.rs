@@ -18,6 +18,6 @@ fn main() {
     )
     .unwrap();
     let t = Instant::now();
-    let d = p.on_event(&ev).unwrap();
+    let d = p.on_event(&ev, false).unwrap();
     println!("on_event_us={:.1} decoration={d:?} logs={:?}", t.elapsed().as_secs_f64() * 1e6, p.take_logs());
 }

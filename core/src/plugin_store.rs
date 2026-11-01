@@ -345,6 +345,7 @@ impl Store {
                     caps: e.granted.clone(),
                     kv_path: Some(data.join("kv.json")),
                     settings_json: default_settings(&manifest),
+                    haunt_dir: Some(self.home.clone()),
                 };
                 Ok(host.load_bytes(&wasm, &self.cache_dir(), &spec)?.0)
             });
@@ -401,12 +402,12 @@ impl PluginSet {
         p.on_action(item_id, "")
     }
 
-    /// Delivers `event` to plugins whose `events` grant covers it.
-    pub fn on_event(&mut self, event: &AgentEvent) -> Vec<(String, Decoration)> {
+    /// Delivers `event` to plugins whose `events` grant covers it; `verified` as the core decided it.
+    pub fn on_event(&mut self, event: &AgentEvent, verified: bool) -> Vec<(String, Decoration)> {
         let mut out = Vec::new();
         for (caps, p) in &mut self.plugins {
             if caps.wants_event(&event.kind)
-                && let Ok(Some(d)) = p.on_event(event)
+                && let Ok(Some(d)) = p.on_event(event, verified)
             {
                 out.push((p.id().to_owned(), d));
             }

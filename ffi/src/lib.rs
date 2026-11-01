@@ -139,7 +139,7 @@ impl PluginHandle {
     }
 
     pub fn on_event(&self, event: AgentEvent) -> Result<Option<Decoration>, HostError> {
-        Ok(self.plugin.lock().unwrap().on_event(&event)?)
+        Ok(self.plugin.lock().unwrap().on_event(&event, false)?)
     }
 
     pub fn take_logs(&self) -> Vec<String> {

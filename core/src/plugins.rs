@@ -105,6 +105,8 @@ pub struct LoadSpec {
     pub caps: Capabilities,
     pub kv_path: Option<PathBuf>,
     pub settings_json: String,
+    /// The haunt dir (`~/.haunt`) the plugin's `${cwd}` may never point into.
+    pub haunt_dir: Option<PathBuf>,
 }
 
 struct Kv {
@@ -164,7 +166,7 @@ pub struct HostState {
 }
 
 impl HostState {
-    fn new(id: &str, caps: &Capabilities, kv_path: Option<PathBuf>) -> Self {
+    fn new(id: &str, caps: &Capabilities, kv_path: Option<PathBuf>, haunt_dir: Option<&Path>) -> Self {
         Self {
             id: id.to_owned(),
             logs: Vec::new(),
@@ -174,7 +176,7 @@ impl HostState {
             kv: Kv::open(kv_path),
             palette: Vec::new(),
             outbox: Vec::new(),
-            fs: FsScope::new(&caps.fs_read, &caps.fs_write),
+            fs: FsScope::new(&caps.fs_read, &caps.fs_write, haunt_dir),
             pty_times: VecDeque::new(),
         }
     }
@@ -426,8 +428,10 @@ impl LoadedPlugin {
         self.call(|b, s| b.call_init(s, settings_json))
     }
 
-    pub fn on_event(&mut self, event: &AgentEvent) -> Result<Option<Decoration>, PluginError> {
-        if let Some(cwd) = &event.cwd {
+    /// Only a `verified` event's cwd widens the plugin's `${cwd}` grant; anything in the pty can
+    /// forge the rest.
+    pub fn on_event(&mut self, event: &AgentEvent, verified: bool) -> Result<Option<Decoration>, PluginError> {
+        if verified && let Some(cwd) = &event.cwd {
             self.store.data_mut().fs.add_cwd(cwd);
         }
         let summary = match &event.kind {
@@ -563,7 +567,7 @@ impl PluginHost {
     /// Instantiates a compiled component with `spec`'s grants and runs its `init`.
     pub fn instantiate(&self, component: &Component, spec: &LoadSpec) -> Result<LoadedPlugin, PluginError> {
         let linker = self.linker(&spec.caps)?;
-        let mut store = Store::new(&self.engine, HostState::new(&spec.id, &spec.caps, spec.kv_path.clone()));
+        let mut store = Store::new(&self.engine, HostState::new(&spec.id, &spec.caps, spec.kv_path.clone(), spec.haunt_dir.as_deref()));
         store.limiter(|s| &mut s.limits);
         store.set_epoch_deadline(CALL_TICKS);
         let bindings = Plugin::instantiate(&mut store, component, &linker)?;
@@ -669,7 +673,7 @@ mod tests {
     }
 
     fn raw_store(host: &PluginHost) -> Store<HostState> {
-        let mut store = Store::new(&host.engine, HostState::new("t", &Capabilities::default(), None));
+        let mut store = Store::new(&host.engine, HostState::new("t", &Capabilities::default(), None, None));
         store.limiter(|s| &mut s.limits);
         store
     }
