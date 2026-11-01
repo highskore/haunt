@@ -39,7 +39,7 @@ enum   RowKind { Shell, Claude }
 record Progress { done: u64, total: u64 }
 record Subrow { label: string, meta: string }
 
-record Decision { at_ms: u64, surface_id: string, tool: string, preview: string, cwd: Option<string>, outcome: Outcome }
+record Decision { at_ms: u64, surface_id: string, tool: string, preview: string, command: Option<string>, cwd: Option<string>, outcome: Outcome }
 enum   Outcome { AllowedInHaunt, DeniedInHaunt, AnsweredInTerminal, Superseded }
 record AllowSuggestion { project: string, command: string, rule: string, approvals: u32 }
 ```
@@ -83,7 +83,11 @@ Requests only exist for verified events, so unverified events never add an entry
 
 ## Allowlist suggestions
 
-Nothing is allowed by default; the core only suggests. After 3 verified approvals (`AllowedInHaunt` or `AnsweredInTerminal`) of the same Bash command with the same hook cwd, `allow_suggestions()` lists it with the exact rule `Bash(<command>)`, most recently approved first. Wildcards are never suggested: a command containing `*`, `(` or `)`, anything outside printable ASCII, leading or trailing spaces, or over 1024 bytes gets no suggestion.
+Nothing is allowed by default; the core only suggests. After 3 verified approvals (`AllowedInHaunt` or `AnsweredInTerminal`) of the same Bash command with the same hook cwd, `allow_suggestions()` lists it with the exact rule `Bash(<command>)`, most recently approved first.
+
+- Counting uses `Decision.command`, the command exactly as the hook sent it (`ToolCall.raw_command`), not the cleaned `preview`. An approval counts only if the two are equal, so a command that had invisible characters, tabs or newlines removed never counts, and a rule can't allow a cleaned variant of what was approved. Log lines without `command` (written before it existed) don't count.
+- Wildcards are never suggested: a command containing `*`, `(` or `)`, anything outside printable ASCII, leading or trailing spaces, or over 1024 bytes gets no suggestion.
+- The project (the hook cwd) must be absolute with no `.` or `..` components, equal byte for byte to its canonical path (so no symlink anywhere in it, and no trailing or doubled slash), and a directory owned by the current uid. This is checked when suggesting and again when accepting (`Invalid` or `Insecure` if it fails).
 
 `accept_allow_suggestion(project, command)` only accepts a current suggestion (`Invalid` otherwise) and adds the rule to `<project>/.claude/settings.local.json` under `permissions.allow`, keeping every other key and their order (the file is re-indented). A file that isn't a JSON object, or a non-object `permissions` or non-array `allow`, is an `Invalid` error and is never overwritten. It refuses (`Insecure`) a symlinked `.claude` or settings file and never follows one: the directory is opened with `O_NOFOLLOW`, and the new content goes to a temp file (`O_EXCL | O_NOFOLLOW`) in it that is renamed over the old one. The file keeps its mode, or gets 0600 if new. Accepted and dismissed suggestions are not offered again in this run; that memory isn't persisted yet, so a dismissed one comes back after a restart.
 

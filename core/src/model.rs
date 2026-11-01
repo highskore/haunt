@@ -34,7 +34,7 @@ impl From<AllowError> for CoreError {
     fn from(e: AllowError) -> Self {
         let reason = e.to_string();
         match e {
-            AllowError::Symlink(_) => Self::Insecure { reason },
+            AllowError::Symlink(_) | AllowError::Unsafe(_) => Self::Insecure { reason },
             AllowError::Invalid(_) => Self::Invalid { reason },
             AllowError::Io(_) => Self::Io { reason },
         }
@@ -126,7 +126,8 @@ impl State {
     }
 
     fn suggestions(&self) -> Vec<AllowSuggestion> {
-        allowlist::suggestions(self.decisions.iter(), |p, c| self.allow_done.contains(&(p.to_owned(), c.to_owned())))
+        let done = |p: &str, c: &str| self.allow_done.contains(&(p.to_owned(), c.to_owned()));
+        allowlist::suggestions(self.decisions.iter(), |p| allowlist::check_project(p).is_ok(), done)
     }
 
     pub(crate) fn snapshot(&self, now: Instant) -> SidebarSnapshot {
@@ -468,11 +469,33 @@ mod tests {
         assert_eq!((d.len(), d[0].outcome, d[0].surface_id.as_str()), (1, crate::Outcome::Superseded, env.surface_id.as_str()));
     }
 
+    fn canonical_dir(tag: &str) -> String {
+        let d = format!("/tmp/haunt-{tag}-{}", std::process::id());
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::canonicalize(d).unwrap().to_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn invisible_or_multiline_commands_are_never_suggested() {
+        let project = canonical_dir("allow-raw");
+        for cmd in [r"git\u200b push", r"ls\nrm -rf x", r"ls\t-la"] {
+            let c = core();
+            let env = c.register_surface(&project);
+            let perm = format!(r#""event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"{cmd}"}}"#);
+            for _ in 0..3 {
+                c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &perm), Instant::now()));
+                answer(&c, &env.surface_id, true).expect("verified request");
+            }
+            assert_eq!(c.decisions("", 10).len(), 3);
+            assert!(c.allow_suggestions().is_empty(), "{cmd}");
+        }
+        std::fs::remove_dir_all(&project).unwrap();
+    }
+
     #[test]
     fn three_verified_approvals_suggest_an_exact_rule() {
-        let project = format!("/tmp/haunt-allow-{}", std::process::id());
-        let _ = std::fs::remove_dir_all(&project);
-        std::fs::create_dir_all(&project).unwrap();
+        let project = canonical_dir("allow");
         let c = core();
         let env = c.register_surface(&project);
         let perm = format!(r#""event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"cargo test"}}"#);
