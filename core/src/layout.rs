@@ -46,6 +46,8 @@ pub struct PendingRequest {
     pub key: u64,
     pub tool: String,
     pub preview: String,
+    /// Multi-line or with hidden characters: show it, but offer no Allow/Deny; the terminal answers.
+    pub suspicious: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -151,7 +153,9 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
         progress,
         subagents,
         selected: s.selected,
-        pending: session.live_permission().map(|p| PendingRequest { key: p.key(), tool: p.tool.clone(), preview: p.preview() }),
+        pending: session
+            .live_permission()
+            .map(|p| PendingRequest { key: p.key(), tool: p.tool.clone(), preview: p.preview(), suspicious: p.suspicious() }),
     }
 }
 

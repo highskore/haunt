@@ -34,7 +34,7 @@ record Row {
   needs_you: bool, progress: Option<Progress>, subagents: sequence<Subrow>, selected: bool,
   pending: Option<PendingRequest>
 }
-record PendingRequest { key: u64, tool: string, preview: string }
+record PendingRequest { key: u64, tool: string, preview: string, suspicious: bool }
 enum   RowKind { Shell, Claude }
 record Progress { done: u64, total: u64 }
 record Subrow { label: string, meta: string }
@@ -63,7 +63,7 @@ In Swift, the generated `Progress` struct shadows `Foundation.Progress` inside t
 3. On `PWD` and title changes, and whenever the git branch is known, call `setSurfaceInfo`. On tab selection, call `selectSurface`. When a tab closes, call `unregisterSurface`.
 4. On `GHOSTTY_ACTION_DESKTOP_NOTIFICATION` with title `haunt://cli-agent` or `warp://cli-agent`, call `onOscNotification`. The core ignores other titles, so the UI can pass every notification through and still show the non-agent ones itself.
 5. `changed()` fires on whatever thread made the change. That is often the socket thread. Hop to the main actor, then call `snapshot()`. It is never called while the core holds its lock, so calling back into the core is safe.
-6. Allow/Deny: a row with `pending` has a nonce-verified request. Keep `pending.key` with whatever offers the answer (the button, a notification's `userInfo`) and pass it back: `answerPermission(surfaceId, requestKey, allow)` returns `"\r"` (allow) or `"\u{1b}"` (deny) for `ghostty_surface_text`. It returns them only while that key is still the surface's live request, and consumes the request, so a second call, or a key from a prompt that has since changed, returns `nil`. If it returns `nil`, write nothing.
+6. Allow/Deny: a row with `pending` has a nonce-verified request. If `pending.suspicious` is set, show the preview with a warning and no Allow/Deny: the command is multi-line or has hidden characters, so it is answered only in the terminal, and `answerPermission` returns `nil` for it. Keep `pending.key` with whatever offers the answer (the button, a notification's `userInfo`) and pass it back: `answerPermission(surfaceId, requestKey, allow)` returns `"\r"` (allow) or `"\u{1b}"` (deny) for `ghostty_surface_text`. It returns them only while that key is still the surface's live request, and consumes the request, so a second call, or a key from a prompt that has since changed, returns `nil`. If it returns `nil`, write nothing.
 
 Elapsed times in subrow meta are computed when `snapshot()` runs. A UI that wants them to tick can call `snapshot()` once a second while any row is running.
 
@@ -131,7 +131,9 @@ A surface becomes a Claude row with its first agent event and stays one until it
 
 A request resolves when a verified `tool_ran`, `tool_done` or `tool_failed` matches it. The match is on `tool_use_id` when both sides have one (the id is taken from the matching `tool_start`), otherwise on tool name plus exact command or file path. An event with `truncated: true` never matches. Any change out of `needs you`, or an answer, also clears it.
 
-**Invisible characters**: every decoded string has control characters and Unicode format characters (General_Category Cf: bidi overrides U+202A–202E and U+2066–2069, zero-widths U+200B–200F, U+2060, U+FEFF, soft hyphen, tags and so on) removed. `Permission::preview` cleans again, so an approval preview cannot hide `rm -rf /` behind a right-to-left override.
+**Invisible characters**: the hook sends `tool_input` strings over the socket unmodified (JSON escapes keep them on one line). Every other decoded string has control characters and Unicode format characters (General_Category Cf: bidi overrides U+202A–202E and U+2066–2069, zero-widths U+200B–200F, U+2060, U+FEFF, soft hyphen, tags and so on) removed, and other whitespace turned into a space.
+
+A request keeps its command or file path exactly as sent. Its `preview` hides nothing: a newline shows as `⏎`, a tab as `⇥`, and any other control, Cf or non-space whitespace character as `\u{…}`, so `ls #\nrm -rf ~/x` shows as `ls #⏎rm -rf ~/x` and can't pass for a comment. A request with any such character is `suspicious`: `answer_permission` refuses it (it stays live until the terminal answers) and it is never suggested for the allowlist. Matching a request to its `tool_ran` uses the exact input too.
 
 **OSC 777 fallback**: `haunt://cli-agent` and `warp://cli-agent` bodies go through the same parser, but they count for status only. The haunt hook sends a stripped-down status body there (no nonce, at most 250 bytes).
 
@@ -158,7 +160,7 @@ Each call runs under a 50 ms CPU budget and 64 MB of memory; a trap or timeout d
 
 | request | response |
 |---|---|
-| `{"cmd":"dump"}` | `{"ok":true,"snapshot":<SidebarSnapshot>,"pending":[{"surface_id","key","tool","preview"}]}` |
+| `{"cmd":"dump"}` | `{"ok":true,"snapshot":<SidebarSnapshot>,"pending":[{"surface_id","key","tool","preview","suspicious"}]}` |
 | `{"cmd":"event","line":<hook line, object or string>}` | `{"ok":true,"verified":bool,"changed":bool}`. The line goes through the same nonce check as `sock`: without the surface's nonce it is status-only. |
 | `{"cmd":"decisions","query":"git","limit":50}` | `{"ok":true,"decisions":[<Decision>…]}`; `query` and `limit` (default 50, at most 1000) are optional |
 

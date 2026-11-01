@@ -22,9 +22,10 @@ pub enum Status {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Permission {
     pub tool: String,
+    /// The command or file path exactly as the hook sent it; shown only through `preview`.
     pub input: Option<String>,
     pub tool_use_id: Option<String>,
-    /// The Bash command exactly as sent, for allow rules; `input` is the cleaned one.
+    /// The Bash command exactly as sent, for allow rules.
     pub raw_command: Option<String>,
     /// The hook's cwd, from the same verified event.
     pub cwd: Option<String>,
@@ -47,7 +48,7 @@ pub enum Outcome {
 impl Permission {
     /// None when the input is missing: the user has to answer in the terminal then.
     fn from_call(t: &ToolCall, cwd: Option<String>, generation: u64) -> Option<Self> {
-        let input = t.command.clone().or_else(|| t.file_path.clone())?;
+        let input = raw_input(t)?;
         Some(Self {
             tool: t.tool_name.clone(),
             input: Some(input),
@@ -70,19 +71,30 @@ impl Permission {
         }
         match (&self.tool_use_id, &t.tool_use_id) {
             (Some(a), Some(b)) => a == b,
-            _ => self.input == t.command.clone().or_else(|| t.file_path.clone()),
+            _ => self.input == raw_input(t),
         }
     }
 
-    /// "git push" for Bash, "Edit /w/a.rs" for the rest.
+    /// "git push" for Bash, "Edit /w/a.rs" for the rest, with newlines, tabs and invisible
+    /// characters shown rather than removed (see `event::visible`).
     pub fn preview(&self) -> String {
         let text = match &self.input {
             Some(i) if self.tool == "Bash" => i.clone(),
             Some(i) => format!("{} {i}", self.tool),
             None => self.tool.clone(),
         };
-        crate::event::clean(&text)
+        crate::event::visible(&text)
     }
+
+    /// A multi-line input, or one with control or invisible characters: what runs may not be what
+    /// a one-line preview suggests, so it is answered only in the terminal.
+    pub fn suspicious(&self) -> bool {
+        self.input.as_deref().is_some_and(|i| i.chars().any(crate::event::is_hidden))
+    }
+}
+
+fn raw_input(t: &ToolCall) -> Option<String> {
+    t.raw_command.clone().or_else(|| t.raw_file_path.clone())
 }
 
 #[derive(Debug, Clone)]
@@ -197,9 +209,10 @@ impl Session {
         self.permission.as_ref().filter(|p| self.status == Status::NeedsYou && p.generation == self.generation)
     }
 
-    /// Consumes the live permission if `key` names it; false for a stale or unknown key.
+    /// Consumes the live permission if `key` names it; false for a stale or unknown key, and for a
+    /// suspicious request, which stays live for the terminal to answer.
     pub fn answer(&mut self, key: u64, allow: bool, now: Instant) -> bool {
-        if self.live_permission().is_none_or(|p| p.key() != key) {
+        if self.live_permission().is_none_or(|p| p.key() != key || p.suspicious()) {
             return false;
         }
         self.end_permission(if allow { Outcome::AllowedInHaunt } else { Outcome::DeniedInHaunt });
@@ -393,13 +406,29 @@ mod tests {
     }
 
     #[test]
-    fn preview_strips_invisible_characters() {
+    fn preview_shows_invisible_characters_and_they_block_answers() {
         let (mut s, now) = running();
         let spoof = "{\"event\":\"permission_seen\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hi \\u202e\\u2066/ fr- mr\\u2069\\u200b\\ufeff\"}}";
         s.apply(&ev(spoof), true, now);
-        assert_eq!(s.live_permission().unwrap().preview(), "echo hi / fr- mr");
-        let p = Permission { tool: "Bash".into(), input: Some("a\u{202e}b\u{200d}c".into()), tool_use_id: None, raw_command: None, cwd: None, generation: 0 };
-        assert_eq!(p.preview(), "abc", "preview cleans even input that skipped the parser");
+        let p = s.live_permission().unwrap().clone();
+        assert_eq!(p.preview(), "echo hi \\u{202e}\\u{2066}/ fr- mr\\u{2069}\\u{200b}\\u{feff}");
+        assert!(p.suspicious());
+        assert!(!s.answer(p.key(), true, now), "answered in the terminal only");
+        assert_eq!(s.live_permission(), Some(&p), "a refused answer leaves it live");
+        let p = Permission { tool: "Bash".into(), input: Some("a\u{202e}b".into()), tool_use_id: None, raw_command: None, cwd: None, generation: 0 };
+        assert_eq!(p.preview(), "a\\u{202e}b", "preview shows even input that skipped the parser");
+    }
+
+    #[test]
+    fn a_hidden_newline_is_shown_and_never_answerable() {
+        let (mut s, now) = running();
+        s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"ls #\nrm -rf ~/x"}}"#), true, now);
+        let p = s.live_permission().unwrap().clone();
+        assert_eq!(p.preview(), "ls #⏎rm -rf ~/x");
+        assert!(p.suspicious());
+        assert!(!s.answer(p.key(), true, now) && !s.answer(p.key(), false, now));
+        s.apply(&ev(r#"{"event":"tool_ran","tool_name":"Bash","tool_input":{"command":"ls #\nrm -rf ~/x"}}"#), true, now);
+        assert_eq!(s.take_ended().last().map(|(_, o)| *o), Some(Outcome::AnsweredInTerminal));
     }
 
     #[test]

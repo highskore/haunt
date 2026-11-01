@@ -206,7 +206,9 @@ fn ctl_request(state: &Mutex<State>, line: &str) -> String {
                 .groups
                 .iter()
                 .flat_map(|g| &g.rows)
-                .filter_map(|r| r.pending.as_ref().map(|p| json!({ "surface_id": r.surface_id, "key": p.key, "tool": p.tool, "preview": p.preview })))
+                .filter_map(|r| {
+                    r.pending.as_ref().map(|p| json!({ "surface_id": r.surface_id, "key": p.key, "tool": p.tool, "preview": p.preview, "suspicious": p.suspicious }))
+                })
                 .collect();
             json!({ "ok": true, "snapshot": snapshot, "pending": pending }).to_string()
         }
@@ -483,14 +485,30 @@ mod tests {
             let c = core();
             let env = c.register_surface(&project);
             let perm = format!(r#""event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"{cmd}"}}"#);
+            let ran = format!(r#""event":"tool_ran","tool_name":"Bash","tool_input":{{"command":"{cmd}"}}"#);
             for _ in 0..3 {
                 c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &perm), Instant::now()));
-                answer(&c, &env.surface_id, true).expect("verified request");
+                assert_eq!(answer(&c, &env.surface_id, true), None, "{cmd} is answered in the terminal");
+                c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &ran), Instant::now()));
             }
             assert_eq!(c.decisions("", 10).len(), 3);
             assert!(c.allow_suggestions().is_empty(), "{cmd}");
         }
         std::fs::remove_dir_all(&project).unwrap();
+    }
+
+    #[test]
+    fn a_hidden_newline_is_flagged_and_never_answered_from_haunt() {
+        let c = core();
+        let env = c.register_surface("/w");
+        let perm = r#""event":"permission_seen","tool_name":"Bash","tool_input":{"command":"ls #\nrm -rf ~/x"}"#;
+        c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), perm), Instant::now()));
+        let p = pending(&c).expect("shown");
+        assert_eq!((p.preview.as_str(), p.suspicious), ("ls #⏎rm -rf ~/x", true));
+        assert_eq!(c.snapshot().groups[0].rows[0].meta, "/w · Approve: ls #⏎rm -rf ~/x?");
+        assert_eq!(c.answer_permission(&env.surface_id, p.key, true), None);
+        assert_eq!(c.answer_permission(&env.surface_id, p.key, false), None);
+        assert!(pending(&c).is_some(), "still waiting for the terminal");
     }
 
     #[test]

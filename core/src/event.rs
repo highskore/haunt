@@ -24,10 +24,12 @@ pub struct ToolCall {
     pub tool_name: String,
     pub tool_use_id: Option<String>,
     pub command: Option<String>,
-    /// `command` as sent, before invisible characters were removed; never shown, only compared.
+    /// `command` as sent, before invisible characters were removed; shown only through `visible`.
     pub raw_command: Option<String>,
     pub url: Option<String>,
     pub file_path: Option<String>,
+    /// `file_path` as sent.
+    pub raw_file_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +105,27 @@ pub fn clean(s: &str) -> String {
         .collect()
 }
 
+/// Characters a terminal shows as nothing or as layout: anything but a plain space that is a
+/// control, a format (Cf) character or whitespace.
+pub fn is_hidden(c: char) -> bool {
+    c != ' ' && (c.is_control() || is_format(c) || c.is_whitespace())
+}
+
+/// `s` with nothing hidden: a newline shows as ⏎, a tab as ⇥, and every other hidden character
+/// as `\u{…}`, so `ls #\nrm -rf ~` can't pass for a comment.
+pub fn visible(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\n' => out.push('⏎'),
+            '\t' => out.push('⇥'),
+            c if is_hidden(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Unicode General_Category Cf (Unicode 16).
 pub fn is_format(c: char) -> bool {
     matches!(c as u32,
@@ -125,14 +148,16 @@ fn parse_value(v: &Value) -> Result<AgentEvent, ParseError> {
     let n = |k: &str| v.get(k).and_then(Value::as_u64);
     let req = |k: &str| s(k).ok_or_else(|| missing(k));
     let input = |k: &str| v.get("tool_input").and_then(|i| str_field(i, k));
+    let raw = |k: &str| v.get("tool_input").and_then(|i| i.get(k)).and_then(Value::as_str).map(str::to_owned);
     let tool = || -> Result<ToolCall, ParseError> {
         Ok(ToolCall {
             tool_name: req("tool_name")?,
             tool_use_id: s("tool_use_id"),
             command: input("command"),
-            raw_command: v.get("tool_input").and_then(|i| i.get("command")).and_then(Value::as_str).map(str::to_owned),
+            raw_command: raw("command"),
             url: input("url"),
             file_path: input("file_path"),
+            raw_file_path: raw("file_path"),
         })
     };
 
@@ -255,6 +280,14 @@ mod tests {
     fn escaped_control_chars_are_stripped() {
         let e = parse_body(r#"{"v":1,"event":"prompt_submit","query":"a\u001b[2Jb\u0007c\nd"}"#).unwrap();
         assert_eq!(e.kind, EventKind::PromptSubmit { query: Some("a[2Jbc d".into()) });
+    }
+
+    #[test]
+    fn visible_shows_every_hidden_character() {
+        assert_eq!(visible("ls #\nrm -rf ~/x"), "ls #⏎rm -rf ~/x");
+        assert_eq!(visible("a\tb\r\x1b[2J\u{202e}c\u{200b}\u{a0}d"), "a⇥b\\u{d}\\u{1b}[2J\\u{202e}c\\u{200b}\\u{a0}d");
+        assert_eq!(visible("git push -- 'é 👻'"), "git push -- 'é 👻'");
+        assert!(!"git push".chars().any(is_hidden));
     }
 
     #[test]

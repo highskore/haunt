@@ -61,3 +61,32 @@ fn hook_over_socket_drives_a_verified_permission() {
     drop(core);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn hook_keeps_a_hidden_newline_visible_and_unanswerable() {
+    if Command::new("jq").arg("--version").output().is_err() {
+        eprintln!("skipped: jq not installed");
+        return;
+    }
+    let dir = format!("/tmp/haunt-hook-nl-{}", std::process::id());
+    let _ = std::fs::remove_dir_all(&dir);
+    let core = Core::new(&dir);
+    core.start().unwrap();
+    let env = core.register_surface("/w");
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
+    core.set_listener(Arc::new(move || {
+        let _ = tx.lock().unwrap().send(());
+    }));
+
+    let perm = r#"{"session_id":"s1","cwd":"/w","tool_name":"Bash","tool_input":{"command":"ls #\nrm -rf ~/x"}}"#;
+    hook("permission_request", perm, &env, &env.nonce);
+    rx.recv_timeout(Duration::from_secs(5)).expect("core changed");
+    let row = core.snapshot().groups[0].rows[0].clone();
+    let p = row.pending.expect("verified request");
+    assert_eq!((p.preview.as_str(), p.suspicious), ("ls #⏎rm -rf ~/x", true));
+    assert_eq!(core.answer_permission(&env.surface_id, p.key, true), None);
+
+    drop(core);
+    let _ = std::fs::remove_dir_all(&dir);
+}
