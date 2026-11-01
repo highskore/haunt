@@ -56,7 +56,7 @@ final class MockCore: CoreAPI {
         self.listener = listener
     }
 
-    func answerPermission(surfaceId: String, allow: Bool) -> Data? { nil }
+    func answerPermission(surfaceId: String, requestKey: UInt64, allow: Bool) -> Data? { nil }
 
     func snapshot() -> SidebarSnapshot {
         if let fixture { return fixture.snapshot(surfaceIds: surfaces.map(\.id), selected: selectedId) }
@@ -64,7 +64,7 @@ final class MockCore: CoreAPI {
         let rows = surfaces.map { s in
             Row(surfaceId: s.id, kind: .shell, name: (s.cwd as NSString).lastPathComponent,
                 meta: "\((s.cwd as NSString).abbreviatingWithTildeInPath) · \(shell)",
-                statusText: "", needsYou: false, progress: nil, subagents: [], selected: s.id == selectedId)
+                statusText: "", needsYou: false, progress: nil, subagents: [], selected: s.id == selectedId, pending: nil)
         }
         return SidebarSnapshot(groups: rows.isEmpty ? [] : [SidebarGroup(label: "IDLE", rows: rows)])
     }
