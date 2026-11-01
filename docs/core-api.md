@@ -137,6 +137,21 @@ A request resolves when a verified `tool_ran`, `tool_done` or `tool_failed` matc
 
 The app must not bind `HauntIntake` (the spike's standalone export) at the same time: `HauntCore.start()` owns the socket, and a second bind fails with "in use".
 
+## Plugins (`HauntPlugins`, feature `plugins`)
+
+Installed with `haunt plugin install <path>` (cli/), which shows the capabilities, asks y/N (`--yes` for scripts) and pins sha256 of the wasm and manifest in `~/.haunt/plugins.lock`. A plugin whose files no longer match is not loaded until `haunt plugin approve <id>`.
+
+| call | what |
+|---|---|
+| `HauntPlugins.load(hauntDir:)` | loads every pinned plugin from `<hauntDir>/plugins` with only its granted imports; runs `init` |
+| `loadErrors()` | plugins skipped, with the reason (hash mismatch, link error, trap) |
+| `paletteItems(mode: nil, query:)` | registered commands and modes (`isMode`), title-filtered by `query` |
+| `paletteItems(mode: "word", query:)` | the items that mode's plugin returns for `query` |
+| `invokePaletteItem(pluginId:itemId:)` | calls the plugin's `on-action(itemId, "")` |
+| `takeRequests()` | `HostRequest.notify` / `.ptyAnswer` / `.ptyText` queued by plugins; pty writes go through `ptygate` |
+
+Each call runs under a 50 ms CPU budget and 64 MB of memory; a trap or timeout disables that plugin until the next load.
+
 ## Control socket and CLI
 
 `<config_dir>/ctl` (`core/src/ctl.rs`) is bound by `start` next to `sock`, with the same directory, 0600, stale-socket and peer-uid rules, but separately, so hook floods and rate limits never reach it. At most 8 connections, a 5 s read timeout, lines up to 64 KB. Each request is one JSON line and gets one JSON line back, `{"ok":false,"error":…}` on failure:
