@@ -1,0 +1,1282 @@
+{
+ "_": "Anchor specs per screen. at/from are [x, y] CSS px exprs on the element's rect: left|right|cx|top|bottom|cy[+-n] or n%. $vars are filled per screen.",
+ "groups": {
+  "chrome": {
+   "anchors": [
+    {
+     "name": "titlebar.bg",
+     "sel": ".title",
+     "at": [
+      "40%",
+      "top+6"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "titlebar.hairline",
+     "sel": ".title",
+     "at": [
+      "40%",
+      "bottom-0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "lights.0",
+     "sel": ".lights i",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.lights"
+    },
+    {
+     "name": "lights.2",
+     "sel": ".lights i:nth-child(3)",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.lights"
+    }
+   ],
+   "edges": [
+    {
+     "name": "titlebar.bottom",
+     "sel": ".title",
+     "from": [
+      "40%",
+      "bottom-5"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "lights.left",
+     "sel": ".title",
+     "from": [
+      "left+2",
+      "cy"
+     ],
+     "dir": "right",
+     "expect_sel": ".lights i",
+     "expect": "left"
+    },
+    {
+     "name": "lights.0.right",
+     "sel": ".lights i",
+     "from": [
+      "cx",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "right"
+    },
+    {
+     "name": "lights.2.left",
+     "sel": ".lights i:nth-child(3)",
+     "from": [
+      "left-3",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    }
+   ]
+  },
+  "sidebar": {
+   "anchors": [
+    {
+     "name": "sidebar.bg",
+     "sel": ".side",
+     "at": [
+      "right-20",
+      "bottom-20"
+     ],
+     "token": "color.sidebar.bg"
+    },
+    {
+     "name": "sidebar.hairline",
+     "sel": ".side",
+     "at": [
+      "right-0.5",
+      "bottom-20"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "pane.bg",
+     "sel": ".pane",
+     "at": [
+      "right-20",
+      "bottom-20"
+     ],
+     "token": "color.window.bg"
+    }
+   ],
+   "edges": [
+    {
+     "name": "sidebar.right",
+     "sel": ".side",
+     "from": [
+      "right-20",
+      "bottom-20"
+     ],
+     "dir": "right",
+     "expect": "right-1"
+    }
+   ]
+  },
+  "pane": {
+   "anchors": [
+    {
+     "name": "pane.prompt.text",
+     "sel": ".pane .hi",
+     "text": true,
+     "token": "color.text.hi"
+    },
+    {
+     "name": "pane.ok.text",
+     "sel": ".pane .ok",
+     "text": true,
+     "token": "color.text.ok"
+    },
+    {
+     "name": "pane.dim.text",
+     "sel": ".pane > .dim",
+     "text": true,
+     "token": "color.text.meta"
+    }
+   ]
+  },
+  "row-sel": {
+   "anchors": [
+    {
+     "name": "row.sel.bg",
+     "sel": ".tab.sel",
+     "at": [
+      "left+4",
+      "top+4"
+     ],
+     "token": "color.row.selected"
+    },
+    {
+     "name": "row.sel.name.text",
+     "sel": ".tab.sel .name",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "row.sel.meta.text",
+     "sel": ".tab.sel .meta",
+     "text": true,
+     "token": "color.text.meta"
+    }
+   ],
+   "edges": [
+    {
+     "name": "row.sel.top",
+     "sel": ".tab.sel",
+     "from": [
+      "left+4",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "row.sel.bottom",
+     "sel": ".tab.sel",
+     "from": [
+      "left+4",
+      "bottom-3"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    }
+   ]
+  },
+  "bar": {
+   "anchors": [
+    {
+     "name": "bar.fill",
+     "sel": "$bar b",
+     "at": [
+      "left+2",
+      "cy"
+     ],
+     "token": "color.bar.fill"
+    },
+    {
+     "name": "bar.track",
+     "sel": "$bar",
+     "at": [
+      "right-2",
+      "cy"
+     ],
+     "token": "color.bar.track"
+    }
+   ],
+   "edges": [
+    {
+     "name": "bar.top",
+     "sel": "$bar",
+     "from": [
+      "right-2",
+      "top-2"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "bar.bottom",
+     "sel": "$bar",
+     "from": [
+      "right-2",
+      "cy"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    },
+    {
+     "name": "bar.fill.end",
+     "sel": "$bar b",
+     "from": [
+      "left+2",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "right"
+    }
+   ]
+  },
+  "subs": {
+   "anchors": [
+    {
+     "name": "sub.text",
+     "sel": ".tab.sel .sub span",
+     "text": true,
+     "token": "color.text.sub"
+    }
+   ]
+  },
+  "shell-row": {
+   "anchors": [
+    {
+     "name": "icon.bg",
+     "sel": ".ic:not(.claude)",
+     "at": [
+      "left+3",
+      "top+3"
+     ],
+     "token": "color.icon.bg"
+    },
+    {
+     "name": "icon.glyph",
+     "sel": ".ic:not(.claude)",
+     "text": true,
+     "token": "color.icon.fg"
+    }
+   ],
+   "edges": [
+    {
+     "name": "icon.left",
+     "sel": ".ic:not(.claude)",
+     "from": [
+      "left-6",
+      "top+3"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "icon.right",
+     "sel": ".ic:not(.claude)",
+     "from": [
+      "left+3",
+      "top+3"
+     ],
+     "dir": "right",
+     "expect": "right"
+    },
+    {
+     "name": "icon.top",
+     "sel": ".ic:not(.claude)",
+     "from": [
+      "left+3",
+      "top-4"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "claude": {
+   "anchors": [
+    {
+     "name": "claude.icon",
+     "sel": "path[fill='#D97757']",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.claude"
+    }
+   ]
+  },
+  "label": {
+   "anchors": [
+    {
+     "name": "label.text",
+     "sel": ".label",
+     "text": true,
+     "token": "color.text.label"
+    }
+   ]
+  },
+  "needs": {
+   "anchors": [
+    {
+     "name": "needs.text",
+     "sel": "$needs",
+     "text": true,
+     "token": "color.needs"
+    }
+   ]
+  },
+  "kbd": {
+   "anchors": [
+    {
+     "name": "kbd.border",
+     "sel": ".kbd",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "kbd.text",
+     "sel": ".kbd",
+     "text": true,
+     "token": "color.text.sub"
+    }
+   ],
+   "edges": [
+    {
+     "name": "kbd.top",
+     "sel": ".kbd",
+     "from": [
+      "cx",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "foot": {
+   "anchors": [
+    {
+     "name": "foot.hairline",
+     "sel": ".foot",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "foot.text",
+     "sel": ".foot span",
+     "text": true,
+     "token": "color.text.label"
+    }
+   ],
+   "edges": [
+    {
+     "name": "foot.top",
+     "sel": ".foot",
+     "from": [
+      "40%",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "card": {
+   "anchors": [
+    {
+     "name": "card.bg",
+     "sel": "$card",
+     "at": [
+      "right-4",
+      "bottom-4"
+     ],
+     "token": "color.card.bg"
+    },
+    {
+     "name": "card.border",
+     "sel": "$card",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.card.border"
+    },
+    {
+     "name": "card.name.text",
+     "sel": "$card .name",
+     "text": true,
+     "token": "color.text.primary"
+    }
+   ],
+   "edges": [
+    {
+     "name": "card.left",
+     "sel": "$card",
+     "from": [
+      "left-6",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "card.top",
+     "sel": "$card",
+     "from": [
+      "cx",
+      "top-6"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "card-meta": {
+   "anchors": [
+    {
+     "name": "card.meta.text",
+     "sel": "$card .meta",
+     "text": true,
+     "token": "color.text.meta"
+    }
+   ]
+  }
+ },
+ "screens": {
+  "ui-03-icon-only": {
+   "file": "ui",
+   "index": 3,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "bar": ".tab.sel .bar"
+   },
+   "groups": [
+    "chrome",
+    "sidebar",
+    "pane",
+    "row-sel",
+    "bar",
+    "subs",
+    "shell-row",
+    "claude"
+   ],
+   "anchors": [
+    {
+     "name": "titlebar.icons.text",
+     "sel": ".title .muted",
+     "text": true,
+     "token": "color.text.label"
+    }
+   ]
+  },
+  "ui-06-grouped-flat": {
+   "file": "ui",
+   "index": 6,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "bar": ".tab.sel .bar",
+    "needs": ".tab .right span"
+   },
+   "groups": [
+    "chrome",
+    "sidebar",
+    "pane",
+    "row-sel",
+    "bar",
+    "subs",
+    "shell-row",
+    "claude",
+    "label",
+    "needs",
+    "kbd"
+   ]
+  },
+  "ui-07-rail": {
+   "file": "ui",
+   "index": 7,
+   "crop": ".win",
+   "fill": true,
+   "groups": [
+    "chrome",
+    "sidebar",
+    "pane",
+    "claude",
+    "kbd"
+   ],
+   "anchors": [
+    {
+     "name": "rail.sel.bg",
+     "sel": ".side > div:first-child",
+     "at": [
+      "left+1",
+      "cy"
+     ],
+     "token": "color.row.selected"
+    },
+    {
+     "name": "rail.ring.fill",
+     "sel": ".side > div:first-child",
+     "at": [
+      "cx+15",
+      "cy"
+     ],
+     "token": "color.bar.fill"
+    },
+    {
+     "name": "rail.ring.track",
+     "sel": ".side > div:first-child",
+     "at": [
+      "cx-15",
+      "cy"
+     ],
+     "token": "color.bar.track"
+    },
+    {
+     "name": "rail.needs.dot",
+     "sel": ".side .dot",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.dot"
+    },
+    {
+     "name": "rail.shell.glyph",
+     "sel": ".side span[style*='var(--mono)']",
+     "text": true,
+     "token": "color.text.sub"
+    }
+   ],
+   "edges": [
+    {
+     "name": "rail.cell.top",
+     "sel": ".side > div:first-child",
+     "from": [
+      "cx",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "rail.cell.bottom",
+     "sel": ".side > div:first-child",
+     "from": [
+      "left+9",
+      "bottom-2.5"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    },
+    {
+     "name": "rail.ring.inner",
+     "sel": ".side > div:nth-child(3) svg",
+     "from": [
+      "cx+10",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "cx+14"
+    }
+   ]
+  },
+  "ui-08-breadcrumb": {
+   "file": "ui",
+   "index": 8,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "bar": ".tab.sel .bar"
+   },
+   "groups": [
+    "chrome",
+    "sidebar",
+    "pane",
+    "row-sel",
+    "bar",
+    "subs",
+    "shell-row",
+    "claude"
+   ],
+   "anchors": [
+    {
+     "name": "crumb.current.text",
+     "sel": ".title span[style*='color:#e8e8e8']",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "crumb.sep.text",
+     "sel": ".title .muted",
+     "text": true,
+     "token": "color.text.label"
+    }
+   ]
+  },
+  "ui-10-zen": {
+   "file": "ui",
+   "index": 10,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "bar": ".win > div:first-child"
+   },
+   "groups": [
+    "pane"
+   ],
+   "anchors": [
+    {
+     "name": "zen.fill",
+     "sel": ".win > div:first-child b",
+     "at": [
+      "left+2",
+      "cy"
+     ],
+     "token": "color.bar.fill"
+    },
+    {
+     "name": "zen.track",
+     "sel": ".win > div:first-child",
+     "at": [
+      "right-2",
+      "cy"
+     ],
+     "token": "color.zen.track"
+    },
+    {
+     "name": "titlebar.bg",
+     "sel": ".title",
+     "at": [
+      "40%",
+      "top+6"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "titlebar.no.hairline",
+     "sel": ".title",
+     "at": [
+      "40%",
+      "bottom-0.5"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "lights.0",
+     "sel": ".lights i",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.lights"
+    },
+    {
+     "name": "titlebar.hint.text",
+     "sel": ".title .muted",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "pane.bg",
+     "sel": ".pane",
+     "at": [
+      "right-20",
+      "bottom-20"
+     ],
+     "token": "color.window.bg"
+    }
+   ],
+   "edges": [
+    {
+     "name": "zen.bar.bottom",
+     "sel": ".win > div:first-child",
+     "from": [
+      "right-2",
+      "cy"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    },
+    {
+     "name": "zen.fill.end",
+     "sel": ".win > div:first-child b",
+     "from": [
+      "left+2",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "right"
+    },
+    {
+     "name": "lights.left",
+     "sel": ".title",
+     "from": [
+      "left+2",
+      "cy"
+     ],
+     "dir": "right",
+     "expect_sel": ".lights i",
+     "expect": "left"
+    },
+    {
+     "name": "lights.top",
+     "sel": ".lights i",
+     "from": [
+      "cx",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "av-01-narrow-list": {
+   "file": "av",
+   "index": 1,
+   "crop": ".float",
+   "vars": {
+    "bar": ".tab.sel .bar",
+    "needs": ".needs"
+   },
+   "groups": [
+    "chrome",
+    "label",
+    "row-sel",
+    "bar",
+    "subs",
+    "claude",
+    "needs",
+    "kbd",
+    "foot"
+   ],
+   "anchors": [
+    {
+     "name": "panel.bg",
+     "sel": ".label",
+     "at": [
+      "right-4",
+      "cy"
+     ],
+     "token": "color.window.bg"
+    }
+   ]
+  },
+  "av-02-dashboard": {
+   "file": "av",
+   "index": 2,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "card": ".card:nth-child(2)",
+    "bar": ".card:nth-child(1) .bar",
+    "needs": ".card .needs"
+   },
+   "groups": [
+    "chrome",
+    "kbd",
+    "card",
+    "card-meta",
+    "bar",
+    "claude",
+    "needs"
+   ],
+   "anchors": [
+    {
+     "name": "title.text",
+     "sel": ".title > span[style]",
+     "text": true,
+     "token": "color.text.sub"
+    }
+   ]
+  },
+  "av-03-floating": {
+   "file": "av",
+   "index": 3,
+   "crop": ".float",
+   "vars": {
+    "bar": ".tab .bar",
+    "needs": ".needs"
+   },
+   "groups": [
+    "label",
+    "bar",
+    "claude",
+    "needs",
+    "kbd",
+    "foot"
+   ],
+   "anchors": [
+    {
+     "name": "header.bg",
+     "sel": ".float > div:first-child",
+     "at": [
+      "40%",
+      "top+4"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "header.hairline",
+     "sel": ".float > div:first-child",
+     "at": [
+      "40%",
+      "bottom-0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "row.name.text",
+     "sel": ".tab .name",
+     "text": true,
+     "token": "color.text.primary"
+    }
+   ],
+   "edges": [
+    {
+     "name": "header.bottom",
+     "sel": ".float > div:first-child",
+     "from": [
+      "40%",
+      "bottom-5"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    }
+   ]
+  },
+  "av-04-menubar": {
+   "file": "av",
+   "index": 4,
+   "crop": ".float",
+   "vars": {
+    "bar": ".tab .bar",
+    "needs": ".tab .meta[style]"
+   },
+   "groups": [
+    "label",
+    "bar",
+    "claude",
+    "needs",
+    "kbd"
+   ],
+   "anchors": [
+    {
+     "name": "btn.pri.bg",
+     "sel": ".btn.pri",
+     "at": [
+      "left+3",
+      "cy"
+     ],
+     "token": "color.btn.primary.bg"
+    },
+    {
+     "name": "btn.pri.text",
+     "sel": ".btn.pri",
+     "text": true,
+     "token": "color.btn.primary.fg"
+    },
+    {
+     "name": "btn.border",
+     "sel": ".btn:nth-child(2)",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "btn.text",
+     "sel": ".btn:nth-child(2)",
+     "text": true,
+     "token": "color.btn.fg"
+    },
+    {
+     "name": "divider.hairline",
+     "sel": ".float > div:last-child",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "panel.bg",
+     "sel": ".label",
+     "at": [
+      "right-4",
+      "cy"
+     ],
+     "token": "color.window.bg"
+    }
+   ],
+   "edges": [
+    {
+     "name": "btn.pri.left",
+     "sel": ".btn.pri",
+     "from": [
+      "left-3",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "btn.pri.top",
+     "sel": ".btn.pri",
+     "from": [
+      "left+3",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "btn.pri.bottom",
+     "sel": ".btn.pri",
+     "from": [
+      "left+3",
+      "cy"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    },
+    {
+     "name": "divider.top",
+     "sel": ".float > div:last-child",
+     "from": [
+      "40%",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "av-05-table": {
+   "file": "av",
+   "index": 5,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "bar": ".pbar",
+    "needs": ".needs"
+   },
+   "groups": [
+    "chrome",
+    "kbd",
+    "bar",
+    "claude",
+    "needs",
+    "foot"
+   ],
+   "anchors": [
+    {
+     "name": "th.text",
+     "sel": ".tbl .th",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "rule",
+     "sel": ".tbl > div:nth-child(7)",
+     "at": [
+      "right-4",
+      "bottom-0.5"
+     ],
+     "token": "color.table.rule"
+    },
+    {
+     "name": "mono.text",
+     "sel": ".tbl .mono",
+     "text": true,
+     "token": "color.text.ok"
+    },
+    {
+     "name": "dot",
+     "sel": ".dot:not(.hollow)",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.dot"
+    },
+    {
+     "name": "cell.bg",
+     "sel": ".tbl > div:nth-child(7)",
+     "at": [
+      "right-4",
+      "top+4"
+     ],
+     "token": "color.window.bg"
+    }
+   ],
+   "edges": [
+    {
+     "name": "th.rule",
+     "sel": ".tbl > div:nth-child(1)",
+     "from": [
+      "right-4",
+      "top+4"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "row1.rule",
+     "sel": ".tbl > div:nth-child(7)",
+     "from": [
+      "right-4",
+      "top+4"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "row2.rule",
+     "sel": ".tbl > div:nth-child(13)",
+     "from": [
+      "right-4",
+      "top+4"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    }
+   ]
+  },
+  "av-06-kanban": {
+   "file": "av",
+   "index": 6,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "card": ".card",
+    "bar": ".card .bar",
+    "needs": ".needs"
+   },
+   "groups": [
+    "chrome",
+    "kbd",
+    "card",
+    "card-meta",
+    "bar",
+    "claude",
+    "needs",
+    "foot"
+   ],
+   "anchors": [
+    {
+     "name": "column.label.text",
+     "sel": ".label span",
+     "text": true,
+     "token": "color.text.label"
+    }
+   ]
+  },
+  "av-07-ticker": {
+   "file": "av",
+   "index": 7,
+   "crop": ".desk > div:first-child",
+   "vars": {
+    "bar": ".pbar",
+    "needs": ".needs"
+   },
+   "groups": [
+    "bar",
+    "claude",
+    "needs",
+    "kbd"
+   ],
+   "anchors": [
+    {
+     "name": "strip.bg",
+     "sel": ".grow",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "sep.text",
+     "sel": "span[style='color:#2a2a2a']",
+     "text": true,
+     "token": "color.ticker.sep"
+    },
+    {
+     "name": "name.text",
+     "sel": "span[style='color:#e8e8e8']",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "hidden.text",
+     "sel": ".muted[style]",
+     "text": true,
+     "token": "color.text.label"
+    }
+   ],
+   "width": 1440
+  },
+  "av-08-monitor": {
+   "file": "av",
+   "index": 8,
+   "crop": ".desk",
+   "fill": true,
+   "vars": {
+    "card": ".desk > div:nth-child(2) > .card:nth-child(1)",
+    "bar": ".desk > div:nth-child(2) > .card:nth-child(2) > div:nth-child(2)"
+   },
+   "groups": [
+    "card",
+    "bar",
+    "claude",
+    "label",
+    "kbd"
+   ],
+   "anchors": [
+    {
+     "name": "monitor.bg",
+     "sel": ".desk > div:first-child",
+     "at": [
+      "40%",
+      "cy"
+     ],
+     "token": "color.monitor.bg"
+    },
+    {
+     "name": "tile.task.needs.text",
+     "sel": ".desk > div:nth-child(2) > .card:nth-child(1) > div:nth-child(3)",
+     "text": true,
+     "token": "color.needs"
+    },
+    {
+     "name": "tile.count.text",
+     "sel": ".desk > div:nth-child(2) > .card:nth-child(2) .hd > span:last-child",
+     "text": true,
+     "token": "color.text.ok"
+    }
+   ]
+  },
+  "av-09-focus": {
+   "file": "av",
+   "index": 9,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "bar": ".pbar",
+    "needs": ".needs"
+   },
+   "groups": [
+    "chrome",
+    "kbd",
+    "bar",
+    "claude",
+    "needs",
+    "foot"
+   ],
+   "anchors": [
+    {
+     "name": "line.rule",
+     "sel": ".win > div:nth-child(2) > div:first-child",
+     "at": [
+      "right-4",
+      "bottom-0.5"
+     ],
+     "token": "color.table.rule"
+    },
+    {
+     "name": "expanded.bg",
+     "sel": "div[style*='background:#121212']",
+     "at": [
+      "right-4",
+      "top+4"
+     ],
+     "token": "color.focus.expanded.bg"
+    },
+    {
+     "name": "term.border",
+     "sel": "div[style*='border:1px solid #222']",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.focus.term.border"
+    },
+    {
+     "name": "term.bg",
+     "sel": "div[style*='border:1px solid #222']",
+     "at": [
+      "right-4",
+      "bottom-4"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "term.text",
+     "sel": "div[style*='border:1px solid #222'] .hi",
+     "text": true,
+     "token": "color.text.hi"
+    }
+   ],
+   "edges": [
+    {
+     "name": "expanded.top",
+     "sel": "div[style*='background:#121212']",
+     "from": [
+      "right-4",
+      "top-4"
+     ],
+     "dir": "down",
+     "expect": "top-1"
+    },
+    {
+     "name": "term.left",
+     "sel": "div[style*='border:1px solid #222']",
+     "from": [
+      "left-4",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "term.top",
+     "sel": "div[style*='border:1px solid #222']",
+     "from": [
+      "right-8",
+      "top-4"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  }
+ }
+}

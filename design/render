@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Re-render reference PNGs and manifest from the mockups: render [screen ...]
+set -euo pipefail
+exec uv run --quiet --no-project --with pillow "$(dirname "$0")/tools/render.py" "$@"
