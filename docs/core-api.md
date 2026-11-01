@@ -1,4 +1,4 @@
-# haunt-core API (Phase 1)
+# haunt-core API (Phase 2)
 
 The Swift app talks to the core through one UniFFI object, `HauntCore` (`ffi/src/lib.rs`). The core owns the sidebar view-model: Swift renders `SidebarSnapshot` verbatim and doesn't format text or decide state.
 
@@ -7,7 +7,7 @@ The Swift app talks to the core through one UniFFI object, `HauntCore` (`ffi/src
 ```
 object HauntCore {
   constructor(config_dir: string)                 // normally ~/.haunt
-  fn start() -> Result<(), CoreError>             // binds <config_dir>/sock; a second call is a no-op
+  fn start() -> Result<(), CoreError>             // binds sock and ctl, opens decisions.jsonl; a second call is a no-op
   fn register_surface(cwd: string) -> SurfaceEnv
   fn unregister_surface(surface_id: string)
   fn set_surface_info(surface_id: string, title: string, cwd: string, git_branch: Option<string>)
@@ -15,23 +15,33 @@ object HauntCore {
   fn on_osc_notification(surface_id: string, title: string, body: string)
   fn snapshot() -> SidebarSnapshot
   fn set_listener(listener: CoreListener)
-  fn answer_permission(surface_id: string, allow: bool) -> Option<bytes>
+  fn answer_permission(surface_id: string, request_key: u64, allow: bool) -> Option<bytes>
+  fn decisions(query: string, limit: u32) -> sequence<Decision>     // newest first
+  fn allow_suggestions() -> sequence<AllowSuggestion>
+  fn accept_allow_suggestion(project: string, command: string) -> Result<(), CoreError>
+  fn dismiss_allow_suggestion(project: string, command: string)
 }
 
 callback interface CoreListener { fn changed() }
 
 record SurfaceEnv { surface_id: string, nonce: string, socket_path: string }
-error  CoreError { Insecure { reason }, Io { reason } }
+error  CoreError { Insecure { reason }, Io { reason }, Invalid { reason } }
 
 record SidebarSnapshot { groups: sequence<SidebarGroup> }
 record SidebarGroup { label: string, rows: sequence<Row> }
 record Row {
   surface_id: string, kind: RowKind, name: string, meta: string, status_text: string,
-  needs_you: bool, progress: Option<Progress>, subagents: sequence<Subrow>, selected: bool
+  needs_you: bool, progress: Option<Progress>, subagents: sequence<Subrow>, selected: bool,
+  pending: Option<PendingRequest>
 }
+record PendingRequest { key: u64, tool: string, preview: string }
 enum   RowKind { Shell, Claude }
 record Progress { done: u64, total: u64 }
 record Subrow { label: string, meta: string }
+
+record Decision { at_ms: u64, surface_id: string, tool: string, preview: string, cwd: Option<string>, outcome: Outcome }
+enum   Outcome { AllowedInHaunt, DeniedInHaunt, AnsweredInTerminal, Superseded }
+record AllowSuggestion { project: string, command: string, rule: string, approvals: u32 }
 ```
 
 `select_surface` is an addition to the contract as first agreed, because `Row.selected` needs a source. `SidebarGroup` was renamed from `Group` because a Swift `struct Group` would shadow SwiftUI's `Group`.
@@ -53,9 +63,29 @@ In Swift, the generated `Progress` struct shadows `Foundation.Progress` inside t
 3. On `PWD` and title changes, and whenever the git branch is known, call `setSurfaceInfo`. On tab selection, call `selectSurface`. When a tab closes, call `unregisterSurface`.
 4. On `GHOSTTY_ACTION_DESKTOP_NOTIFICATION` with title `haunt://cli-agent` or `warp://cli-agent`, call `onOscNotification`. The core ignores other titles, so the UI can pass every notification through and still show the non-agent ones itself.
 5. `changed()` fires on whatever thread made the change. That is often the socket thread. Hop to the main actor, then call `snapshot()`. It is never called while the core holds its lock, so calling back into the core is safe.
-6. Allow/Deny: `answerPermission(surfaceId, allow)` returns `"\r"` (allow) or `"\u{1b}"` (deny) for `ghostty_surface_text`. It returns them only while that surface is blocked on a nonce-verified permission request, and consumes the request, so a second call returns `nil`. If it returns `nil`, write nothing.
+6. Allow/Deny: a row with `pending` has a nonce-verified request. Keep `pending.key` with whatever offers the answer (the button, a notification's `userInfo`) and pass it back: `answerPermission(surfaceId, requestKey, allow)` returns `"\r"` (allow) or `"\u{1b}"` (deny) for `ghostty_surface_text`. It returns them only while that key is still the surface's live request, and consumes the request, so a second call, or a key from a prompt that has since changed, returns `nil`. If it returns `nil`, write nothing.
 
 Elapsed times in subrow meta are computed when `snapshot()` runs. A UI that wants them to tick can call `snapshot()` once a second while any row is running.
+
+## Decision log
+
+Every verified permission request is recorded once, when it ends, with its outcome:
+
+| outcome | when |
+|---|---|
+| `AllowedInHaunt` / `DeniedInHaunt` | `answer_permission` with the live key |
+| `AnsweredInTerminal` | a verified `tool_ran`/`tool_done`/`tool_failed` matched it, so it was allowed at the terminal prompt |
+| `Superseded` | anything else ended it: a newer prompt, leaving `needs you` (including a denial typed in the terminal, which then shows up as the next prompt or stop), or the surface closing |
+
+Requests only exist for verified events, so unverified events never add an entry; they can only end a verified request, which is then logged as `Superseded`. Entries live in memory (the last 10,000) and in `<config_dir>/decisions.jsonl`, one JSON object per line, appended. `start` opens it with `O_NOFOLLOW`, refuses a symlink or a file of another uid, keeps it 0600, and loads the existing lines. Before `start` the log is memory-only.
+
+`decisions(query, limit)` is for the ⌘K `log` mode: newest first, `query` is a case-insensitive substring of tool, preview, cwd, outcome (`allowed_in_haunt`, …) or surface id; empty matches all.
+
+## Allowlist suggestions
+
+Nothing is allowed by default; the core only suggests. After 3 verified approvals (`AllowedInHaunt` or `AnsweredInTerminal`) of the same Bash command with the same hook cwd, `allow_suggestions()` lists it with the exact rule `Bash(<command>)`, most recently approved first. Wildcards are never suggested: a command containing `*`, `(` or `)`, anything outside printable ASCII, leading or trailing spaces, or over 1024 bytes gets no suggestion.
+
+`accept_allow_suggestion(project, command)` only accepts a current suggestion (`Invalid` otherwise) and adds the rule to `<project>/.claude/settings.local.json` under `permissions.allow`, keeping every other key and their order (the file is re-indented). A file that isn't a JSON object, or a non-object `permissions` or non-array `allow`, is an `Invalid` error and is never overwritten. It refuses (`Insecure`) a symlinked `.claude` or settings file and never follows one: the directory is opened with `O_NOFOLLOW`, and the new content goes to a temp file (`O_EXCL | O_NOFOLLOW`) in it that is renamed over the old one. The file keeps its mode, or gets 0600 if new. Accepted and dismissed suggestions are not offered again in this run; that memory isn't persisted yet, so a dismissed one comes back after a restart.
 
 ## Snapshot format (mockup layout 06, grouped flat)
 
@@ -80,7 +110,7 @@ A surface becomes a Claude row with its first agent event and stays one until it
 
 ## Transport and security
 
-**Socket** (`core/src/intake.rs`, owned by `HauntCore`): `<config_dir>/sock`. The debug/CLI socket is `<config_dir>/ctl`.
+**Socket** (`core/src/intake.rs`, owned by `HauntCore`): `<config_dir>/sock`. The debug/CLI socket `<config_dir>/ctl` follows the same directory, socket and peer-uid rules (below).
 
 - The directory is created with mode 0700. `start` refuses (`CoreError::Insecure`) a directory that is a symlink or is owned by another uid. If it has group or other bits, it is ours, so they are removed. The socket is chmod 0600, and its owner and mode are checked after `bind`.
 - A leftover socket of ours is replaced. `start` refuses anything else at that path, a socket owned by another uid, and a socket that still accepts connections (`CoreError::Io`: another haunt is running). It also refuses a path longer than `sun_path` allows.
@@ -93,7 +123,7 @@ A surface becomes a Claude row with its first agent event and stays one until it
 - Only a verified `permission_seen` creates a request, and only if it isn't `truncated` and carries a command or file path. Otherwise the row shows "Waiting for you" and the user answers in the terminal.
 - Leaving `needs you` for any reason, verified or not, drops the request.
 - Each entry into `needs you`, and each `permission_seen`, starts a new generation. A request can be answered only in the generation that created it. So an unverified event that puts the row back into `needs you` (a forged stop and then a forged `permission_prompt`, say) can never revive an old request. A forged `permission_seen` retires the real one, which costs the user the button but never sends an answer to the wrong prompt.
-- `answer_permission` needs the surface to be in `needs you` with a live request at that moment, and consumes it.
+- `answer_permission` needs the surface to be in `needs you` with a live request at that moment whose key is the one passed in, and consumes it.
 
 A request resolves when a verified `tool_ran`, `tool_done` or `tool_failed` matches it. The match is on `tool_use_id` when both sides have one (the id is taken from the matching `tool_start`), otherwise on tool name plus exact command or file path. An event with `truncated: true` never matches. Any change out of `needs you`, or an answer, also clears it.
 
@@ -102,3 +132,17 @@ A request resolves when a verified `tool_ran`, `tool_done` or `tool_failed` matc
 **OSC 777 fallback**: `haunt://cli-agent` and `warp://cli-agent` bodies go through the same parser, but they count for status only. The haunt hook sends a stripped-down status body there (no nonce, at most 250 bytes).
 
 The app must not bind `HauntIntake` (the spike's standalone export) at the same time: `HauntCore.start()` owns the socket, and a second bind fails with "in use".
+
+## Control socket and CLI
+
+`<config_dir>/ctl` (`core/src/ctl.rs`) is bound by `start` next to `sock`, with the same directory, 0600, stale-socket and peer-uid rules, but separately, so hook floods and rate limits never reach it. At most 8 connections, a 5 s read timeout, lines up to 64 KB. Each request is one JSON line and gets one JSON line back, `{"ok":false,"error":…}` on failure:
+
+| request | response |
+|---|---|
+| `{"cmd":"dump"}` | `{"ok":true,"snapshot":<SidebarSnapshot>,"pending":[{"surface_id","key","tool","preview"}]}` |
+| `{"cmd":"event","line":<hook line, object or string>}` | `{"ok":true,"verified":bool,"changed":bool}`. The line goes through the same nonce check as `sock`: without the surface's nonce it is status-only. |
+| `{"cmd":"decisions","query":"git","limit":50}` | `{"ok":true,"decisions":[<Decision>…]}`; `query` and `limit` (default 50, at most 1000) are optional |
+
+Nonces never appear in any response.
+
+The `haunt` binary (`cli/`) talks to it: `haunt dump` prints the dump as pretty JSON, and `haunt decisions [query]` prints one decision per line as JSON, newest first. It uses `$HAUNT_CTL` if set, else `~/.haunt/ctl`.

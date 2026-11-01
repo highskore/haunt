@@ -24,15 +24,34 @@ pub struct Permission {
     pub tool: String,
     pub input: Option<String>,
     pub tool_use_id: Option<String>,
+    /// The hook's cwd, from the same verified event.
+    pub cwd: Option<String>,
     /// The `Session::generation` of the NeedsYou episode that created it.
     generation: u64,
 }
 
+/// How a verified permission request ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
+pub enum Outcome {
+    AllowedInHaunt,
+    DeniedInHaunt,
+    /// The matching call ran, so it was allowed at the terminal prompt.
+    AnsweredInTerminal,
+    Superseded,
+}
+
 impl Permission {
     /// None when the input is missing: the user has to answer in the terminal then.
-    fn from_call(t: &ToolCall, generation: u64) -> Option<Self> {
+    fn from_call(t: &ToolCall, cwd: Option<String>, generation: u64) -> Option<Self> {
         let input = t.command.clone().or_else(|| t.file_path.clone())?;
-        Some(Self { tool: t.tool_name.clone(), input: Some(input), tool_use_id: t.tool_use_id.clone(), generation })
+        Some(Self { tool: t.tool_name.clone(), input: Some(input), tool_use_id: t.tool_use_id.clone(), cwd, generation })
+    }
+
+    /// The request key: an answer must name it, so it can only reach the prompt it was shown for.
+    pub fn key(&self) -> u64 {
+        self.generation
     }
 
     /// A truncated preview may differ from what was asked, so it never matches.
@@ -72,6 +91,8 @@ pub struct Session {
     pub status_changed: Instant,
     /// Verified `tool_start`s, to find the `tool_use_id` a `permission_seen` lacks.
     recent_starts: VecDeque<ToolCall>,
+    /// Requests that ended since the last `take_ended`, for the decision log.
+    ended: Vec<(Permission, Outcome)>,
 }
 
 impl Session {
@@ -87,6 +108,7 @@ impl Session {
             turn_finished: None,
             status_changed: now,
             recent_starts: VecDeque::new(),
+            ended: Vec::new(),
         }
     }
 
@@ -125,6 +147,7 @@ impl Session {
                         None => main,
                     };
                     if resolved {
+                        self.end_permission(Outcome::AnsweredInTerminal);
                         self.set(Status::Running, now);
                     }
                 }
@@ -133,9 +156,9 @@ impl Session {
                 self.set(Status::NeedsYou, now);
                 // Every prompt, forged or not, retires the one before it.
                 self.generation += 1;
-                self.permission = None;
+                self.end_permission(Outcome::Superseded);
                 if verified && !e.truncated
-                    && let Some(mut p) = Permission::from_call(tool, self.generation)
+                    && let Some(mut p) = Permission::from_call(tool, e.cwd.clone(), self.generation)
                 {
                     let start = self.recent_starts.iter().rev().find(|s| p.tool_use_id.is_none() && p.matches(s, false));
                     p.tool_use_id = start.and_then(|s| s.tool_use_id.clone());
@@ -165,14 +188,34 @@ impl Session {
         self.permission.as_ref().filter(|p| self.status == Status::NeedsYou && p.generation == self.generation)
     }
 
-    /// Consumes the live permission after the UI answered it.
-    pub fn answered(&mut self, now: Instant) -> bool {
-        if self.live_permission().is_none() {
+    /// Consumes the live permission if `key` names it; false for a stale or unknown key.
+    pub fn answer(&mut self, key: u64, allow: bool, now: Instant) -> bool {
+        if self.live_permission().is_none_or(|p| p.key() != key) {
             return false;
         }
-        self.permission = None;
+        self.end_permission(if allow { Outcome::AllowedInHaunt } else { Outcome::DeniedInHaunt });
         self.set(Status::Running, now);
         true
+    }
+
+    /// Ends the request, if any, as superseded: the surface is going away.
+    pub fn close(&mut self) {
+        self.end_permission(Outcome::Superseded);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn current_key(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn take_ended(&mut self) -> Vec<(Permission, Outcome)> {
+        std::mem::take(&mut self.ended)
+    }
+
+    fn end_permission(&mut self, outcome: Outcome) {
+        if let Some(p) = self.permission.take() {
+            self.ended.push((p, outcome));
+        }
     }
 
     fn finish(&mut self, status: Status, now: Instant) {
@@ -186,7 +229,7 @@ impl Session {
             return;
         }
         if self.status == Status::NeedsYou {
-            self.permission = None;
+            self.end_permission(Outcome::Superseded);
         }
         if status == Status::NeedsYou {
             self.generation += 1;
@@ -309,7 +352,7 @@ mod tests {
                 s.apply(&ev(revive), false, now);
                 assert_eq!(s.status, Status::NeedsYou);
                 assert_eq!(s.live_permission(), None, "{middle:?} {revive}");
-                assert!(!s.answered(now));
+                assert!(!s.answer(s.generation, true, now));
             }
         }
     }
@@ -346,7 +389,7 @@ mod tests {
         let spoof = "{\"event\":\"permission_seen\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hi \\u202e\\u2066/ fr- mr\\u2069\\u200b\\ufeff\"}}";
         s.apply(&ev(spoof), true, now);
         assert_eq!(s.live_permission().unwrap().preview(), "echo hi / fr- mr");
-        let p = Permission { tool: "Bash".into(), input: Some("a\u{202e}b\u{200d}c".into()), tool_use_id: None, generation: 0 };
+        let p = Permission { tool: "Bash".into(), input: Some("a\u{202e}b\u{200d}c".into()), tool_use_id: None, cwd: None, generation: 0 };
         assert_eq!(p.preview(), "abc", "preview cleans even input that skipped the parser");
     }
 
@@ -372,11 +415,50 @@ mod tests {
     #[test]
     fn answering_consumes_the_request_once() {
         let (mut s, now) = running();
-        assert!(!s.answered(now));
+        assert!(!s.answer(0, true, now));
         s.apply(&ev(PERM), true, now);
-        assert!(s.answered(now));
+        let key = s.live_permission().unwrap().key();
+        assert!(s.answer(key, true, now));
         assert_eq!(s.status, Status::Running);
-        assert!(!s.answered(now));
+        assert!(!s.answer(key, true, now));
+    }
+
+    #[test]
+    fn a_stale_key_is_refused_after_the_prompt_changed() {
+        let (mut s, now) = running();
+        s.apply(&ev(PERM), true, now);
+        let old = s.live_permission().unwrap().key();
+        s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}"#), true, now);
+        assert!(!s.answer(old, true, now));
+        assert_eq!(s.status, Status::NeedsYou, "the refused answer changed nothing");
+        let new = s.live_permission().unwrap().key();
+        assert_ne!(old, new);
+        assert!(s.answer(new, false, now));
+    }
+
+    #[test]
+    fn every_verified_request_ends_with_one_outcome() {
+        use Outcome::*;
+        let (mut s, now) = running();
+        let answer = |s: &mut Session, allow: bool| {
+            s.apply(&ev(PERM), true, now);
+            let key = s.live_permission().unwrap().key();
+            s.answer(key, allow, now);
+        };
+        s.apply(&ev(r#"{"event":"permission_seen","cwd":"/p","tool_name":"Bash","tool_input":{"command":"git push"}}"#), true, now);
+        s.apply(&ev(PERM), true, now);
+        s.apply(&ev(RAN), true, now);
+        answer(&mut s, true);
+        answer(&mut s, false);
+        s.apply(&ev(PERM), true, now);
+        s.apply(&ev(r#"{"event":"stop"}"#), false, now);
+        s.apply(&ev(PERM), false, now);
+        s.close();
+        let ended = s.take_ended();
+        let outcomes: Vec<_> = ended.iter().map(|(_, o)| *o).collect();
+        assert_eq!(outcomes, [Superseded, AnsweredInTerminal, AllowedInHaunt, DeniedInHaunt, Superseded], "an unverified prompt is no request");
+        assert_eq!(ended[0].0.cwd.as_deref(), Some("/p"));
+        assert!(s.take_ended().is_empty());
     }
 
     #[test]

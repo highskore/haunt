@@ -11,7 +11,7 @@ plugins = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:sha2", "dep:hmac", "dep:get
 
 [dependencies]
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
 libc = "0.2"
 thiserror.workspace = true
 uniffi = { workspace = true, optional = true }
