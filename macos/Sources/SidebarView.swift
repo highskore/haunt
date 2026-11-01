@@ -84,7 +84,7 @@ final class SidebarView: NSView {
         let icon = NSRect(x: left, y: y + (rowLine1 - Tok.Size.iconSize) / 2, width: Tok.Size.iconSize, height: Tok.Size.iconSize)
         drawIcon(row.kind, in: icon, ctx: ctx)
 
-        let statusFont = row.needsYou ? Draw.uiTabular(Tok.Size.rowRight, .bold) : Draw.uiTabular(Tok.Size.rowRight)
+        let statusFont = Draw.uiTabular(Tok.Size.rowRight)
         let statusColor = row.needsYou ? Tok.Color.needs : Tok.Color.textMeta
         let status = Draw.line(row.statusText, statusFont, statusColor)
         let statusW = Draw.width(status)
