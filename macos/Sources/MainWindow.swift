@@ -9,6 +9,8 @@ final class Tab {
     /// Ghostty's scroll wrapper; it is what tells the surface its size.
     let host: SurfaceScrollView
     var subscriptions: [AnyCancellable] = []
+    /// Bumped per info report, so a slow branch lookup never overwrites a newer one.
+    var infoGeneration = 0
 
     init(env: SurfaceEnv, view: Ghostty.SurfaceView, size: CGSize) {
         self.env = env
@@ -138,8 +140,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         return "/bin/sh '\(script.path)'"
     }
 
+    private static let gitQueue = DispatchQueue(label: "dev.haunt.git", qos: .utility)
+
+    /// The branch lookup reads files a pty-chosen pwd points at, so it stays off the main thread.
     private func reportInfo(_ tab: Tab, title: String, pwd: String) {
-        core.setSurfaceInfo(surfaceId: tab.env.surfaceId, title: title, cwd: pwd, gitBranch: Git.branch(at: pwd))
+        tab.infoGeneration += 1
+        let gen = tab.infoGeneration
+        Self.gitQueue.async { [weak self, weak tab] in
+            let branch = Git.branch(at: pwd)
+            DispatchQueue.main.async {
+                guard let self, let tab, tab.infoGeneration == gen else { return }
+                self.core.setSurfaceInfo(surfaceId: tab.env.surfaceId, title: title, cwd: pwd, gitBranch: branch)
+            }
+        }
     }
 
     func select(_ id: String) {
