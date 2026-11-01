@@ -39,7 +39,7 @@ enum Fixture: String {
     func snapshot(surfaceIds ids: [String], selected: String?) -> SidebarSnapshot {
         let rows = zip(Self.tabs, ids).map { t, id in
             return Row(surfaceId: id, kind: t.kind, name: t.name, meta: t.meta, statusText: t.status,
-                       needsYou: t.needs, progress: t.progress, subagents: t.subs, selected: id == selected)
+                       needsYou: t.needs, progress: t.progress, subagents: t.subs, selected: id == selected, pending: nil)
         }
         guard rows.count == Self.tabs.count else { return SidebarSnapshot(groups: []) }
         switch self {

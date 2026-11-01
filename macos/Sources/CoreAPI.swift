@@ -10,7 +10,7 @@ protocol CoreAPI: AnyObject {
     func onOscNotification(surfaceId: String, title: String, body: String)
     func snapshot() -> SidebarSnapshot
     func setListener(listener: CoreListener)
-    func answerPermission(surfaceId: String, allow: Bool) -> Data?
+    func answerPermission(surfaceId: String, requestKey: UInt64, allow: Bool) -> Data?
 }
 
 #if HAUNT_REAL_CORE
@@ -27,6 +27,7 @@ struct SurfaceEnv: Equatable, Hashable {
 enum CoreError: Error {
     case Insecure(reason: String)
     case Io(reason: String)
+    case Invalid(reason: String)
 }
 
 struct SidebarSnapshot: Equatable, Hashable {
@@ -63,6 +64,13 @@ struct Row: Equatable, Hashable {
     var progress: Progress?
     var subagents: [Subrow]
     var selected: Bool
+    var pending: PendingRequest?
+}
+
+struct PendingRequest: Equatable, Hashable {
+    var key: UInt64
+    var tool: String
+    var preview: String
 }
 
 protocol CoreListener: AnyObject, Sendable {
