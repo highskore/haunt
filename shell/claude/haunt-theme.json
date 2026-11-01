@@ -1,0 +1,20 @@
+{
+  "name": "haunt",
+  "base": "dark",
+  "overrides": {
+    "claude": "#D97757",
+    "userMessageBackground": "#1a1a1a",
+    "userMessageBackgroundHover": "#1f1f1f",
+    "promptBorder": "#2a2a2a",
+    "text": "#e8e8e8",
+    "inactive": "#6f6f6f",
+    "subtle": "#2a2a2a",
+    "secondaryText": "#8a8a8a",
+    "suggestion": "#cfcfcf",
+    "permission": "#e8e8e8",
+    "planMode": "#9a9a9a",
+    "success": "#9a9a9a",
+    "warning": "#cfcfcf",
+    "error": "#e8e8e8"
+  }
+}

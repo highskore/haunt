@@ -1,0 +1,22 @@
+<svg viewBox="0 0 1024 1024" width="1024" height="1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="hbg" cx=".5" cy=".38" r=".8"><stop offset="0" stop-color="#2e2e2e"/><stop offset="1" stop-color="#0d0d0d"/></radialGradient>
+    <linearGradient id="hink" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f0f0f0"/><stop offset="1" stop-color="#bdbdbd"/></linearGradient>
+    <filter id="hblur"><feGaussianBlur stdDeviation="46"/></filter>
+    <clipPath id="hclip"><rect width="1024" height="1024" rx="230"/></clipPath>
+    <mask id="hm"><rect width="1024" height="1024" fill="#fff"/><path d="M580 640 A40 30 0 0 0 660 640 Z" fill="#000"/><path d="M668 640 A40 30 0 0 0 748 640 Z" fill="#000"/></mask>
+  </defs>
+  <!-- 824px body centred on the 1024 canvas, per Apple's macOS icon grid -->
+  <g transform="translate(100 100) scale(.8047)">
+    <g clip-path="url(#hclip)">
+      <rect width="1024" height="1024" fill="url(#hbg)"/>
+      <circle cx="512" cy="400" r="380" fill="#5a5a5a" opacity=".22" filter="url(#hblur)"/>
+      <g fill="url(#hink)" opacity=".55">
+        <rect x="220" y="220" width="280" height="280" rx="40"/><rect x="524" y="220" width="280" height="280" rx="40"/>
+        <rect x="220" y="524" width="280" height="280" rx="40"/>
+      </g>
+      <path d="M524 820 V564 Q524 524 564 524 H764 Q804 524 804 564 V820 Q757.333 776 710.667 820 Q664 776 617.333 820 Q570.667 776 524 820 Z" fill="#e8e8e8" mask="url(#hm)"/>
+    </g>
+    <rect width="1024" height="1024" rx="230" fill="none" stroke="#fff" stroke-opacity=".14" stroke-width="4"/>
+  </g>
+</svg>
