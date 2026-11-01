@@ -13,6 +13,7 @@ pub const FILE_NAME: &str = "decisions.jsonl";
 const MAX_IN_MEMORY: usize = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct Decision {
     /// Unix time in milliseconds.
@@ -39,6 +40,14 @@ impl Decision {
             cwd: p.cwd.clone(),
             outcome,
         }
+    }
+
+    /// A loaded line is kept only if it could have been written by `new`: a Bash command whose
+    /// preview is exactly how `new` shows it, and no command on other tools.
+    fn well_formed(&self) -> bool {
+        !self.surface_id.is_empty()
+            && !self.tool.is_empty()
+            && self.command.as_deref().is_none_or(|c| self.tool == "Bash" && crate::event::visible(c) == self.preview)
     }
 
     fn matches(&self, needle: &str) -> bool {
@@ -81,6 +90,9 @@ impl DecisionLog {
         let mut loaded: VecDeque<Decision> = VecDeque::new();
         for line in BufReader::new(&file).lines() {
             let Ok(d) = serde_json::from_str::<Decision>(&line?) else { continue };
+            if !d.well_formed() {
+                continue;
+            }
             if loaded.len() == MAX_IN_MEMORY {
                 loaded.pop_front();
             }
@@ -162,6 +174,28 @@ mod tests {
         again.open(&d).unwrap();
         let got: Vec<_> = again.query("", 10).into_iter().map(|x| x.preview).collect();
         assert_eq!(got, ["git push", "before open"], "newest first, bad lines skipped");
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn loads_only_strictly_well_formed_lines() {
+        let d = dir("strict");
+        let ok = r#"{"at_ms":1,"surface_id":"s","tool":"Bash","preview":"ls","command":"ls","cwd":"/p","outcome":"allowed_in_haunt"}"#;
+        let bad = [
+            r#"{"at_ms":1,"surface_id":"s","tool":"Bash","preview":"ls","command":"ls","cwd":"/p","outcome":"allowed_in_haunt","extra":1}"#,
+            r#"{"at_ms":1,"surface_id":"s","tool":"Bash","preview":"ls","command":"ls","cwd":"/p","outcome":"allowed"}"#,
+            r#"{"at_ms":1,"surface_id":"s","tool":"Bash","preview":"ls","command":"rm -rf ~","cwd":"/p","outcome":"allowed_in_haunt"}"#,
+            r#"{"at_ms":1,"surface_id":"s","tool":"Edit","preview":"Edit /a","command":"ls","cwd":"/p","outcome":"allowed_in_haunt"}"#,
+            r#"{"at_ms":1,"surface_id":"","tool":"Bash","preview":"ls","command":"ls","cwd":"/p","outcome":"allowed_in_haunt"}"#,
+            r#"{"at_ms":1,"surface_id":"s","tool":"Bash","preview":"ls","cwd":"/p"}"#,
+        ];
+        fs::write(d.join(FILE_NAME), format!("{ok}
+{}
+", bad.join("
+"))).unwrap();
+        let mut log = DecisionLog::default();
+        log.open(&d).unwrap();
+        assert_eq!(log.iter().count(), 1);
         fs::remove_dir_all(d).unwrap();
     }
 

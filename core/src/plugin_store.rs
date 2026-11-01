@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::event::AgentEvent;
 use crate::plugin_cache::{CwasmCache, check_dir, hex, write_atomic};
-use crate::plugin_manifest::{ALWAYS, Capabilities, MANIFEST, Manifest};
+use crate::plugin_manifest::{ALWAYS, Capabilities, MANIFEST, Manifest, valid_id};
 use crate::plugins::{Decoration, HostRequest, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost};
 
 pub const LOCKFILE: &str = "plugins.lock";
@@ -143,6 +143,23 @@ impl Store {
         self.home.join("cache")
     }
 
+    /// `plugins/<id>` for a valid id: a direct child of `plugins/` that is not a symlink, if it exists.
+    fn plugin_dir(&self, id: &str) -> Result<PathBuf, StoreError> {
+        if !valid_id(id) {
+            return Err(StoreError::Invalid(format!("{id:?} is not a plugin id")));
+        }
+        let plugins = self.plugins_dir();
+        let dir = plugins.join(id);
+        if dir.parent() != Some(plugins.as_path()) {
+            return Err(StoreError::Invalid(format!("{id:?} is not a plugin id")));
+        }
+        match fs::symlink_metadata(&dir) {
+            Ok(m) if m.file_type().is_symlink() => Err(StoreError::Invalid(format!("{} is a symlink", dir.display()))),
+            Ok(m) if !m.is_dir() => Err(StoreError::Invalid(format!("{} is not a directory", dir.display()))),
+            _ => Ok(dir),
+        }
+    }
+
     fn data_dir(&self, id: &str) -> PathBuf {
         self.home.join("plugin-data").join(id)
     }
@@ -247,10 +264,10 @@ impl Store {
     /// Re-approves an installed plugin whose files changed on disk, pinning the new hashes.
     pub fn approve(&self, id: &str, host: &PluginHost, approve: &mut dyn FnMut(&Prompt) -> bool) -> Result<(), StoreError> {
         let mut lock = self.read_lock()?;
+        let dir = self.plugin_dir(id)?;
         let Some(pos) = lock.plugins.iter().position(|p| p.id == id) else {
             return Err(StoreError::NotInstalled(id.to_owned()));
         };
-        let dir = self.plugins_dir().join(id);
         let manifest_bytes = read_capped(&dir.join(MANIFEST))?;
         let wasm = read_capped(&dir.join(WASM))?;
         let manifest = Manifest::parse(&String::from_utf8_lossy(&manifest_bytes))?;
@@ -281,13 +298,14 @@ impl Store {
         self.write_lock(&lock)
     }
 
-    /// Removes the code and the lock entry; `plugin-data/<id>` is kept so a reinstall keeps its state.
+    /// Removes the code and the lock entry of a plugin in the lockfile; `plugin-data/<id>` is kept
+    /// so a reinstall keeps its state.
     pub fn remove(&self, id: &str) -> Result<(), StoreError> {
+        let dir = self.plugin_dir(id)?;
         let mut lock = self.read_lock()?;
         let before = lock.plugins.len();
         lock.plugins.retain(|p| p.id != id);
-        let dir = self.plugins_dir().join(id);
-        if before == lock.plugins.len() && !dir.exists() {
+        if before == lock.plugins.len() {
             return Err(StoreError::NotInstalled(id.to_owned()));
         }
         if dir.exists() {
@@ -302,7 +320,7 @@ impl Store {
 
     /// The installed manifest and wasm, only if both still hash to what was approved.
     fn verify(&self, e: &LockEntry) -> Result<(Manifest, Vec<u8>), StoreError> {
-        let dir = self.plugins_dir().join(&e.id);
+        let dir = self.plugin_dir(&e.id)?;
         let manifest_bytes = read_capped(&dir.join(MANIFEST))?;
         let wasm = read_capped(&dir.join(WASM))?;
         if sha(&wasm) != e.sha256_wasm {
@@ -327,6 +345,7 @@ impl Store {
                     caps: e.granted.clone(),
                     kv_path: Some(data.join("kv.json")),
                     settings_json: default_settings(&manifest),
+                    haunt_dir: Some(self.home.clone()),
                 };
                 Ok(host.load_bytes(&wasm, &self.cache_dir(), &spec)?.0)
             });
@@ -383,12 +402,12 @@ impl PluginSet {
         p.on_action(item_id, "")
     }
 
-    /// Delivers `event` to plugins whose `events` grant covers it.
-    pub fn on_event(&mut self, event: &AgentEvent) -> Vec<(String, Decoration)> {
+    /// Delivers `event` to plugins whose `events` grant covers it; `verified` as the core decided it.
+    pub fn on_event(&mut self, event: &AgentEvent, verified: bool) -> Vec<(String, Decoration)> {
         let mut out = Vec::new();
         for (caps, p) in &mut self.plugins {
             if caps.wants_event(&event.kind)
-                && let Ok(Some(d)) = p.on_event(event)
+                && let Ok(Some(d)) = p.on_event(event, verified)
             {
                 out.push((p.id().to_owned(), d));
             }
@@ -531,6 +550,44 @@ mod tests {
         let e = store.install(Path::new("https://github.com/x/y"), &host, &mut |_| true).unwrap_err().to_string();
         assert!(e.contains("only local paths"), "{e}");
         assert!(store.list().unwrap().is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn remove_and_approve_refuse_paths_and_unlisted_ids() {
+        let dir = tempdir("traverse");
+        let home = dir.join("home");
+        let store = Store::open(&home).unwrap();
+        let host = PluginHost::new().unwrap();
+        store.install(&src(&dir, ""), &host, &mut |_| true).unwrap();
+        fs::write(home.join("keep"), "x").unwrap();
+        for id in ["..", "../..", "/", "a/b", ".", "", "dev.haunt.t/..", "../home/plugins/dev.haunt.t"] {
+            assert!(matches!(store.remove(id), Err(StoreError::Invalid(_))), "remove {id:?}");
+            assert!(matches!(store.approve(id, &host, &mut |_| true), Err(StoreError::Invalid(_))), "approve {id:?}");
+        }
+        assert!(home.join("keep").exists() && store.plugins_dir().join("dev.haunt.t").exists());
+
+        fs::create_dir(store.plugins_dir().join("dev.haunt.stray")).unwrap();
+        assert!(matches!(store.remove("dev.haunt.stray"), Err(StoreError::NotInstalled(_))), "only lockfile entries");
+        assert!(store.plugins_dir().join("dev.haunt.stray").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn symlinked_plugin_dir_is_never_followed() {
+        let dir = tempdir("symlink");
+        let store = Store::open(&dir.join("home")).unwrap();
+        let host = PluginHost::new().unwrap();
+        store.install(&src(&dir, ""), &host, &mut |_| true).unwrap();
+        let installed = store.plugins_dir().join("dev.haunt.t");
+        let victim = dir.join("victim");
+        fs::rename(&installed, &victim).unwrap();
+        std::os::unix::fs::symlink(&victim, &installed).unwrap();
+
+        assert!(matches!(store.remove("dev.haunt.t"), Err(StoreError::Invalid(_))));
+        assert!(matches!(store.approve("dev.haunt.t", &host, &mut |_| true), Err(StoreError::Invalid(_))));
+        assert!(store.list().unwrap()[0].problem.as_deref().unwrap().contains("symlink"));
+        assert!(victim.join(WASM).exists(), "the link target is untouched");
         fs::remove_dir_all(dir).unwrap();
     }
 

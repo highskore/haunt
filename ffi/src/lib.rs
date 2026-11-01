@@ -45,7 +45,7 @@ impl HauntCore {
         self.core.start()
     }
 
-    pub fn register_surface(&self, cwd: String) -> SurfaceEnv {
+    pub fn register_surface(&self, cwd: String) -> Result<SurfaceEnv, CoreError> {
         self.core.register_surface(&cwd)
     }
 
@@ -77,6 +77,11 @@ impl HauntCore {
         self.core.answer_permission(&surface_id, request_key, allow)
     }
 
+    /// Call on every keyDown routed to the surface, before it reaches the pty.
+    pub fn on_user_input(&self, surface_id: String) {
+        self.core.on_user_input(&surface_id);
+    }
+
     pub fn decisions(&self, query: String, limit: u32) -> Vec<Decision> {
         self.core.decisions(&query, limit)
     }
@@ -95,9 +100,6 @@ impl HauntCore {
 }
 
 #[cfg(feature = "plugins")]
-pub use haunt_core::plugins::{Decoration, LoadStats};
-
-#[cfg(feature = "plugins")]
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum HostError {
     #[error("{reason}")]
@@ -111,39 +113,19 @@ impl From<haunt_core::plugins::PluginError> for HostError {
     }
 }
 
-/// One loaded plugin; wasmtime stores are not Sync, hence the mutex.
 #[cfg(feature = "plugins")]
-#[derive(uniffi::Object)]
-pub struct PluginHandle {
-    plugin: Mutex<haunt_core::plugins::LoadedPlugin>,
-    stats: LoadStats,
-}
+pub use haunt_core::plugins::{HostRequest, NotifyAction, PaletteItem};
+#[cfg(feature = "plugins")]
+pub use haunt_core::ptygate::PtyWrite;
 
 #[cfg(feature = "plugins")]
 #[uniffi::export]
-impl PluginHandle {
-    #[uniffi::constructor]
-    pub fn load(wasm_path: String, cache_dir: String) -> Result<std::sync::Arc<Self>, HostError> {
-        let host = haunt_core::plugins::PluginHost::new()?;
-        let (plugin, stats) = host.load(wasm_path.as_ref(), cache_dir.as_ref())?;
-        Ok(std::sync::Arc::new(Self { plugin: Mutex::new(plugin), stats }))
-    }
-
-    pub fn stats(&self) -> LoadStats {
-        self.stats.clone()
-    }
-
-    pub fn on_event(&self, event: AgentEvent) -> Result<Option<Decoration>, HostError> {
-        Ok(self.plugin.lock().unwrap().on_event(&event)?)
-    }
-
-    pub fn take_logs(&self) -> Vec<String> {
-        self.plugin.lock().unwrap().take_logs()
+impl HauntCore {
+    /// For each request from `HauntPlugins.takeRequests()`: the bytes to write, or nil to write nothing.
+    pub fn gate_plugin_request(&self, request: HostRequest) -> Option<PtyWrite> {
+        self.core.gate_plugin_request(&request)
     }
 }
-
-#[cfg(feature = "plugins")]
-pub use haunt_core::plugins::{HostRequest, NotifyAction, PaletteItem};
 
 /// Installed plugins from `<haunt_dir>/plugins`, each with only the capabilities the user granted.
 #[cfg(feature = "plugins")]
@@ -180,48 +162,5 @@ impl HauntPlugins {
     /// Notifications and pty writes plugins asked for since the last call.
     pub fn take_requests(&self) -> Vec<HostRequest> {
         self.set.lock().unwrap().take_requests()
-    }
-}
-
-pub use haunt_core::intake::Delivery;
-
-#[uniffi::export(with_foreign)]
-pub trait IntakeListener: Send + Sync {
-    /// Called on the intake thread; hop to the main actor before touching UI.
-    fn on_delivery(&self, delivery: Delivery);
-}
-
-#[derive(Debug, thiserror::Error, uniffi::Error)]
-pub enum IntakeBindError {
-    #[error("{reason}")]
-    Failed { reason: String },
-}
-
-/// Hook-event socket at `<dir>/sock`; dropping it closes and unlinks the socket.
-#[derive(uniffi::Object)]
-pub struct HauntIntake {
-    inner: haunt_core::intake::Intake,
-}
-
-#[uniffi::export]
-impl HauntIntake {
-    #[uniffi::constructor]
-    pub fn bind(dir: String, listener: std::sync::Arc<dyn IntakeListener>) -> Result<std::sync::Arc<Self>, IntakeBindError> {
-        let sink: haunt_core::intake::Sink = std::sync::Arc::new(move |d| listener.on_delivery(d));
-        haunt_core::intake::Intake::bind(dir.as_ref(), Default::default(), sink)
-            .map(|inner| std::sync::Arc::new(Self { inner }))
-            .map_err(|e| IntakeBindError::Failed { reason: e.to_string() })
-    }
-
-    pub fn path(&self) -> String {
-        self.inner.path().display().to_string()
-    }
-
-    pub fn register_surface(&self, surface_id: String, nonce: String) {
-        self.inner.register_surface(&surface_id, &nonce);
-    }
-
-    pub fn unregister_surface(&self, surface_id: String) {
-        self.inner.unregister_surface(&surface_id);
     }
 }

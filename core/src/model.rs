@@ -15,7 +15,7 @@ use crate::decisions::{Decision, DecisionLog};
 use crate::event::{AgentEvent, parse_osc};
 use crate::intake::{Delivery, Intake, IntakeError, Limits, SOCKET_NAME};
 use crate::layout::{self, SidebarSnapshot, SurfaceView};
-use crate::session::Session;
+use crate::session::{Outcome, Session};
 
 const MAX_SURFACES: usize = 512;
 
@@ -217,7 +217,9 @@ fn ctl_request(state: &Mutex<State>, line: &str) -> String {
                 .groups
                 .iter()
                 .flat_map(|g| &g.rows)
-                .filter_map(|r| r.pending.as_ref().map(|p| json!({ "surface_id": r.surface_id, "key": p.key, "tool": p.tool, "preview": p.preview })))
+                .filter_map(|r| {
+                    r.pending.as_ref().map(|p| json!({ "surface_id": r.surface_id, "key": p.key, "tool": p.tool, "preview": p.preview, "suspicious": p.suspicious }))
+                })
                 .collect();
             json!({ "ok": true, "snapshot": snapshot, "pending": pending }).to_string()
         }
@@ -294,7 +296,8 @@ impl Core {
         update_state(&self.state, f)
     }
 
-    pub fn register_surface(&self, cwd: &str) -> SurfaceEnv {
+    /// `Invalid` once `MAX_SURFACES` are registered: an env the core doesn't know would never verify.
+    pub fn register_surface(&self, cwd: &str) -> Result<SurfaceEnv, CoreError> {
         let env = SurfaceEnv {
             surface_id: uuid(),
             nonce: hex(&random_bytes()),
@@ -308,10 +311,11 @@ impl Core {
             st.surfaces.push(Surface { id, nonce, cwd, branch: None, agent_branch: None, session: Session::new(now) });
             true
         });
-        if added {
-            self.with_intake(|i| i.register_surface(&env.surface_id, &env.nonce));
+        if !added {
+            return Err(CoreError::Invalid { reason: format!("at most {MAX_SURFACES} surfaces") });
         }
-        env
+        self.with_intake(|i| i.register_surface(&env.surface_id, &env.nonce));
+        Ok(env)
     }
 
     pub fn unregister_surface(&self, surface_id: &str) {
@@ -365,15 +369,33 @@ impl Core {
         lock(&self.state).listener = Some(listener);
     }
 
-    /// Bytes for `ghostty_surface_text` (Enter allows, Esc denies), only while `request_key` is
-    /// that surface's live, nonce-verified permission request. The request is consumed.
+    /// Bytes for `ghostty_surface_text`, only while `request_key` is that surface's live,
+    /// nonce-verified permission request. The request is consumed. Allow is `1`, which Claude Code's
+    /// prompt maps to its first option, "Yes", wherever the highlight is; Enter would take the
+    /// highlighted one, which may be "don't ask again" or "No". Deny is Esc.
     pub fn answer_permission(&self, surface_id: &str, request_key: u64, allow: bool) -> Option<Vec<u8>> {
+        self.answer_by(surface_id, request_key, allow, None)
+    }
+
+    /// `answer_permission`, logged as the plugin's answer when `plugin_id` is set.
+    pub(crate) fn answer_by(&self, surface_id: &str, request_key: u64, allow: bool, plugin_id: Option<&str>) -> Option<Vec<u8>> {
+        let outcome = match (plugin_id, allow) {
+            (None, true) => Outcome::AllowedInHaunt,
+            (None, false) => Outcome::DeniedInHaunt,
+            (Some(id), true) => Outcome::AllowedByPlugin { plugin_id: id.to_owned() },
+            (Some(id), false) => Outcome::DeniedByPlugin { plugin_id: id.to_owned() },
+        };
         let answered = self.update(|st, now| {
-            let answered = st.surface(surface_id).is_some_and(|s| s.session.answer(request_key, allow, now));
+            let answered = st.surface(surface_id).is_some_and(|s| s.session.answer_as(request_key, outcome, now));
             st.settle();
             answered
         });
-        answered.then(|| if allow { b"\r".to_vec() } else { b"\x1b".to_vec() })
+        answered.then(|| if allow { b"1".to_vec() } else { b"\x1b".to_vec() })
+    }
+
+    /// A key went to the surface's pty: from now on the terminal answers its pending request.
+    pub fn on_user_input(&self, surface_id: &str) {
+        self.update(|st, _| st.surface(surface_id).is_some_and(|s| s.session.user_input()));
     }
 
     /// Ended permission requests, newest first; see `DecisionLog::query`.
@@ -428,7 +450,7 @@ mod tests {
     const PERM: &str = r#""event":"permission_seen","tool_name":"Bash","tool_input":{"command":"git push"}"#;
 
     fn blocked(c: &Core, verified: bool) -> SurfaceEnv {
-        let env = c.register_surface("/Users/me/code/orchestrator");
+        let env = c.register_surface("/Users/me/code/orchestrator").unwrap();
         let nonce = if verified { env.nonce.clone() } else { "0".repeat(32) };
         c.with_state(|st| {
             let now = Instant::now();
@@ -461,7 +483,7 @@ mod tests {
         std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
 
         let c = core();
-        let env = c.register_surface("/Users/me");
+        let env = c.register_surface("/Users/me").unwrap();
         let forged = r#""event":"prompt_submit","cwd":"/Users/me/code/elsewhere""#;
         c.with_state(|st| st.handle_line(&line(&env, None, forged), Instant::now()));
         let row = only_row(&c);
@@ -514,7 +536,7 @@ mod tests {
         let env = blocked(&c, true);
         c.unregister_surface(&env.surface_id);
         let d = c.decisions("", 10);
-        assert_eq!((d.len(), d[0].outcome, d[0].surface_id.as_str()), (1, crate::Outcome::Superseded, env.surface_id.as_str()));
+        assert_eq!((d.len(), d[0].outcome.clone(), d[0].surface_id.as_str()), (1, crate::Outcome::Superseded, env.surface_id.as_str()));
     }
 
     fn canonical_dir(tag: &str) -> String {
@@ -525,15 +547,34 @@ mod tests {
     }
 
     #[test]
+    fn a_key_typed_in_the_terminal_retires_the_request() {
+        let c = core();
+        let env = blocked(&c, true);
+        let key = pending(&c).expect("live").key;
+        c.on_user_input("other");
+        c.on_user_input(&env.surface_id);
+        assert!(pending(&c).is_none());
+        assert_eq!(c.snapshot().groups[0].rows[0].meta, "~/code/orchestrator · Waiting for you");
+        assert_eq!(c.answer_permission(&env.surface_id, key, true), None);
+        c.with_state(|st| {
+            let ran = r#""event":"tool_ran","tool_name":"Bash","tool_input":{"command":"git push"}"#;
+            st.handle_line(&line(&env, Some(&env.nonce), ran), Instant::now())
+        });
+        assert_eq!(c.decisions("", 1)[0].outcome, crate::Outcome::AnsweredInTerminal);
+    }
+
+    #[test]
     fn invisible_or_multiline_commands_are_never_suggested() {
         let project = canonical_dir("allow-raw");
         for cmd in [r"git\u200b push", r"ls\nrm -rf x", r"ls\t-la"] {
             let c = core();
-            let env = c.register_surface(&project);
+            let env = c.register_surface(&project).unwrap();
             let perm = format!(r#""event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"{cmd}"}}"#);
+            let ran = format!(r#""event":"tool_ran","tool_name":"Bash","tool_input":{{"command":"{cmd}"}}"#);
             for _ in 0..3 {
                 c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &perm), Instant::now()));
-                answer(&c, &env.surface_id, true).expect("verified request");
+                assert_eq!(answer(&c, &env.surface_id, true), None, "{cmd} is answered in the terminal");
+                c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &ran), Instant::now()));
             }
             assert_eq!(c.decisions("", 10).len(), 3);
             assert!(c.allow_suggestions().is_empty(), "{cmd}");
@@ -542,10 +583,24 @@ mod tests {
     }
 
     #[test]
+    fn a_hidden_newline_is_flagged_and_never_answered_from_haunt() {
+        let c = core();
+        let env = c.register_surface("/w").unwrap();
+        let perm = r#""event":"permission_seen","tool_name":"Bash","tool_input":{"command":"ls #\nrm -rf ~/x"}"#;
+        c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), perm), Instant::now()));
+        let p = pending(&c).expect("shown");
+        assert_eq!((p.preview.as_str(), p.suspicious), ("ls #⏎rm -rf ~/x", true));
+        assert_eq!(c.snapshot().groups[0].rows[0].meta, "/w · Approve: ls #⏎rm -rf ~/x?");
+        assert_eq!(c.answer_permission(&env.surface_id, p.key, true), None);
+        assert_eq!(c.answer_permission(&env.surface_id, p.key, false), None);
+        assert!(pending(&c).is_some(), "still waiting for the terminal");
+    }
+
+    #[test]
     fn three_verified_approvals_suggest_an_exact_rule() {
         let project = canonical_dir("allow");
         let c = core();
-        let env = c.register_surface(&project);
+        let env = c.register_surface(&project).unwrap();
         let perm = format!(r#""event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"cargo test"}}"#);
         let ran = r#""event":"tool_ran","tool_name":"Bash","tool_input":{"command":"cargo test"}"#;
         let send = |nonce: Option<&str>, body: &str| c.with_state(|st| st.handle_line(&line(&env, nonce, body), Instant::now()));
@@ -556,11 +611,15 @@ mod tests {
         assert!(c.allow_suggestions().is_empty(), "unverified approvals never count");
         send(Some(&env.nonce), &perm);
         answer(&c, &env.surface_id, true).unwrap();
-        send(Some(&env.nonce), &perm);
-        send(Some(&env.nonce), ran);
-        assert!(c.allow_suggestions().is_empty());
-        send(Some(&env.nonce), &perm);
-        answer(&c, &env.surface_id, true).unwrap();
+        for _ in 0..3 {
+            send(Some(&env.nonce), &perm);
+            send(Some(&env.nonce), ran);
+        }
+        assert!(c.allow_suggestions().is_empty(), "answers in the terminal never count");
+        for _ in 0..2 {
+            send(Some(&env.nonce), &perm);
+            answer(&c, &env.surface_id, true).unwrap();
+        }
         let s = c.allow_suggestions();
         assert_eq!((s.len(), s[0].rule.as_str(), s[0].approvals), (1, "Bash(cargo test)", 3));
 
@@ -580,7 +639,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let c = Core::new(&dir);
         c.start().unwrap();
-        let env = c.register_surface("/w");
+        let env = c.register_surface("/w").unwrap();
         let s = UnixStream::connect(format!("{dir}/ctl")).unwrap();
         let mut r = BufReader::new(s.try_clone().unwrap());
         let mut ask = |req: Value| -> Value {
@@ -612,7 +671,7 @@ mod tests {
     #[test]
     fn surfaces_get_unique_ids_and_128_bit_nonces() {
         let c = core();
-        let (a, b) = (c.register_surface("/a"), c.register_surface("/b"));
+        let (a, b) = (c.register_surface("/a").unwrap(), c.register_surface("/b").unwrap());
         assert_ne!(a.surface_id, b.surface_id);
         assert_ne!(a.nonce, b.nonce);
         assert_eq!(a.nonce.len(), 32);
@@ -622,10 +681,20 @@ mod tests {
     }
 
     #[test]
+    fn registering_past_the_cap_is_an_error() {
+        let c = core();
+        for _ in 0..MAX_SURFACES {
+            c.register_surface("/a").unwrap();
+        }
+        assert!(matches!(c.register_surface("/a"), Err(CoreError::Invalid { .. })));
+        assert_eq!(c.snapshot().groups[0].rows.len(), MAX_SURFACES);
+    }
+
+    #[test]
     fn answer_only_for_a_verified_live_request() {
         let c = core();
         let env = blocked(&c, true);
-        assert_eq!(answer(&c, &env.surface_id, true), Some(b"\r".to_vec()));
+        assert_eq!(answer(&c, &env.surface_id, true), Some(b"1".to_vec()));
         assert_eq!(answer(&c, &env.surface_id, true), None, "consumed");
 
         let env = blocked(&c, true);
@@ -641,7 +710,7 @@ mod tests {
         assert!(row.needs_you, "status still moves");
         assert_eq!(answer(&c, &env.surface_id, true), None);
 
-        let env = c.register_surface("/w");
+        let env = c.register_surface("/w").unwrap();
         c.with_state(|st| st.handle_line(&line(&env, None, PERM), Instant::now()));
         assert_eq!(answer(&c, &env.surface_id, true), None);
     }
@@ -649,8 +718,8 @@ mod tests {
     #[test]
     fn another_surfaces_nonce_does_not_verify() {
         let c = core();
-        let a = c.register_surface("/a");
-        let b = c.register_surface("/b");
+        let a = c.register_surface("/a").unwrap();
+        let b = c.register_surface("/b").unwrap();
         c.with_state(|st| st.handle_line(&line(&b, Some(&a.nonce), PERM), Instant::now()));
         assert_eq!(answer(&c, &b.surface_id, true), None);
     }
@@ -675,7 +744,7 @@ mod tests {
     #[test]
     fn osc_fallback_is_status_only() {
         let c = core();
-        let env = c.register_surface("/w");
+        let env = c.register_surface("/w").unwrap();
         let body = format!(r#"{{"v":1,"nonce":"{}",{PERM}}}"#, env.nonce);
         c.on_osc_notification(&env.surface_id, "warp://cli-agent", &body);
         assert!(c.snapshot().groups[0].rows[0].needs_you);
@@ -697,7 +766,7 @@ mod tests {
     #[test]
     fn unknown_surface_and_bad_lines_are_dropped() {
         let c = core();
-        c.register_surface("/a");
+        c.register_surface("/a").unwrap();
         c.with_state(|st| {
             let now = Instant::now();
             assert!(!st.handle_line(r#"{"v":1,"surface_id":"ghost","event":"stop"}"#, now));
@@ -713,7 +782,7 @@ mod tests {
         c.set_listener(Arc::new(move || {
             k.fetch_add(1, Ordering::SeqCst);
         }));
-        let env = c.register_surface("/a");
+        let env = c.register_surface("/a").unwrap();
         c.select_surface(&env.surface_id);
         c.select_surface(&env.surface_id);
         c.set_surface_info(&env.surface_id, "zsh", "/a", None);
@@ -739,13 +808,13 @@ mod tests {
         c.set_listener(Arc::new(move || {
             let _ = tx.lock().unwrap().send(());
         }));
-        let env = c.register_surface("/w");
+        let env = c.register_surface("/w").unwrap();
         rx.recv_timeout(Duration::from_secs(1)).unwrap();
         let mut s = UnixStream::connect(&env.socket_path).unwrap();
         writeln!(s, "{}", line(&env, Some(&env.nonce), PERM)).unwrap();
         drop(s);
         rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert_eq!(answer(&c, &env.surface_id, true), Some(b"\r".to_vec()));
+        assert_eq!(answer(&c, &env.surface_id, true), Some(b"1".to_vec()));
         drop(c);
         let _ = std::fs::remove_dir_all(&dir);
     }

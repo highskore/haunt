@@ -22,23 +22,29 @@ pub enum Status {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Permission {
     pub tool: String,
+    /// The command or file path exactly as the hook sent it; shown only through `preview`.
     pub input: Option<String>,
     pub tool_use_id: Option<String>,
-    /// The Bash command exactly as sent, for allow rules; `input` is the cleaned one.
+    /// The Bash command exactly as sent, for allow rules.
     pub raw_command: Option<String>,
     /// The hook's cwd, from the same verified event.
     pub cwd: Option<String>,
     /// The `Session::generation` of the NeedsYou episode that created it.
     generation: u64,
+    /// The user typed into the surface, so the terminal is answering; it only waits for its outcome.
+    in_terminal: bool,
 }
 
 /// How a verified permission request ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 pub enum Outcome {
     AllowedInHaunt,
     DeniedInHaunt,
+    /// A plugin answered through `ptygate`, not the user; never counts as an approval.
+    AllowedByPlugin { plugin_id: String },
+    DeniedByPlugin { plugin_id: String },
     /// The matching call ran, so it was allowed at the terminal prompt.
     AnsweredInTerminal,
     Superseded,
@@ -47,7 +53,7 @@ pub enum Outcome {
 impl Permission {
     /// None when the input is missing: the user has to answer in the terminal then.
     fn from_call(t: &ToolCall, cwd: Option<String>, generation: u64) -> Option<Self> {
-        let input = t.command.clone().or_else(|| t.file_path.clone())?;
+        let input = raw_input(t)?;
         Some(Self {
             tool: t.tool_name.clone(),
             input: Some(input),
@@ -55,6 +61,7 @@ impl Permission {
             raw_command: t.raw_command.clone(),
             cwd,
             generation,
+            in_terminal: false,
         })
     }
 
@@ -70,19 +77,30 @@ impl Permission {
         }
         match (&self.tool_use_id, &t.tool_use_id) {
             (Some(a), Some(b)) => a == b,
-            _ => self.input == t.command.clone().or_else(|| t.file_path.clone()),
+            _ => self.input == raw_input(t),
         }
     }
 
-    /// "git push" for Bash, "Edit /w/a.rs" for the rest.
+    /// "git push" for Bash, "Edit /w/a.rs" for the rest, with newlines, tabs and invisible
+    /// characters shown rather than removed (see `event::visible`).
     pub fn preview(&self) -> String {
         let text = match &self.input {
             Some(i) if self.tool == "Bash" => i.clone(),
             Some(i) => format!("{} {i}", self.tool),
             None => self.tool.clone(),
         };
-        crate::event::clean(&text)
+        crate::event::visible(&text)
     }
+
+    /// A multi-line input, or one with control or invisible characters: what runs may not be what
+    /// a one-line preview suggests, so it is answered only in the terminal.
+    pub fn suspicious(&self) -> bool {
+        self.input.as_deref().is_some_and(|i| i.chars().any(crate::event::is_hidden))
+    }
+}
+
+fn raw_input(t: &ToolCall) -> Option<String> {
+    t.raw_command.clone().or_else(|| t.raw_file_path.clone())
 }
 
 #[derive(Debug, Clone)]
@@ -202,17 +220,36 @@ impl Session {
         changed || before != (self.status, self.permission.clone(), self.prompt.clone())
     }
 
-    /// The permission an answer may go to: verified, and created by the NeedsYou episode still on screen.
+    /// The permission an answer may go to: verified, created by the NeedsYou episode still on screen,
+    /// and not since taken over by keys typed into the terminal.
     pub fn live_permission(&self) -> Option<&Permission> {
-        self.permission.as_ref().filter(|p| self.status == Status::NeedsYou && p.generation == self.generation)
+        self.permission.as_ref().filter(|p| self.status == Status::NeedsYou && p.generation == self.generation && !p.in_terminal)
     }
 
-    /// Consumes the live permission if `key` names it; false for a stale or unknown key.
+    /// The user typed into the surface: whatever they typed answers or moves the prompt, so an answer
+    /// from haunt could now land in the running tool. The request stays only to record its outcome.
+    pub fn user_input(&mut self) -> bool {
+        match &mut self.permission {
+            Some(p) if !p.in_terminal => {
+                p.in_terminal = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Consumes the live permission if `key` names it; false for a stale or unknown key, and for a
+    /// suspicious request, which stays live for the terminal to answer.
     pub fn answer(&mut self, key: u64, allow: bool, now: Instant) -> bool {
-        if self.live_permission().is_none_or(|p| p.key() != key) {
+        self.answer_as(key, if allow { Outcome::AllowedInHaunt } else { Outcome::DeniedInHaunt }, now)
+    }
+
+    /// `answer`, logging `outcome` (an `…InHaunt` or `…ByPlugin` one).
+    pub fn answer_as(&mut self, key: u64, outcome: Outcome, now: Instant) -> bool {
+        if self.live_permission().is_none_or(|p| p.key() != key || p.suspicious()) {
             return false;
         }
-        self.end_permission(if allow { Outcome::AllowedInHaunt } else { Outcome::DeniedInHaunt });
+        self.end_permission(outcome);
         self.set(Status::Running, now);
         true
     }
@@ -403,13 +440,29 @@ mod tests {
     }
 
     #[test]
-    fn preview_strips_invisible_characters() {
+    fn preview_shows_invisible_characters_and_they_block_answers() {
         let (mut s, now) = running();
         let spoof = "{\"event\":\"permission_seen\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hi \\u202e\\u2066/ fr- mr\\u2069\\u200b\\ufeff\"}}";
         s.apply(&ev(spoof), true, now);
-        assert_eq!(s.live_permission().unwrap().preview(), "echo hi / fr- mr");
-        let p = Permission { tool: "Bash".into(), input: Some("a\u{202e}b\u{200d}c".into()), tool_use_id: None, raw_command: None, cwd: None, generation: 0 };
-        assert_eq!(p.preview(), "abc", "preview cleans even input that skipped the parser");
+        let p = s.live_permission().unwrap().clone();
+        assert_eq!(p.preview(), "echo hi \\u{202e}\\u{2066}/ fr- mr\\u{2069}\\u{200b}\\u{feff}");
+        assert!(p.suspicious());
+        assert!(!s.answer(p.key(), true, now), "answered in the terminal only");
+        assert_eq!(s.live_permission(), Some(&p), "a refused answer leaves it live");
+        let p = Permission { tool: "Bash".into(), input: Some("a\u{202e}b".into()), tool_use_id: None, raw_command: None, cwd: None, generation: 0, in_terminal: false };
+        assert_eq!(p.preview(), "a\\u{202e}b", "preview shows even input that skipped the parser");
+    }
+
+    #[test]
+    fn a_hidden_newline_is_shown_and_never_answerable() {
+        let (mut s, now) = running();
+        s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"ls #\nrm -rf ~/x"}}"#), true, now);
+        let p = s.live_permission().unwrap().clone();
+        assert_eq!(p.preview(), "ls #⏎rm -rf ~/x");
+        assert!(p.suspicious());
+        assert!(!s.answer(p.key(), true, now) && !s.answer(p.key(), false, now));
+        s.apply(&ev(r#"{"event":"tool_ran","tool_name":"Bash","tool_input":{"command":"ls #\nrm -rf ~/x"}}"#), true, now);
+        assert_eq!(s.take_ended().last().map(|(_, o)| o.clone()), Some(Outcome::AnsweredInTerminal));
     }
 
     #[test]
@@ -440,6 +493,26 @@ mod tests {
         assert!(s.answer(key, true, now));
         assert_eq!(s.status, Status::Running);
         assert!(!s.answer(key, true, now));
+    }
+
+    #[test]
+    fn typing_in_the_terminal_retires_the_request_until_its_outcome() {
+        let (mut s, now) = running();
+        s.apply(&ev(PERM), true, now);
+        let key = s.live_permission().unwrap().key();
+        assert!(s.user_input());
+        assert!(!s.user_input(), "once");
+        assert_eq!(s.live_permission(), None);
+        assert!(!s.answer(key, true, now), "the tool may be running: haunt must not type into it");
+        assert_eq!(s.status, Status::NeedsYou);
+        s.apply(&ev(RAN), true, now);
+        assert_eq!(s.take_ended().iter().map(|(_, o)| o.clone()).collect::<Vec<_>>(), [Outcome::AnsweredInTerminal]);
+
+        s.apply(&ev(PERM), true, now);
+        s.user_input();
+        s.apply(&ev(r#"{"event":"stop"}"#), true, now);
+        assert_eq!(s.take_ended().iter().map(|(_, o)| o.clone()).collect::<Vec<_>>(), [Outcome::Superseded], "denied at the terminal");
+        assert!(!s.user_input(), "nothing pending");
     }
 
     #[test]
@@ -474,7 +547,7 @@ mod tests {
         s.apply(&ev(PERM), false, now);
         s.close();
         let ended = s.take_ended();
-        let outcomes: Vec<_> = ended.iter().map(|(_, o)| *o).collect();
+        let outcomes: Vec<_> = ended.iter().map(|(_, o)| o.clone()).collect();
         assert_eq!(outcomes, [Superseded, AnsweredInTerminal, AllowedInHaunt, DeniedInHaunt, Superseded], "an unverified prompt is no request");
         assert_eq!(ended[0].0.cwd.as_deref(), Some("/p"));
         assert!(s.take_ended().is_empty());

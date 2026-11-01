@@ -26,7 +26,6 @@ pub const MEMORY_CAP: usize = 64 << 20;
 const TICK: Duration = Duration::from_millis(10);
 /// 5 ticks of 10 ms: the plan's 50 ms per call.
 const CALL_TICKS: u64 = 5;
-const PTY_TEXT_CAP: usize = 1024;
 const PTY_PER_SEC: usize = 10;
 const MAX_PALETTE: usize = 64;
 const MAX_OUTBOX: usize = 256;
@@ -34,7 +33,6 @@ const MAX_LOGS: usize = 1000;
 const MAX_STR: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct Decoration {
     pub badge: Option<String>,
     pub style: String,
@@ -42,7 +40,6 @@ pub struct Decoration {
 }
 
 #[derive(Debug, Clone, Default)]
-#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct LoadStats {
     pub wasm_bytes: u64,
     pub from_cache: bool,
@@ -69,13 +66,13 @@ pub struct NotifyAction {
     pub title: String,
 }
 
-/// Side effects a plugin asked for; the app drains and performs them (pty through `ptygate`).
+/// Side effects a plugin asked for; the app drains and performs them. A `PtyAnswer` becomes bytes
+/// only through `Core::gate_plugin_request` (`ptygate`).
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 pub enum HostRequest {
     Notify { plugin_id: String, title: String, body: String, actions: Vec<NotifyAction>, binding: Option<String> },
-    PtyAnswer { plugin_id: String, surface: String, allow: bool, request_id: String },
-    PtyText { plugin_id: String, surface: String, text: String },
+    PtyAnswer { plugin_id: String, surface: String, allow: bool, request_id: u64 },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -105,6 +102,8 @@ pub struct LoadSpec {
     pub caps: Capabilities,
     pub kv_path: Option<PathBuf>,
     pub settings_json: String,
+    /// The haunt dir (`~/.haunt`) the plugin's `${cwd}` may never point into.
+    pub haunt_dir: Option<PathBuf>,
 }
 
 struct Kv {
@@ -164,7 +163,7 @@ pub struct HostState {
 }
 
 impl HostState {
-    fn new(id: &str, caps: &Capabilities, kv_path: Option<PathBuf>) -> Self {
+    fn new(id: &str, caps: &Capabilities, kv_path: Option<PathBuf>, haunt_dir: Option<&Path>) -> Self {
         Self {
             id: id.to_owned(),
             logs: Vec::new(),
@@ -174,7 +173,7 @@ impl HostState {
             kv: Kv::open(kv_path),
             palette: Vec::new(),
             outbox: Vec::new(),
-            fs: FsScope::new(&caps.fs_read, &caps.fs_write),
+            fs: FsScope::new(&caps.fs_read, &caps.fs_write, haunt_dir),
             pty_times: VecDeque::new(),
         }
     }
@@ -282,10 +281,7 @@ impl wnotify::Host for HostState {
 }
 
 impl wpty::Host for HostState {
-    fn answer(&mut self, surface: String, allow: bool, request_id: String) -> Result<(), String> {
-        if request_id.is_empty() || request_id.len() > 128 {
-            return Err("invalid request id".into());
-        }
+    fn answer(&mut self, surface: String, allow: bool, request_id: u64) -> Result<(), String> {
         if !self.pty_rate_ok() {
             return Err(format!("pty rate limit ({PTY_PER_SEC}/s)"));
         }
@@ -293,27 +289,6 @@ impl wpty::Host for HostState {
         self.push_log(format!("info pty.answer surface={surface} allow={allow} request={request_id}"));
         self.request(HostRequest::PtyAnswer { plugin_id: self.id.clone(), surface, allow, request_id })
     }
-
-    fn text(&mut self, surface: String, text: String) -> Result<(), String> {
-        check_pty_text(&text)?;
-        if !self.pty_rate_ok() {
-            return Err(format!("pty rate limit ({PTY_PER_SEC}/s)"));
-        }
-        let surface = clip(surface);
-        self.push_log(format!("info pty.text surface={surface} bytes={}", text.len()));
-        self.request(HostRequest::PtyText { plugin_id: self.id.clone(), surface, text })
-    }
-}
-
-/// Printable text plus `\r` and ESC only, as plan section 3.8 requires.
-fn check_pty_text(text: &str) -> Result<(), String> {
-    if text.len() > PTY_TEXT_CAP {
-        return Err(format!("pty text over {PTY_TEXT_CAP} bytes"));
-    }
-    if text.chars().any(|c| c.is_control() && c != '\r' && c != '\x1b') {
-        return Err("pty text may only contain printable characters, \\r and ESC".into());
-    }
-    Ok(())
 }
 
 /// Wall time to the second and monotonic time to 10 ms, so plugins get no fine-grained timer.
@@ -358,6 +333,19 @@ impl Epoch {
     }
     fn exit(&self) {
         self.active.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    /// Runs `f`, which enters wasm, with the epoch ticking so its deadline can fire.
+    fn ticking<R>(&self, f: impl FnOnce() -> R) -> R {
+        struct Exit<'a>(&'a Epoch);
+        impl Drop for Exit<'_> {
+            fn drop(&mut self) {
+                self.0.exit();
+            }
+        }
+        self.enter();
+        let _exit = Exit(self);
+        f()
     }
 }
 
@@ -408,9 +396,8 @@ impl LoadedPlugin {
             return Err(PluginError(why.clone()));
         }
         self.store.set_epoch_deadline(CALL_TICKS);
-        self.epoch.enter();
-        let res = f(&self.bindings, &mut self.store);
-        self.epoch.exit();
+        let (bindings, store) = (&self.bindings, &mut self.store);
+        let res = self.epoch.ticking(|| f(bindings, store));
         res.map_err(|e| {
             let why = if e.downcast_ref::<Trap>() == Some(&Trap::Interrupt) {
                 format!("plugin {} exceeded its {} ms CPU budget and was disabled", self.id(), CALL_TICKS * TICK.as_millis() as u64)
@@ -426,8 +413,10 @@ impl LoadedPlugin {
         self.call(|b, s| b.call_init(s, settings_json))
     }
 
-    pub fn on_event(&mut self, event: &AgentEvent) -> Result<Option<Decoration>, PluginError> {
-        if let Some(cwd) = &event.cwd {
+    /// Only a `verified` event's cwd widens the plugin's `${cwd}` grant; anything in the pty can
+    /// forge the rest.
+    pub fn on_event(&mut self, event: &AgentEvent, verified: bool) -> Result<Option<Decoration>, PluginError> {
+        if verified && let Some(cwd) = &event.cwd {
             self.store.data_mut().fs.add_cwd(cwd);
         }
         let summary = match &event.kind {
@@ -563,10 +552,11 @@ impl PluginHost {
     /// Instantiates a compiled component with `spec`'s grants and runs its `init`.
     pub fn instantiate(&self, component: &Component, spec: &LoadSpec) -> Result<LoadedPlugin, PluginError> {
         let linker = self.linker(&spec.caps)?;
-        let mut store = Store::new(&self.engine, HostState::new(&spec.id, &spec.caps, spec.kv_path.clone()));
+        let mut store = Store::new(&self.engine, HostState::new(&spec.id, &spec.caps, spec.kv_path.clone(), spec.haunt_dir.as_deref()));
         store.limiter(|s| &mut s.limits);
+        // Instantiation runs the component's start functions, which get the same budget as a call.
         store.set_epoch_deadline(CALL_TICKS);
-        let bindings = Plugin::instantiate(&mut store, component, &linker)?;
+        let bindings = self.epoch.ticking(|| Plugin::instantiate(&mut store, component, &linker))?;
         let mut plugin = LoadedPlugin { store, bindings, epoch: self.epoch.clone(), disabled: None };
         plugin.init(&spec.settings_json)?;
         Ok(plugin)
@@ -649,11 +639,20 @@ mod tests {
         let pty = Component::new(
             &host.engine,
             r#"(component (import "haunt:plugin/pty@0.1.0" (instance
-                (export "text" (func (param "surface" string) (param "text" string) (result (result (error string))))))))"#,
+                (export "answer" (func (param "surface" string) (param "allow" bool) (param "request-id" u64) (result (result (error string))))))))"#,
         )
         .unwrap();
         assert!(host.check_links(&pty, &Capabilities::default()).is_err());
         host.check_links(&pty, &Capabilities { pty_write: true, ..Default::default() }).unwrap();
+
+        let text = Component::new(
+            &host.engine,
+            r#"(component (import "haunt:plugin/pty@0.1.0" (instance
+                (export "text" (func (param "surface" string) (param "text" string) (result (result (error string))))))))"#,
+        )
+        .unwrap();
+        let e = host.check_links(&text, &Capabilities { pty_write: true, ..Default::default() }).unwrap_err().0;
+        assert!(e.contains("text"), "free-form pty text is gone: {e}");
 
         let notify = Component::new(
             &host.engine,
@@ -669,7 +668,7 @@ mod tests {
     }
 
     fn raw_store(host: &PluginHost) -> Store<HostState> {
-        let mut store = Store::new(&host.engine, HostState::new("t", &Capabilities::default(), None));
+        let mut store = Store::new(&host.engine, HostState::new("t", &Capabilities::default(), None, None));
         store.limiter(|s| &mut s.limits);
         store
     }
@@ -689,12 +688,29 @@ mod tests {
         let inst = Linker::new(&host.engine).instantiate(&mut store, &c).unwrap();
         let spin = inst.get_typed_func::<(), ()>(&mut store, "spin").unwrap();
         store.set_epoch_deadline(CALL_TICKS);
-        host.epoch.enter();
         let t = Instant::now();
-        let e = spin.call(&mut store, ()).unwrap_err();
-        host.epoch.exit();
+        let e = host.epoch.ticking(|| spin.call(&mut store, ())).unwrap_err();
         assert_eq!(e.downcast_ref::<Trap>(), Some(&Trap::Interrupt));
         assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn looping_start_function_is_interrupted() {
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(
+            &host.engine,
+            r#"(component
+                (core module $m (func $spin (loop $l (br $l))) (start $spin))
+                (core instance $i (instantiate $m)))"#,
+        )
+        .unwrap();
+        let mut store = raw_store(&host);
+        store.set_epoch_deadline(CALL_TICKS);
+        let t = Instant::now();
+        let e = host.epoch.ticking(|| Linker::new(&host.engine).instantiate(&mut store, &c)).expect_err("start must not finish");
+        assert_eq!(e.downcast_ref::<Trap>(), Some(&Trap::Interrupt), "{e:#}");
+        assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
+        assert_eq!(host.epoch.active.load(Ordering::Acquire), 0, "ticking stops after the trap");
     }
 
     #[test]
@@ -731,14 +747,5 @@ mod tests {
         assert_eq!(again.map.get("b").map(String::as_str), Some("yy"));
         assert_eq!(again.bytes, 3);
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn pty_text_is_restricted() {
-        assert!(check_pty_text("yes\r").is_ok());
-        assert!(check_pty_text("\x1b[A").is_ok());
-        assert!(check_pty_text("rm -rf /\n").is_err());
-        assert!(check_pty_text("\x03").is_err());
-        assert!(check_pty_text(&"a".repeat(PTY_TEXT_CAP + 1)).is_err());
     }
 }

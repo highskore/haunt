@@ -149,7 +149,7 @@ impl Capabilities {
             out.push(("can show notifications with action buttons".into(), false));
         }
         if self.pty_write {
-            out.push(("can write to your terminal: answer permission prompts and type text".into(), true));
+            out.push(("can answer permission prompts in your terminal (Allow or Deny, nothing else)".into(), true));
         }
         for g in &self.fs_read {
             out.push((format!("can read files matching {}", plain_glob(g)), false));
@@ -181,7 +181,7 @@ fn plain_glob(g: &str) -> String {
     g.replace("${cwd}", "<agent folder>")
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     let parts: Vec<&str> = id.split('.').collect();
     parts.len() >= 2
         && id.len() <= 128

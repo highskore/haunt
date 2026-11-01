@@ -1,6 +1,7 @@
 //! Exact-command allow rules for Bash commands the user keeps approving in one project.
 //! Nothing is allowed by default: a rule is only written when the user accepts a suggestion.
 
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -51,8 +52,10 @@ pub fn rule_for(command: &str) -> Option<String> {
     ok.then(|| format!("Bash({command})"))
 }
 
+/// Only a click in haunt counts: an `AnsweredInTerminal` outcome rests on hook events, which code
+/// running inside the session can forge with the nonce it inherited.
 fn is_approval(d: &Decision) -> bool {
-    matches!(d.outcome, Outcome::AllowedInHaunt | Outcome::AnsweredInTerminal)
+    d.outcome == Outcome::AllowedInHaunt
 }
 
 /// The command an approval may count for: the raw one, and only if cleaning changed nothing, so
@@ -69,22 +72,19 @@ pub fn suggestions<'a>(
     project_ok: impl Fn(&str) -> bool,
     skip: impl Fn(&str, &str) -> bool,
 ) -> Vec<AllowSuggestion> {
-    let mut counts: Vec<(String, String, u32)> = Vec::new();
-    for d in log.filter(|d| is_approval(d) && d.tool == "Bash") {
+    // (project, command) -> (approvals, index of the latest one); this runs under the core's lock.
+    let mut counts: HashMap<(&str, &str), (u32, usize)> = HashMap::new();
+    for (i, d) in log.enumerate().filter(|(_, d)| is_approval(d) && d.tool == "Bash") {
         let (Some(project), Some(command)) = (d.cwd.as_deref(), approved_command(d)) else { continue };
-        match counts.iter().position(|(p, c, _)| p == project && c == command) {
-            Some(i) => {
-                let mut hit = counts.remove(i);
-                hit.2 += 1;
-                counts.push(hit);
-            }
-            None => counts.push((project.to_owned(), command.to_owned(), 1)),
-        }
+        let e = counts.entry((project, command)).or_default();
+        *e = (e.0 + 1, i);
     }
+    let mut counts: Vec<_> = counts.into_iter().filter(|(_, (n, _))| *n >= SUGGEST_AFTER).collect();
+    counts.sort_unstable_by_key(|(_, (_, last))| std::cmp::Reverse(*last));
     counts
         .into_iter()
-        .rev()
-        .filter(|(p, c, n)| *n >= SUGGEST_AFTER && !skip(p, c) && project_ok(p))
+        .map(|((p, c), (n, _))| (p.to_owned(), c.to_owned(), n))
+        .filter(|(p, c, _)| !skip(p, c) && project_ok(p))
         .filter_map(|(project, command, approvals)| Some(AllowSuggestion { rule: rule_for(&command)?, project, command, approvals }))
         .collect()
 }
@@ -252,7 +252,10 @@ mod tests {
             approval("/p", "cargo test", DeniedInHaunt),
             approval("/p", "cargo test", Superseded),
         ];
-        assert!(suggestions(log.iter(), |_| true, |_, _| false).is_empty(), "2 approvals in /p, 1 in /q");
+        assert!(suggestions(log.iter(), |_| true, |_, _| false).is_empty(), "1 approval in /p, 1 in /q");
+        log.push(approval("/p", "cargo test", AllowedInHaunt));
+        log.push(approval("/p", "cargo test", AnsweredInTerminal));
+        assert!(suggestions(log.iter(), |_| true, |_, _| false).is_empty(), "terminal answers never count");
         log.push(approval("/p", "cargo test", AllowedInHaunt));
         let s = suggestions(log.iter(), |_| true, |_, _| false);
         assert_eq!(s, [AllowSuggestion { project: "/p".into(), command: "cargo test".into(), rule: "Bash(cargo test)".into(), approvals: 3 }]);
@@ -339,6 +342,26 @@ mod tests {
         assert!(suggestions([no_raw.clone(), no_raw.clone(), no_raw].iter(), |_| true, |_, _| false).is_empty(), "old log lines");
         let log = [with_raw("ls\u{200b} -la"), with_raw("ls -la"), with_raw("ls -la")];
         assert!(suggestions(log.iter(), |_| true, |_, _| false).is_empty(), "the variant does not count toward the clean one");
+    }
+
+    #[test]
+    fn most_recently_approved_comes_first_and_many_entries_stay_fast() {
+        let mut log: Vec<_> = (0..3).flat_map(|_| [approval("/p", "a", Outcome::AllowedInHaunt), approval("/p", "b", Outcome::AllowedInHaunt)]).collect();
+        log.push(approval("/p", "a", Outcome::AllowedInHaunt));
+        let order: Vec<_> = suggestions(log.iter(), |_| true, |_, _| false).into_iter().map(|s| (s.command, s.approvals)).collect();
+        assert_eq!(order, [("a".to_owned(), 4), ("b".to_owned(), 3)]);
+
+        let log: Vec<_> = (0..10_000).map(|i| approval("/p", &format!("cmd {}", i % 3000), Outcome::AllowedInHaunt)).collect();
+        let t = std::time::Instant::now();
+        assert_eq!(suggestions(log.iter(), |_| true, |_, _| false).len(), 3000);
+        assert!(t.elapsed() < std::time::Duration::from_millis(200), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn plugin_answers_never_count() {
+        let by_plugin = || approval("/p", "ls", Outcome::AllowedByPlugin { plugin_id: "dev.x.y".into() });
+        let log = [by_plugin(), by_plugin(), by_plugin(), approval("/p", "ls", Outcome::AllowedInHaunt)];
+        assert!(suggestions(log.iter(), |_| true, |_, _| false).is_empty());
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::fs::{self, DirBuilder};
-use std::io::{BufRead, BufReader, ErrorKind, Read};
+use std::io::{BufRead, BufReader, ErrorKind};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -25,16 +25,26 @@ pub struct Limits {
     pub per_sec: f64,
     pub burst: f64,
     pub max_conns: usize,
+    /// Each line, counted from when the previous one ended, must arrive whole within this.
+    pub line_timeout: Duration,
+    /// A connection is closed after this, however steadily it trickles bytes.
+    pub conn_timeout: Duration,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_line: 64 * 1024, per_sec: 50.0, burst: 200.0, max_conns: 32 }
+        Self {
+            max_line: 64 * 1024,
+            per_sec: 50.0,
+            burst: 200.0,
+            max_conns: 32,
+            line_timeout: Duration::from_secs(2),
+            conn_timeout: Duration::from_secs(10),
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct Delivery {
     /// Empty when the line had no usable `surface_id`.
     pub surface_id: String,
@@ -72,7 +82,8 @@ struct Bucket {
 
 struct Shared {
     nonces: Mutex<HashMap<String, String>>,
-    buckets: Mutex<HashMap<String, Bucket>>,
+    /// Per (surface, verified): a flood of unverified lines can't use up the verified budget.
+    buckets: Mutex<HashMap<(String, bool), Bucket>>,
     limits: Limits,
     sink: Sink,
     conns: AtomicUsize,
@@ -111,7 +122,7 @@ impl Intake {
 
     pub fn unregister_surface(&self, surface_id: &str) {
         self.shared.nonces.lock().unwrap().remove(surface_id);
-        self.shared.buckets.lock().unwrap().remove(surface_id);
+        self.shared.buckets.lock().unwrap().retain(|(id, _), _| id != surface_id);
     }
 }
 
@@ -223,45 +234,63 @@ fn accept_loop(listener: UnixListener, s: Arc<Shared>) {
 }
 
 fn serve(stream: UnixStream, s: &Shared) {
-    // Hooks write a few lines and hang up; an idle peer cannot pin a thread forever.
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    // Hooks write a few lines and hang up. Deadlines, not idle timeouts, so a peer trickling a byte
+    // at a time can't hold one of the `max_conns` slots and starve the hooks.
+    let end = Instant::now() + s.limits.conn_timeout;
     let mut r = BufReader::new(stream);
     let mut line = Vec::new();
     loop {
         line.clear();
-        let n = match (&mut r).take(s.limits.max_line as u64 + 1).read_until(b'\n', &mut line) {
-            Ok(0) | Err(_) => return,
-            Ok(n) => n,
-        };
-        if line.last() != Some(&b'\n') && n > s.limits.max_line {
-            (s.sink)(reject(String::new(), n, format!("line over {} bytes", s.limits.max_line)));
-            if !skip_line(&mut r) {
-                return;
+        let deadline = end.min(Instant::now() + s.limits.line_timeout);
+        match read_line(&mut r, s.limits.max_line, deadline, &mut line) {
+            Line::End => return,
+            Line::TooLong(n) => (s.sink)(reject(String::new(), n, format!("line over {} bytes", s.limits.max_line))),
+            Line::Done => {
+                while matches!(line.last(), Some(b'\n' | b'\r')) {
+                    line.pop();
+                }
+                if !line.is_empty() {
+                    handle_line(&line, s);
+                }
             }
-            continue;
-        }
-        while matches!(line.last(), Some(b'\n' | b'\r')) {
-            line.pop();
-        }
-        if !line.is_empty() {
-            handle_line(&line, s);
         }
     }
 }
 
-/// Discards the rest of an oversize line; false at EOF or error.
-fn skip_line(r: &mut BufReader<UnixStream>) -> bool {
+pub(crate) enum Line {
+    Done,
+    /// Over `max` bytes; it was read to its newline and dropped.
+    TooLong(usize),
+    /// EOF, an error or the deadline: stop serving.
+    End,
+}
+
+/// Reads one line into `out`; all of it must arrive before `deadline`. A last line without a
+/// newline counts at EOF.
+pub(crate) fn read_line(r: &mut BufReader<UnixStream>, max: usize, deadline: Instant, out: &mut Vec<u8>) -> Line {
+    let mut seen = 0;
     loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Line::End;
+        }
+        // macOS refuses (EINVAL) once the peer has hung up, and then reads never block anyway.
+        let _ = r.get_ref().set_read_timeout(Some(left));
         let buf = match r.fill_buf() {
-            Ok([]) | Err(_) => return false,
+            Ok([]) if seen > 0 && seen <= max => return Line::Done,
+            Ok([]) | Err(_) => return Line::End,
             Ok(b) => b,
         };
-        if let Some(i) = buf.iter().position(|&b| b == b'\n') {
-            r.consume(i + 1);
-            return true;
+        let newline = buf.iter().position(|&b| b == b'\n');
+        let take = newline.map_or(buf.len(), |i| i + 1);
+        if seen + take <= max + 1 {
+            out.extend_from_slice(&buf[..take]);
         }
-        let len = buf.len();
-        r.consume(len);
+        seen += take;
+        r.consume(take);
+        if newline.is_some() {
+            return if seen > max + 1 { Line::TooLong(seen) } else { Line::Done };
+        }
     }
 }
 
@@ -278,8 +307,8 @@ fn handle_line(line: &[u8], s: &Shared) {
     if !s.nonces.lock().unwrap().contains_key(&surface_id) {
         return;
     }
-    let Some(dropped_before) = take_token(s, &surface_id) else { return };
     let mut d = decode(text, &s.nonces.lock().unwrap());
+    let Some(dropped_before) = take_token(s, &surface_id, d.verified) else { return };
     d.dropped_before = dropped_before;
     (s.sink)(d);
 }
@@ -307,12 +336,12 @@ pub(crate) fn decode(text: &str, nonces: &HashMap<String, String>) -> Delivery {
     }
 }
 
-/// Token bucket per surface; None means drop. Returns the drop count to report on success.
-fn take_token(s: &Shared, surface_id: &str) -> Option<u32> {
+/// Token bucket per surface and verified-ness; None means drop. Returns the drop count to report on success.
+fn take_token(s: &Shared, surface_id: &str, verified: bool) -> Option<u32> {
     let now = Instant::now();
     let mut buckets = s.buckets.lock().unwrap();
     let b = buckets
-        .entry(surface_id.to_owned())
+        .entry((surface_id.to_owned(), verified))
         .or_insert(Bucket { tokens: s.limits.burst, at: now, dropped: 0 });
     b.tokens = (b.tokens + now.duration_since(b.at).as_secs_f64() * s.limits.per_sec).min(s.limits.burst);
     b.at = now;
@@ -428,6 +457,60 @@ mod tests {
         assert_eq!(got.iter().filter(|x| x.surface_id == "s1").count(), 5);
         assert_eq!(got.iter().filter(|x| x.surface_id == "s2").count(), 1, "other surfaces unaffected");
         assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+        drop(intake);
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn an_unverified_flood_does_not_starve_verified_events() {
+        let limits = Limits { per_sec: 0.001, burst: 5.0, ..Limits::default() };
+        let (intake, rx, d) = start("starve", limits);
+        intake.register_surface("s1", "n1");
+        let forged = format!("{{{EV},\"surface_id\":\"s1\",\"nonce\":\"guess\"}}\n");
+        send(intake.path(), forged.repeat(50).as_bytes());
+        send(intake.path(), format!("{{{EV},\"surface_id\":\"s1\",\"nonce\":\"n1\"}}\n").as_bytes());
+        let got: Vec<_> = (0..6).map(|_| recv(&rx)).collect();
+        assert_eq!(got.iter().filter(|x| !x.verified).count(), 5);
+        assert_eq!(got.iter().filter(|x| x.verified).count(), 1, "the real event still arrives");
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+        drop(intake);
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn slow_connections_are_cut_off_and_cannot_hold_every_slot() {
+        let limits = Limits { max_conns: 2, line_timeout: Duration::from_millis(300), conn_timeout: Duration::from_millis(800), ..Limits::default() };
+        let (intake, rx, d) = start("loris", limits);
+        intake.register_surface("s1", "n1");
+        let line = format!("{{{EV},\"surface_id\":\"s1\"}}\n");
+        // One trickles a byte per 100 ms (inside the line timeout, never finishing a line); one
+        // sends whole lines slowly (inside the line timeout, but past the connection deadline).
+        let trickle = UnixStream::connect(intake.path()).unwrap();
+        let steady = UnixStream::connect(intake.path()).unwrap();
+        let t = Instant::now();
+        let (a, b, l) = (trickle.try_clone().unwrap(), steady.try_clone().unwrap(), line.clone());
+        let th = std::thread::spawn(move || {
+            let (mut a, mut b) = (a, b);
+            for i in 0..30 {
+                if a.write_all(b"x").is_err() && b.write_all(l.as_bytes()).is_err() {
+                    break;
+                }
+                if i % 2 == 0 {
+                    let _ = b.write_all(l.as_bytes());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let mut steady_lines = 0;
+        while rx.recv_timeout(Duration::from_millis(1500)).is_ok() {
+            steady_lines += 1;
+        }
+        assert!(steady_lines >= 2, "the steady peer was served at first");
+        assert!(t.elapsed() < Duration::from_secs(3), "both cut off by their deadlines: {:?}", t.elapsed());
+        send(intake.path(), line.as_bytes());
+        assert!(recv(&rx).event.is_some(), "a real hook gets a slot again");
+        drop((trickle, steady));
+        th.join().unwrap();
         drop(intake);
         fs::remove_dir_all(d).unwrap();
     }
