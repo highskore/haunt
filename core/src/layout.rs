@@ -4,27 +4,27 @@ use std::time::{Duration, Instant};
 
 use crate::session::{Session, Status};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct SidebarSnapshot {
     pub groups: Vec<SidebarGroup>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct SidebarGroup {
     pub label: String,
     pub rows: Vec<Row>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 pub enum RowKind {
     Shell,
     Claude,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct Row {
     pub surface_id: String,
@@ -36,16 +36,26 @@ pub struct Row {
     pub progress: Option<Progress>,
     pub subagents: Vec<Subrow>,
     pub selected: bool,
+    /// The verified request Allow/Deny may answer; its key goes back in `answer_permission`.
+    pub pending: Option<PendingRequest>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
+pub struct PendingRequest {
+    pub key: u64,
+    pub tool: String,
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct Progress {
     pub done: u64,
     pub total: u64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct Subrow {
     pub label: String,
@@ -103,6 +113,7 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
             progress: None,
             subagents: vec![],
             selected: s.selected,
+            pending: None,
         };
     }
 
@@ -140,6 +151,7 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
         progress,
         subagents,
         selected: s.selected,
+        pending: session.live_permission().map(|p| PendingRequest { key: p.key(), tool: p.tool.clone(), preview: p.preview() }),
     }
 }
 

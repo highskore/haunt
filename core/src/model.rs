@@ -1,11 +1,17 @@
 //! `Core`: surfaces, their agent sessions, the socket intake and the sidebar snapshot.
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
+use serde_json::{Value, json};
+
+use crate::allowlist::{self, AllowError, AllowSuggestion};
+use crate::ctl::{self, Ctl};
+use crate::decisions::{Decision, DecisionLog};
 use crate::event::{AgentEvent, parse_osc};
 use crate::intake::{Delivery, Intake, IntakeError, Limits, SOCKET_NAME};
 use crate::layout::{self, SidebarSnapshot, SurfaceView};
@@ -20,6 +26,19 @@ pub enum CoreError {
     Insecure { reason: String },
     #[error("io: {reason}")]
     Io { reason: String },
+    #[error("invalid: {reason}")]
+    Invalid { reason: String },
+}
+
+impl From<AllowError> for CoreError {
+    fn from(e: AllowError) -> Self {
+        let reason = e.to_string();
+        match e {
+            AllowError::Symlink(_) => Self::Insecure { reason },
+            AllowError::Invalid(_) => Self::Invalid { reason },
+            AllowError::Io(_) => Self::Io { reason },
+        }
+    }
 }
 
 impl From<IntakeError> for CoreError {
@@ -59,6 +78,9 @@ pub(crate) struct State {
     /// Basename of the login shell surfaces run, for shell rows.
     shell: Option<String>,
     listener: Option<Listener>,
+    decisions: DecisionLog,
+    /// (project, command) suggestions the user accepted or dismissed.
+    allow_done: HashSet<(String, String)>,
 }
 
 impl State {
@@ -69,18 +91,42 @@ impl State {
     /// One intake delivery; the intake already checked the nonce and the rate limit.
     pub(crate) fn deliver(&mut self, d: &Delivery, now: Instant) -> bool {
         let Some(event) = &d.event else { return false };
-        self.surface(&d.surface_id).is_some_and(|s| s.session.apply(event, d.verified, now))
+        let changed = self.surface(&d.surface_id).is_some_and(|s| s.session.apply(event, d.verified, now));
+        self.settle();
+        changed
+    }
+
+    /// A hook line checked against the registered nonces, as the intake does.
+    fn decode(&self, line: &str) -> Delivery {
+        let nonces = self.surfaces.iter().map(|s| (s.id.clone(), s.nonce.clone())).collect();
+        crate::intake::decode(line, &nonces)
     }
 
     /// A socket line as the intake would deliver it, minus the socket and the rate limit.
     #[cfg(test)]
     pub(crate) fn handle_line(&mut self, line: &str, now: Instant) -> bool {
-        let nonces = self.surfaces.iter().map(|s| (s.id.clone(), s.nonce.clone())).collect();
-        self.deliver(&crate::intake::decode(line, &nonces), now)
+        let d = self.decode(line);
+        self.deliver(&d, now)
     }
 
     fn apply_unverified(&mut self, id: &str, event: &AgentEvent, now: Instant) -> bool {
-        self.surface(id).is_some_and(|s| s.session.apply(event, false, now))
+        let changed = self.surface(id).is_some_and(|s| s.session.apply(event, false, now));
+        self.settle();
+        changed
+    }
+
+    /// Moves every ended request into the decision log. Only verified requests ever exist, so
+    /// unverified events can at most end one (as superseded), never add one.
+    fn settle(&mut self) {
+        for s in &mut self.surfaces {
+            for (p, outcome) in s.session.take_ended() {
+                self.decisions.record(Decision::new(&s.id, &p, outcome));
+            }
+        }
+    }
+
+    fn suggestions(&self) -> Vec<AllowSuggestion> {
+        allowlist::suggestions(self.decisions.iter(), |p, c| self.allow_done.contains(&(p.to_owned(), c.to_owned())))
     }
 
     pub(crate) fn snapshot(&self, now: Instant) -> SidebarSnapshot {
@@ -99,14 +145,14 @@ impl State {
     }
 }
 
-fn random_bytes() -> [u8; 16] {
+pub(crate) fn random_bytes() -> [u8; 16] {
     let mut b = [0; 16];
     // Without a random nonce the hook channel has no authentication at all, so failing here is fatal.
     File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).expect("read /dev/urandom");
     b
 }
 
-fn hex(b: &[u8]) -> String {
+pub(crate) fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
@@ -118,68 +164,122 @@ fn uuid() -> String {
     format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
 }
 
+struct Servers {
+    intake: Intake,
+    _ctl: Ctl,
+}
+
 /// Thread-safe; the listener fires on whichever thread caused the change, never under the lock.
 pub struct Core {
     dir: PathBuf,
     state: Arc<Mutex<State>>,
-    intake: Mutex<Option<Intake>>,
+    servers: Mutex<Option<Servers>>,
 }
 
 fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Runs `f` on the state and fires the listener, outside the lock, if it reports a change.
+fn update_state(state: &Mutex<State>, f: impl FnOnce(&mut State, Instant) -> bool) -> bool {
+    let mut st = lock(state);
+    let changed = f(&mut st, Instant::now());
+    let listener = st.listener.clone();
+    drop(st);
+    if changed && let Some(l) = listener {
+        l();
+    }
+    changed
+}
+
+const DEFAULT_LIMIT: u64 = 50;
+const MAX_LIMIT: u64 = 1000;
+
+/// One ctl request: `dump`, `event` (a hook line, nonce still required) or `decisions`.
+fn ctl_request(state: &Mutex<State>, line: &str) -> String {
+    let Ok(req) = serde_json::from_str::<Value>(line) else { return ctl::error("invalid json") };
+    match req.get("cmd").and_then(Value::as_str) {
+        Some("dump") => {
+            let snapshot = lock(state).snapshot(Instant::now());
+            let pending: Vec<Value> = snapshot
+                .groups
+                .iter()
+                .flat_map(|g| &g.rows)
+                .filter_map(|r| r.pending.as_ref().map(|p| json!({ "surface_id": r.surface_id, "key": p.key, "tool": p.tool, "preview": p.preview })))
+                .collect();
+            json!({ "ok": true, "snapshot": snapshot, "pending": pending }).to_string()
+        }
+        Some("event") => {
+            let hook_line = match req.get("line") {
+                Some(Value::String(s)) => s.clone(),
+                Some(v @ Value::Object(_)) => v.to_string(),
+                _ => return ctl::error("event needs a line"),
+            };
+            let mut verified = false;
+            let changed = update_state(state, |st, now| {
+                let d = st.decode(&hook_line);
+                verified = d.verified;
+                st.deliver(&d, now)
+            });
+            json!({ "ok": true, "verified": verified, "changed": changed }).to_string()
+        }
+        Some("decisions") => {
+            let query = req.get("query").and_then(Value::as_str).unwrap_or("");
+            let limit = req.get("limit").and_then(Value::as_u64).unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
+            json!({ "ok": true, "decisions": lock(state).decisions.query(query, limit) }).to_string()
+        }
+        _ => ctl::error("unknown cmd"),
+    }
+}
+
 impl Core {
     pub fn new(config_dir: impl Into<PathBuf>) -> Self {
         let shell = std::env::var("SHELL").ok().and_then(|s| s.rsplit('/').next().map(str::to_owned)).filter(|s| !s.is_empty());
         let state = State { home: std::env::var("HOME").ok(), shell, ..State::default() };
-        Self { dir: config_dir.into(), state: Arc::new(Mutex::new(state)), intake: Mutex::new(None) }
+        Self { dir: config_dir.into(), state: Arc::new(Mutex::new(state)), servers: Mutex::new(None) }
     }
 
     pub fn socket_path(&self) -> PathBuf {
         self.dir.join(SOCKET_NAME)
     }
 
-    /// Binds the intake socket and registers every surface's nonce with it; a second call is a no-op.
+    /// Binds the hook socket and the ctl socket, opens the decision log, and registers every
+    /// surface's nonce with the intake; a second call is a no-op.
     pub fn start(&self) -> Result<(), CoreError> {
-        let mut intake = self.intake.lock().unwrap_or_else(|e| e.into_inner());
-        if intake.is_some() {
+        let mut servers = self.servers.lock().unwrap_or_else(|e| e.into_inner());
+        if servers.is_some() {
             return Ok(());
         }
         let state = self.state.clone();
         let sink = Arc::new(move |d: Delivery| {
-            let mut st = lock(&state);
-            let changed = st.deliver(&d, Instant::now());
-            let listener = st.listener.clone();
-            drop(st);
-            if changed && let Some(l) = listener {
-                l();
-            }
+            update_state(&state, |st, now| st.deliver(&d, now));
         });
-        let bound = Intake::bind(&self.dir, Limits::default(), sink).map_err(CoreError::from)?;
+        // Binding the intake first secures the dir the log and ctl live in.
+        let intake = Intake::bind(&self.dir, Limits::default(), sink).map_err(CoreError::from)?;
+        lock(&self.state).decisions.open(&self.dir).map_err(|e| {
+            let reason = format!("decision log: {e}");
+            match e.raw_os_error() {
+                Some(libc::ELOOP) | None => CoreError::Insecure { reason },
+                Some(_) => CoreError::Io { reason },
+            }
+        })?;
+        let state = self.state.clone();
+        let ctl = Ctl::bind(&self.dir, Arc::new(move |line: &str| ctl_request(&state, line))).map_err(CoreError::from)?;
         for s in &lock(&self.state).surfaces {
-            bound.register_surface(&s.id, &s.nonce);
+            intake.register_surface(&s.id, &s.nonce);
         }
-        *intake = Some(bound);
+        *servers = Some(Servers { intake, _ctl: ctl });
         Ok(())
     }
 
     fn with_intake(&self, f: impl FnOnce(&Intake)) {
-        if let Some(i) = self.intake.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            f(i);
+        if let Some(s) = self.servers.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            f(&s.intake);
         }
     }
 
-    /// Runs `f` on the state and fires the listener if it reports a change.
     fn update(&self, f: impl FnOnce(&mut State, Instant) -> bool) -> bool {
-        let mut st = lock(&self.state);
-        let changed = f(&mut st, Instant::now());
-        let listener = st.listener.clone();
-        drop(st);
-        if changed && let Some(l) = listener {
-            l();
-        }
-        changed
+        update_state(&self.state, f)
     }
 
     pub fn register_surface(&self, cwd: &str) -> SurfaceEnv {
@@ -206,6 +306,10 @@ impl Core {
         self.with_intake(|i| i.unregister_surface(surface_id));
         self.update(|st, _| {
             let before = st.surfaces.len();
+            if let Some(s) = st.surface(surface_id) {
+                s.session.close();
+            }
+            st.settle();
             st.surfaces.retain(|s| s.id != surface_id);
             if st.selected.as_deref() == Some(surface_id) {
                 st.selected = None;
@@ -249,15 +353,41 @@ impl Core {
         lock(&self.state).listener = Some(listener);
     }
 
-    /// Bytes for `ghostty_surface_text` (Enter allows, Esc denies), only while that surface is
-    /// blocked on a nonce-verified permission request. The request is consumed.
-    pub fn answer_permission(&self, surface_id: &str, allow: bool) -> Option<Vec<u8>> {
-        let mut answered = false;
-        self.update(|st, now| {
-            answered = st.surface(surface_id).is_some_and(|s| s.session.answered(now));
+    /// Bytes for `ghostty_surface_text` (Enter allows, Esc denies), only while `request_key` is
+    /// that surface's live, nonce-verified permission request. The request is consumed.
+    pub fn answer_permission(&self, surface_id: &str, request_key: u64, allow: bool) -> Option<Vec<u8>> {
+        let answered = self.update(|st, now| {
+            let answered = st.surface(surface_id).is_some_and(|s| s.session.answer(request_key, allow, now));
+            st.settle();
             answered
         });
         answered.then(|| if allow { b"\r".to_vec() } else { b"\x1b".to_vec() })
+    }
+
+    /// Ended permission requests, newest first; see `DecisionLog::query`.
+    pub fn decisions(&self, query: &str, limit: u32) -> Vec<Decision> {
+        lock(&self.state).decisions.query(query, limit as usize)
+    }
+
+    pub fn allow_suggestions(&self) -> Vec<AllowSuggestion> {
+        lock(&self.state).suggestions()
+    }
+
+    /// Writes the suggested exact rule into `<project>/.claude/settings.local.json`.
+    pub fn accept_allow_suggestion(&self, project: &str, command: &str) -> Result<(), CoreError> {
+        let rule = lock(&self.state)
+            .suggestions()
+            .into_iter()
+            .find(|s| s.project == project && s.command == command)
+            .map(|s| s.rule)
+            .ok_or_else(|| CoreError::Invalid { reason: "no such suggestion".into() })?;
+        allowlist::add_rule(Path::new(project), &rule)?;
+        lock(&self.state).allow_done.insert((project.to_owned(), command.to_owned()));
+        Ok(())
+    }
+
+    pub fn dismiss_allow_suggestion(&self, project: &str, command: &str) {
+        lock(&self.state).allow_done.insert((project.to_owned(), command.to_owned()));
     }
 
     #[cfg(test)]
@@ -296,6 +426,118 @@ mod tests {
         env
     }
 
+    /// Answers with the surface's current key, so a None means no live request at all.
+    fn answer(c: &Core, id: &str, allow: bool) -> Option<Vec<u8>> {
+        let key = c.with_state(|st| st.surface(id).map_or(0, |s| s.session.current_key()));
+        c.answer_permission(id, key, allow)
+    }
+
+    fn pending(c: &Core) -> Option<crate::layout::PendingRequest> {
+        c.snapshot().groups.iter().flat_map(|g| &g.rows).find_map(|r| r.pending.clone())
+    }
+
+    #[test]
+    fn a_stale_request_key_writes_nothing() {
+        let c = core();
+        let env = blocked(&c, true);
+        let old = pending(&c).expect("a live request");
+        assert_eq!(old.preview, "git push");
+        let changed = r#""event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm -rf build"}"#;
+        c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), changed), Instant::now()));
+        assert_eq!(c.answer_permission(&env.surface_id, old.key, true), None);
+        let new = pending(&c).expect("the new request is still live");
+        assert_eq!(new.preview, "rm -rf build");
+        assert_eq!(c.answer_permission("other", new.key, true), None, "a key is only good for its surface");
+        assert_eq!(c.answer_permission(&env.surface_id, new.key, false), Some(b"\x1b".to_vec()));
+        let log: Vec<_> = c.decisions("", 10).into_iter().map(|d| (d.preview, d.outcome)).collect();
+        assert_eq!(log, [("rm -rf build".into(), crate::Outcome::DeniedInHaunt), ("git push".into(), crate::Outcome::Superseded)]);
+    }
+
+    #[test]
+    fn unverified_prompts_never_reach_the_decision_log() {
+        let c = core();
+        let env = blocked(&c, false);
+        c.with_state(|st| st.handle_line(&line(&env, None, r#""event":"stop""#), Instant::now()));
+        c.on_osc_notification(&env.surface_id, "haunt://cli-agent", &format!("{{\"v\":1,{PERM}}}"));
+        c.unregister_surface(&env.surface_id);
+        assert!(c.decisions("", 10).is_empty());
+
+        let env = blocked(&c, true);
+        c.unregister_surface(&env.surface_id);
+        let d = c.decisions("", 10);
+        assert_eq!((d.len(), d[0].outcome, d[0].surface_id.as_str()), (1, crate::Outcome::Superseded, env.surface_id.as_str()));
+    }
+
+    #[test]
+    fn three_verified_approvals_suggest_an_exact_rule() {
+        let project = format!("/tmp/haunt-allow-{}", std::process::id());
+        let _ = std::fs::remove_dir_all(&project);
+        std::fs::create_dir_all(&project).unwrap();
+        let c = core();
+        let env = c.register_surface(&project);
+        let perm = format!(r#""event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"cargo test"}}"#);
+        let ran = r#""event":"tool_ran","tool_name":"Bash","tool_input":{"command":"cargo test"}"#;
+        let send = |nonce: Option<&str>, body: &str| c.with_state(|st| st.handle_line(&line(&env, nonce, body), Instant::now()));
+        for _ in 0..3 {
+            send(None, &perm);
+            send(None, ran);
+        }
+        assert!(c.allow_suggestions().is_empty(), "unverified approvals never count");
+        send(Some(&env.nonce), &perm);
+        answer(&c, &env.surface_id, true).unwrap();
+        send(Some(&env.nonce), &perm);
+        send(Some(&env.nonce), ran);
+        assert!(c.allow_suggestions().is_empty());
+        send(Some(&env.nonce), &perm);
+        answer(&c, &env.surface_id, true).unwrap();
+        let s = c.allow_suggestions();
+        assert_eq!((s.len(), s[0].rule.as_str(), s[0].approvals), (1, "Bash(cargo test)", 3));
+
+        assert!(matches!(c.accept_allow_suggestion(&project, "cargo build"), Err(CoreError::Invalid { .. })));
+        c.accept_allow_suggestion(&project, "cargo test").unwrap();
+        let written = std::fs::read_to_string(format!("{project}/.claude/settings.local.json")).unwrap();
+        assert!(written.contains("\"Bash(cargo test)\""), "{written}");
+        assert!(c.allow_suggestions().is_empty(), "accepted once, never again");
+        std::fs::remove_dir_all(&project).unwrap();
+    }
+
+    #[test]
+    fn ctl_dumps_injects_and_queries() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixStream;
+        let dir = format!("/tmp/haunt-ctl-{}", std::process::id());
+        let _ = std::fs::remove_dir_all(&dir);
+        let c = Core::new(&dir);
+        c.start().unwrap();
+        let env = c.register_surface("/w");
+        let s = UnixStream::connect(format!("{dir}/ctl")).unwrap();
+        let mut r = BufReader::new(s.try_clone().unwrap());
+        let mut ask = |req: Value| -> Value {
+            writeln!(&s, "{req}").unwrap();
+            let mut out = String::new();
+            r.read_line(&mut out).unwrap();
+            serde_json::from_str(&out).unwrap()
+        };
+        let forged = json!({"cmd": "event", "line": line(&env, Some("bad"), PERM)});
+        assert_eq!(ask(forged)["verified"], false);
+        assert_eq!(ask(json!({"cmd": "dump"}))["pending"], json!([]), "a forged prompt has no request");
+        let real: Value = serde_json::from_str(&line(&env, Some(&env.nonce), PERM)).unwrap();
+        assert_eq!(ask(json!({"cmd": "event", "line": real}))["verified"], true);
+        let dump = ask(json!({"cmd": "dump"}));
+        assert_eq!(dump["pending"][0]["preview"], "git push");
+        assert_eq!(dump["snapshot"]["groups"][0]["rows"][0]["needs_you"], true);
+        assert!(!dump.to_string().contains(&env.nonce), "nonces never leave the core");
+        let key = dump["pending"][0]["key"].as_u64().unwrap();
+        assert!(c.answer_permission(&env.surface_id, key, true).is_some());
+        let got = ask(json!({"cmd": "decisions", "query": "push"}));
+        assert_eq!(got["decisions"][0]["outcome"], "allowed_in_haunt");
+        assert_eq!(ask(json!({"cmd": "nope"}))["ok"], false);
+        let log = std::fs::read_to_string(format!("{dir}/decisions.jsonl")).unwrap();
+        assert_eq!(log.lines().count(), 1);
+        drop(c);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn surfaces_get_unique_ids_and_128_bit_nonces() {
         let c = core();
@@ -312,12 +554,12 @@ mod tests {
     fn answer_only_for_a_verified_live_request() {
         let c = core();
         let env = blocked(&c, true);
-        assert_eq!(c.answer_permission(&env.surface_id, true), Some(b"\r".to_vec()));
-        assert_eq!(c.answer_permission(&env.surface_id, true), None, "consumed");
+        assert_eq!(answer(&c, &env.surface_id, true), Some(b"\r".to_vec()));
+        assert_eq!(answer(&c, &env.surface_id, true), None, "consumed");
 
         let env = blocked(&c, true);
-        assert_eq!(c.answer_permission(&env.surface_id, false), Some(b"\x1b".to_vec()));
-        assert_eq!(c.answer_permission("nope", true), None);
+        assert_eq!(answer(&c, &env.surface_id, false), Some(b"\x1b".to_vec()));
+        assert_eq!(answer(&c, "nope", true), None);
     }
 
     #[test]
@@ -326,11 +568,11 @@ mod tests {
         let env = blocked(&c, false);
         let row = &c.snapshot().groups[0].rows[0];
         assert!(row.needs_you, "status still moves");
-        assert_eq!(c.answer_permission(&env.surface_id, true), None);
+        assert_eq!(answer(&c, &env.surface_id, true), None);
 
         let env = c.register_surface("/w");
         c.with_state(|st| st.handle_line(&line(&env, None, PERM), Instant::now()));
-        assert_eq!(c.answer_permission(&env.surface_id, true), None);
+        assert_eq!(answer(&c, &env.surface_id, true), None);
     }
 
     #[test]
@@ -339,7 +581,7 @@ mod tests {
         let a = c.register_surface("/a");
         let b = c.register_surface("/b");
         c.with_state(|st| st.handle_line(&line(&b, Some(&a.nonce), PERM), Instant::now()));
-        assert_eq!(c.answer_permission(&b.surface_id, true), None);
+        assert_eq!(answer(&c, &b.surface_id, true), None);
     }
 
     #[test]
@@ -355,7 +597,7 @@ mod tests {
             let body = r#"{"v":1,"event":"notification","notification_type":"permission_prompt"}"#;
             c.on_osc_notification(&env.surface_id, "haunt://cli-agent", body);
             assert!(c.snapshot().groups[0].rows[0].needs_you);
-            assert_eq!(c.answer_permission(&env.surface_id, true), None, "{middle:?}");
+            assert_eq!(answer(&c, &env.surface_id, true), None, "{middle:?}");
         }
     }
 
@@ -366,7 +608,7 @@ mod tests {
         let body = format!(r#"{{"v":1,"nonce":"{}",{PERM}}}"#, env.nonce);
         c.on_osc_notification(&env.surface_id, "warp://cli-agent", &body);
         assert!(c.snapshot().groups[0].rows[0].needs_you);
-        assert_eq!(c.answer_permission(&env.surface_id, true), None, "even with the right nonce");
+        assert_eq!(answer(&c, &env.surface_id, true), None, "even with the right nonce");
         c.on_osc_notification(&env.surface_id, "Build done", "{}");
     }
 
@@ -378,7 +620,7 @@ mod tests {
             let ran = r#""event":"tool_ran","tool_name":"Bash","tool_input":{"command":"git push"}"#;
             st.handle_line(&line(&env, Some(&env.nonce), ran), Instant::now())
         });
-        assert_eq!(c.answer_permission(&env.surface_id, true), None);
+        assert_eq!(answer(&c, &env.surface_id, true), None);
     }
 
     #[test]
@@ -432,7 +674,7 @@ mod tests {
         writeln!(s, "{}", line(&env, Some(&env.nonce), PERM)).unwrap();
         drop(s);
         rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert_eq!(c.answer_permission(&env.surface_id, true), Some(b"\r".to_vec()));
+        assert_eq!(answer(&c, &env.surface_id, true), Some(b"\r".to_vec()));
         drop(c);
         let _ = std::fs::remove_dir_all(&dir);
     }

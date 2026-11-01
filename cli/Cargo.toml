@@ -1,0 +1,15 @@
+[package]
+name = "haunt-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "haunt"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+
+[dev-dependencies]
+haunt-core = { path = "../core", default-features = false }
