@@ -134,3 +134,26 @@ fn manifest_asking_for_terminal_read_is_rejected() {
     assert!(!home.join("plugins/dev.haunt.hello").exists());
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn same_id_from_another_path_prompts_as_a_replacement() {
+    let src = hello();
+    let home = home("takeover");
+    assert!(haunt(&home, &["plugin", "install", src.to_str().unwrap(), "--yes"], "").status.success());
+
+    let other = home.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::copy(src.join("target/wasm32-wasip2/release/hello_plugin.wasm"), other.join("plugin.wasm")).unwrap();
+    let manifest = std::fs::read_to_string(src.join("haunt-plugin.toml"))
+        .unwrap()
+        .replace("target/wasm32-wasip2/release/hello_plugin.wasm", "plugin.wasm");
+    std::fs::write(other.join("haunt-plugin.toml"), manifest).unwrap();
+
+    let o = haunt(&home, &["plugin", "install", other.to_str().unwrap()], "n\n");
+    let out = text(&o);
+    assert_eq!(o.status.code(), Some(1), "{out}");
+    assert!(out.contains(&format!("replaces dev.haunt.hello installed from {}", src.display())), "{out}");
+    assert!(out.contains("can see agent events"), "{out}");
+    assert!(text(&haunt(&home, &["plugin", "list"], "")).contains(src.to_str().unwrap()));
+    std::fs::remove_dir_all(home).unwrap();
+}

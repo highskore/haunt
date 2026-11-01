@@ -9,4 +9,5 @@ name = "haunt"
 path = "src/main.rs"
 
 [dependencies]
+serde_json.workspace = true
 haunt-core = { path = "../core" }

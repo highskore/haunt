@@ -74,11 +74,14 @@ pub struct Prompt {
     pub update_from: Option<String>,
     /// Set by `approve` when the files on disk no longer match the lockfile.
     pub changed_on_disk: bool,
+    /// Source of the installed plugin this one would replace, when the source differs.
+    pub replaces: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Installed {
     New,
+    Replaced { old_source: String },
     Updated { prompted: bool },
 }
 
@@ -191,12 +194,19 @@ impl Store {
             always: ALWAYS,
             update_from: None,
             changed_on_disk: false,
+            replaces: None,
         };
+        let source = src.display().to_string();
+        // Only a same-source update that adds nothing skips the prompt; an id is not an identity.
         let prompted = match &old {
-            Some(o) => {
+            Some(o) if o.source == source => {
                 prompt.update_from = Some(o.version.clone());
                 prompt.lines = caps.added_since(&o.granted);
                 !prompt.lines.is_empty()
+            }
+            Some(o) => {
+                prompt.replaces = Some(o.source.clone());
+                true
             }
             None => true,
         };
@@ -218,7 +228,7 @@ impl Store {
         let entry = LockEntry {
             id: id.clone(),
             version: manifest.plugin.version.clone(),
-            source: src.display().to_string(),
+            source,
             commit: None,
             sha256_wasm: sha(&wasm),
             sha256_manifest: sha(&manifest_bytes),
@@ -227,7 +237,11 @@ impl Store {
         lock.plugins.retain(|p| p.id != id);
         lock.plugins.push(entry);
         self.write_lock(&lock)?;
-        Ok(if old.is_some() { Installed::Updated { prompted } } else { Installed::New })
+        Ok(match old {
+            Some(o) if prompt.replaces.is_some() => Installed::Replaced { old_source: o.source },
+            Some(_) => Installed::Updated { prompted },
+            None => Installed::New,
+        })
     }
 
     /// Re-approves an installed plugin whose files changed on disk, pinning the new hashes.
@@ -255,6 +269,7 @@ impl Store {
             always: ALWAYS,
             update_from: None,
             changed_on_disk: e.sha256_wasm != sha(&wasm) || e.sha256_manifest != sha(&manifest_bytes),
+            replaces: None,
         };
         if !approve(&prompt) {
             return Err(StoreError::Declined);
@@ -450,13 +465,42 @@ mod tests {
         assert!(matches!(store.install(&s, &host, &mut |_| false), Err(StoreError::Declined)));
         assert!(!store.list().unwrap()[0].entry.granted.notifications, "declined update keeps the old grant");
         let mut added = Vec::new();
-        store.install(&s, &host, &mut |p| { added = p.lines.clone(); true }).unwrap();
+        store.install(&s, &host, &mut |p| { assert!(p.replaces.is_none() && p.update_from.is_some()); added = p.lines.clone(); true }).unwrap();
         assert_eq!(added.len(), 2, "{added:?}");
         assert!(store.list().unwrap()[0].entry.granted.notifications);
 
         store.remove("dev.haunt.t").unwrap();
         assert!(store.list().unwrap().is_empty());
         assert!(!home.join("plugins/dev.haunt.t").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn same_id_from_another_source_is_a_new_install() {
+        let dir = tempdir("takeover");
+        let store = Store::open(&dir.join("home")).unwrap();
+        let host = PluginHost::new().unwrap();
+        let first = src(&dir, "events = [\"agent.tool\"]\nnotifications = true");
+        store.install(&first, &host, &mut |_| true).unwrap();
+        let old_source = first.canonicalize().unwrap().display().to_string();
+
+        let other = dir.join("other");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join(MANIFEST), fs::read(first.join(MANIFEST)).unwrap()).unwrap();
+        fs::write(other.join("p.wasm"), "(component (core module))").unwrap();
+
+        let mut prompt = None;
+        assert!(matches!(store.install(&other, &host, &mut |p| { prompt = Some(p.clone()); false }), Err(StoreError::Declined)));
+        let p = prompt.expect("takeover must prompt even with the same capabilities");
+        assert_eq!(p.replaces.as_deref(), Some(old_source.as_str()));
+        assert_eq!(p.lines.len(), 2, "full capability list, not a diff: {:?}", p.lines);
+        assert!(p.update_from.is_none());
+        assert_eq!(store.list().unwrap()[0].entry.source, old_source, "declined takeover keeps the original");
+        assert!(store.list().unwrap()[0].problem.is_none());
+
+        let r = store.install(&other, &host, &mut |_| true).unwrap();
+        assert_eq!(r, Installed::Replaced { old_source });
+        assert_eq!(store.list().unwrap()[0].entry.source, other.canonicalize().unwrap().display().to_string());
         fs::remove_dir_all(dir).unwrap();
     }
 

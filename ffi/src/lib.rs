@@ -17,7 +17,10 @@ pub fn event_name(event: AgentEvent) -> String {
     event.kind.name().to_owned()
 }
 
-pub use haunt_core::{CoreError, Progress, SidebarGroup, Row, RowKind, SidebarSnapshot, Subrow, SurfaceEnv};
+pub use haunt_core::{
+    AllowSuggestion, CoreError, Decision, Outcome, PendingRequest, Progress, Row, RowKind, SidebarGroup, SidebarSnapshot, Subrow,
+    SurfaceEnv,
+};
 
 /// Called after any change to the snapshot, on the thread that caused it (often the socket thread).
 #[uniffi::export(callback_interface)]
@@ -70,8 +73,24 @@ impl HauntCore {
         self.core.set_listener(std::sync::Arc::new(move || listener.changed()));
     }
 
-    pub fn answer_permission(&self, surface_id: String, allow: bool) -> Option<Vec<u8>> {
-        self.core.answer_permission(&surface_id, allow)
+    pub fn answer_permission(&self, surface_id: String, request_key: u64, allow: bool) -> Option<Vec<u8>> {
+        self.core.answer_permission(&surface_id, request_key, allow)
+    }
+
+    pub fn decisions(&self, query: String, limit: u32) -> Vec<Decision> {
+        self.core.decisions(&query, limit)
+    }
+
+    pub fn allow_suggestions(&self) -> Vec<AllowSuggestion> {
+        self.core.allow_suggestions()
+    }
+
+    pub fn accept_allow_suggestion(&self, project: String, command: String) -> Result<(), CoreError> {
+        self.core.accept_allow_suggestion(&project, &command)
+    }
+
+    pub fn dismiss_allow_suggestion(&self, project: String, command: String) {
+        self.core.dismiss_allow_suggestion(&project, &command);
     }
 }
 

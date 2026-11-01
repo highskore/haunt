@@ -87,18 +87,7 @@ pub struct Intake {
 impl Intake {
     /// Binds `<dir>/sock` (0600) in a 0700 dir we own, and serves it on a background thread.
     pub fn bind(dir: &Path, limits: Limits, sink: Sink) -> Result<Self, IntakeError> {
-        let me = uid();
-        secure_dir(dir, me)?;
-        let path = dir.join(SOCKET_NAME);
-        if path.as_os_str().len() > MAX_PATH {
-            return Err(IntakeError::PathTooLong(path));
-        }
-        remove_stale(&path, me)?;
-        let listener = UnixListener::bind(&path)?;
-        // The 0700 dir already keeps others out; 0600 is the second wall.
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-        check_socket(&path, me)?;
-
+        let (listener, path) = bind_private(dir, SOCKET_NAME)?;
         let shared = Arc::new(Shared {
             nonces: Mutex::new(HashMap::new()),
             buckets: Mutex::new(HashMap::new()),
@@ -133,6 +122,22 @@ impl Drop for Intake {
         let _ = UnixStream::connect(&self.path);
         let _ = fs::remove_file(&self.path);
     }
+}
+
+/// Binds `<dir>/<name>` (0600) in a 0700 dir we own, replacing only a stale socket of ours.
+pub(crate) fn bind_private(dir: &Path, name: &str) -> Result<(UnixListener, PathBuf), IntakeError> {
+    let me = uid();
+    secure_dir(dir, me)?;
+    let path = dir.join(name);
+    if path.as_os_str().len() > MAX_PATH {
+        return Err(IntakeError::PathTooLong(path));
+    }
+    remove_stale(&path, me)?;
+    let listener = UnixListener::bind(&path)?;
+    // The 0700 dir already keeps others out; 0600 is the second wall.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    check_socket(&path, me)?;
+    Ok((listener, path))
 }
 
 pub fn uid() -> u32 {
@@ -181,7 +186,7 @@ fn secure_dir(dir: &Path, me: u32) -> Result<(), IntakeError> {
     Ok(())
 }
 
-fn peer_allowed(stream: &UnixStream, me: u32) -> bool {
+pub(crate) fn peer_allowed(stream: &UnixStream, me: u32) -> bool {
     peer_uid(stream) == Some(me)
 }
 

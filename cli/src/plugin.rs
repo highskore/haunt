@@ -12,7 +12,7 @@ const USAGE: &str = "usage:
   haunt plugin remove <id>
   haunt plugin approve <id> [--yes]";
 
-pub fn run(args: &[String]) -> i32 {
+pub fn run(args: &[String]) -> u8 {
     let yes = args.iter().any(|a| a == "--yes" || a == "-y");
     let pos: Vec<&str> = args.iter().map(String::as_str).filter(|a| !a.starts_with('-')).collect();
     let res = match pos.as_slice() {
@@ -44,6 +44,9 @@ fn host() -> Result<PluginHost, String> {
 
 fn show(p: &Prompt) {
     let red = std::io::stdout().is_terminal();
+    if let Some(old) = &p.replaces {
+        println!("replaces {} installed from {old}", p.id);
+    }
     match (&p.update_from, p.changed_on_disk) {
         (Some(from), _) => println!("{} ({}) {from} -> {} asks for new capabilities:", p.name, p.id, p.version),
         (None, true) => println!("{} ({}) {} changed on disk since it was approved. It:", p.name, p.id, p.version),
@@ -84,6 +87,7 @@ fn install(path: &Path, yes: bool) -> Result<(), String> {
     let res = store.install(path, &host()?, &mut asker(yes)).map_err(|e| e.to_string())?;
     match res {
         Installed::New => println!("installed into {}", store.plugins_dir().display()),
+        Installed::Replaced { old_source } => println!("replaced the plugin from {old_source}"),
         Installed::Updated { prompted: false } => println!("updated; no new capabilities"),
         Installed::Updated { prompted: true } => println!("updated"),
     }

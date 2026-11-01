@@ -1,23 +1,26 @@
 #!/bin/bash
-# Assembles build/haunt.app from the built binary, Ghostty resources and first-party plugins.
+# Assembles build/haunt.app from the built binary and Ghostty resources, then signs it.
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
-[ -x "$ROOT/build/macos/Haunt" ] || ./build.sh
+[ -x "$ROOT/build/macos/haunt" ] || ./build.sh
 
 APP="$ROOT/build/haunt.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/plugins"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp Info.plist "$APP/Contents/Info.plist"
-cp "$ROOT/build/macos/Haunt" "$APP/Contents/MacOS/Haunt"
-strip -x "$APP/Contents/MacOS/Haunt"
+cp "$ROOT/build/macos/haunt" "$APP/Contents/MacOS/haunt"
+strip -x "$APP/Contents/MacOS/haunt"
 cp -R deps/share/ghostty "$APP/Contents/Resources/ghostty"
 # libghostty sets TERMINFO to dirname(GHOSTTY_RESOURCES_DIR)/terminfo.
 cp -R deps/share/terminfo "$APP/Contents/Resources/terminfo"
-cp "$ROOT/examples/hello/target/wasm32-wasip2/release/hello_plugin.wasm" "$APP/Contents/Resources/plugins/hello.wasm"
-[ -f "$ROOT/design/icon/haunt.icns" ] && cp "$ROOT/design/icon/haunt.icns" "$APP/Contents/Resources/haunt.icns"
+cp "$ROOT/design/icon/haunt.icns" "$APP/Contents/Resources/haunt.icns"
 
-# Spike: ad hoc. Phase 0 item 4 wants a self-signed "haunt Dev" cert, which needs a keychain change.
-ID=$(security find-identity -p codesigning 2>/dev/null | awk '/"haunt Dev"/ { print $2; exit }' || true)
-codesign --force --sign "${ID:--}" "$APP"
-echo "built $APP ($( [ -n "$ID" ] && echo 'haunt Dev' || echo 'ad hoc'))"
+ID="${HAUNT_SIGN_ID:-Apple Development: rera2k12@gmail.com (MRSS328396)}"
+if codesign --force --timestamp=none --sign "$ID" "$APP" 2>"$ROOT/build/codesign.log"; then
+  echo "built $APP (signed: $ID)"
+else
+  echo "codesign with '$ID' failed ($(tail -1 "$ROOT/build/codesign.log")); signing ad hoc" >&2
+  codesign --force --sign - "$APP"
+  echo "built $APP (signed: ad hoc)"
+fi
