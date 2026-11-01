@@ -1,6 +1,6 @@
 # Agent event spec v1
 
-This is the contract every adapter emits and the core parses: haunt's Claude Code hook, `haunt-codex`, and any later one. The parser is `core/src/event.rs`; what the events do is `core/src/session.rs`, `progress.rs` and `intake.rs`. The examples at the end are parsed by a test in `event.rs`, so this file and the parser can't drift apart. MUST and SHOULD carry their RFC 2119 meaning.
+This is the contract every adapter emits and the core parses: `haunt-claude` (Claude Code), `haunt-codex` (Codex CLI), and any later one. The parser is `core/src/event.rs`; what the events do is `core/src/session.rs`, `progress.rs` and `intake.rs`. The examples at the end are parsed by a test in `event.rs`, so this file and the parser can't drift apart. MUST and SHOULD carry their RFC 2119 meaning.
 
 ## Agent ids
 

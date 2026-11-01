@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-const USAGE: &str = "usage: haunt dump\n       haunt decisions [query]\n       haunt plugin <install|list|remove|approve> ...";
+const USAGE: &str = "usage: haunt dump\n       haunt decisions [query]\n       haunt plugin <new|install|list|remove|approve> ...";
 
 fn ctl_path() -> Option<String> {
     std::env::var("HAUNT_CTL").ok().or_else(|| std::env::var("HOME").ok().map(|h| format!("{h}/.haunt/ctl")))

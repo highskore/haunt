@@ -154,6 +154,8 @@ A request keeps its command or file path exactly as sent. Its `preview` hides no
 
 Installed with `haunt plugin install <path>` (cli/), which shows the capabilities, asks y/N (`--yes` for scripts) and pins sha256 of the wasm and manifest in `~/.haunt/plugins.lock`. A plugin whose files no longer match is not loaded until `haunt plugin approve <id>`.
 
+`haunt plugin new <name> [--dir <path>] [--id <id>]` scaffolds a plugin repo from `cli/template/`, a snapshot of the `haunt-plugin-template` repo embedded in the binary, with `wit/haunt-plugin.wit` from this checkout. The id defaults to `dev.haunt.<name>` and must pass the same reverse-DNS rule as the manifest; it refuses a non-empty folder and runs `git init`. When the template repo changes, copy it over `cli/template/` (without `wit/`); `cli/tests/plugin.rs` builds and installs the scaffold.
+
 | call | what |
 |---|---|
 | `HauntPlugins.load(hauntDir:)` | loads every pinned plugin from `<hauntDir>/plugins` with only its granted imports; runs `init` |

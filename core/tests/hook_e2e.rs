@@ -1,15 +1,38 @@
-//! The real hook script delivering to the real socket.
+//! The real hook script from the haunt-claude adapter delivering to the real socket.
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use haunt_core::Core;
 
+/// `$HAUNT_CLAUDE_ADAPTER/scripts/haunt-hook.sh`, by default from a haunt-plugins checkout next to this repo.
+fn script() -> PathBuf {
+    let root = std::env::var_os("HAUNT_CLAUDE_ADAPTER")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../haunt-plugins/haunt-claude"));
+    root.join("scripts/haunt-hook.sh")
+}
+
+fn skip() -> bool {
+    if Command::new("jq").arg("--version").output().is_err() {
+        eprintln!("skipped: jq not installed");
+        return true;
+    }
+    if !script().is_file() {
+        eprintln!(
+            "skipped: Claude adapter not found at {}; clone haunt-claude there or set HAUNT_CLAUDE_ADAPTER to its checkout",
+            script().display()
+        );
+        return true;
+    }
+    false
+}
+
 fn hook(kind: &str, input: &str, env: &haunt_core::SurfaceEnv, nonce: &str) -> std::process::Output {
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../hooks/scripts/haunt-hook.sh");
-    let mut child = Command::new(script)
+    let mut child = Command::new(script())
         .arg(kind)
         .env("HAUNT", "1")
         .env("HAUNT_SOCK", &env.socket_path)
@@ -26,8 +49,7 @@ fn hook(kind: &str, input: &str, env: &haunt_core::SurfaceEnv, nonce: &str) -> s
 
 #[test]
 fn hook_over_socket_drives_a_verified_permission() {
-    if Command::new("jq").arg("--version").output().is_err() {
-        eprintln!("skipped: jq not installed");
+    if skip() {
         return;
     }
     let dir = format!("/tmp/haunt-hook-e2e-{}", std::process::id());
@@ -64,8 +86,7 @@ fn hook_over_socket_drives_a_verified_permission() {
 
 #[test]
 fn hook_keeps_a_hidden_newline_visible_and_unanswerable() {
-    if Command::new("jq").arg("--version").output().is_err() {
-        eprintln!("skipped: jq not installed");
+    if skip() {
         return;
     }
     let dir = format!("/tmp/haunt-hook-nl-{}", std::process::id());
