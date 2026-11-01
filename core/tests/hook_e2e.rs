@@ -46,13 +46,17 @@ fn hook_over_socket_drives_a_verified_permission() {
     let out = hook("permission_request", perm, &env, "wrong");
     assert!(out.stdout.is_empty(), "socket path, not OSC");
     wait();
-    assert!(core.snapshot().groups[0].rows[0].needs_you);
-    assert_eq!(core.answer_permission(&env.surface_id, true), None, "wrong nonce is status-only");
+    let row = core.snapshot().groups[0].rows[0].clone();
+    assert!(row.needs_you && row.pending.is_none(), "wrong nonce is status-only");
+    assert!((0..8).all(|key| core.answer_permission(&env.surface_id, key, true).is_none()));
 
     hook("permission_request", perm, &env, &env.nonce);
     wait();
-    assert_eq!(core.snapshot().groups[0].rows[0].meta, "/w · Approve: git push?");
-    assert_eq!(core.answer_permission(&env.surface_id, true), Some(b"\r".to_vec()));
+    let row = core.snapshot().groups[0].rows[0].clone();
+    assert_eq!(row.meta, "/w · Approve: git push?");
+    let key = row.pending.expect("verified request").key;
+    assert_eq!(core.answer_permission(&env.surface_id, key, true), Some(b"\r".to_vec()));
+    assert_eq!(core.decisions("git push", 5)[0].outcome, haunt_core::Outcome::AllowedInHaunt);
 
     drop(core);
     let _ = std::fs::remove_dir_all(&dir);

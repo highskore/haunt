@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "ffi"]
+members = ["cli", "core", "ffi"]
 # Plugins build for wasm32-wasip2 on their own.
 exclude = ["examples/hello"]
 
