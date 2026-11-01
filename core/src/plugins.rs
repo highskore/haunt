@@ -26,7 +26,6 @@ pub const MEMORY_CAP: usize = 64 << 20;
 const TICK: Duration = Duration::from_millis(10);
 /// 5 ticks of 10 ms: the plan's 50 ms per call.
 const CALL_TICKS: u64 = 5;
-const PTY_TEXT_CAP: usize = 1024;
 const PTY_PER_SEC: usize = 10;
 const MAX_PALETTE: usize = 64;
 const MAX_OUTBOX: usize = 256;
@@ -69,13 +68,13 @@ pub struct NotifyAction {
     pub title: String,
 }
 
-/// Side effects a plugin asked for; the app drains and performs them (pty through `ptygate`).
+/// Side effects a plugin asked for; the app drains and performs them. A `PtyAnswer` becomes bytes
+/// only through `Core::gate_plugin_request` (`ptygate`).
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 pub enum HostRequest {
     Notify { plugin_id: String, title: String, body: String, actions: Vec<NotifyAction>, binding: Option<String> },
-    PtyAnswer { plugin_id: String, surface: String, allow: bool, request_id: String },
-    PtyText { plugin_id: String, surface: String, text: String },
+    PtyAnswer { plugin_id: String, surface: String, allow: bool, request_id: u64 },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -284,10 +283,7 @@ impl wnotify::Host for HostState {
 }
 
 impl wpty::Host for HostState {
-    fn answer(&mut self, surface: String, allow: bool, request_id: String) -> Result<(), String> {
-        if request_id.is_empty() || request_id.len() > 128 {
-            return Err("invalid request id".into());
-        }
+    fn answer(&mut self, surface: String, allow: bool, request_id: u64) -> Result<(), String> {
         if !self.pty_rate_ok() {
             return Err(format!("pty rate limit ({PTY_PER_SEC}/s)"));
         }
@@ -295,27 +291,6 @@ impl wpty::Host for HostState {
         self.push_log(format!("info pty.answer surface={surface} allow={allow} request={request_id}"));
         self.request(HostRequest::PtyAnswer { plugin_id: self.id.clone(), surface, allow, request_id })
     }
-
-    fn text(&mut self, surface: String, text: String) -> Result<(), String> {
-        check_pty_text(&text)?;
-        if !self.pty_rate_ok() {
-            return Err(format!("pty rate limit ({PTY_PER_SEC}/s)"));
-        }
-        let surface = clip(surface);
-        self.push_log(format!("info pty.text surface={surface} bytes={}", text.len()));
-        self.request(HostRequest::PtyText { plugin_id: self.id.clone(), surface, text })
-    }
-}
-
-/// Printable text plus `\r` and ESC only, as plan section 3.8 requires.
-fn check_pty_text(text: &str) -> Result<(), String> {
-    if text.len() > PTY_TEXT_CAP {
-        return Err(format!("pty text over {PTY_TEXT_CAP} bytes"));
-    }
-    if text.chars().any(|c| c.is_control() && c != '\r' && c != '\x1b') {
-        return Err("pty text may only contain printable characters, \\r and ESC".into());
-    }
-    Ok(())
 }
 
 /// Wall time to the second and monotonic time to 10 ms, so plugins get no fine-grained timer.
@@ -653,11 +628,20 @@ mod tests {
         let pty = Component::new(
             &host.engine,
             r#"(component (import "haunt:plugin/pty@0.1.0" (instance
-                (export "text" (func (param "surface" string) (param "text" string) (result (result (error string))))))))"#,
+                (export "answer" (func (param "surface" string) (param "allow" bool) (param "request-id" u64) (result (result (error string))))))))"#,
         )
         .unwrap();
         assert!(host.check_links(&pty, &Capabilities::default()).is_err());
         host.check_links(&pty, &Capabilities { pty_write: true, ..Default::default() }).unwrap();
+
+        let text = Component::new(
+            &host.engine,
+            r#"(component (import "haunt:plugin/pty@0.1.0" (instance
+                (export "text" (func (param "surface" string) (param "text" string) (result (result (error string))))))))"#,
+        )
+        .unwrap();
+        let e = host.check_links(&text, &Capabilities { pty_write: true, ..Default::default() }).unwrap_err().0;
+        assert!(e.contains("text"), "free-form pty text is gone: {e}");
 
         let notify = Component::new(
             &host.engine,
@@ -735,14 +719,5 @@ mod tests {
         assert_eq!(again.map.get("b").map(String::as_str), Some("yy"));
         assert_eq!(again.bytes, 3);
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn pty_text_is_restricted() {
-        assert!(check_pty_text("yes\r").is_ok());
-        assert!(check_pty_text("\x1b[A").is_ok());
-        assert!(check_pty_text("rm -rf /\n").is_err());
-        assert!(check_pty_text("\x03").is_err());
-        assert!(check_pty_text(&"a".repeat(PTY_TEXT_CAP + 1)).is_err());
     }
 }

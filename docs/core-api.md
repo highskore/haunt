@@ -155,9 +155,12 @@ Installed with `haunt plugin install <path>` (cli/), which shows the capabilitie
 | `paletteItems(mode: nil, query:)` | registered commands and modes (`isMode`), title-filtered by `query` |
 | `paletteItems(mode: "word", query:)` | the items that mode's plugin returns for `query` |
 | `invokePaletteItem(pluginId:itemId:)` | calls the plugin's `on-action(itemId, "")` |
-| `takeRequests()` | `HostRequest.notify` / `.ptyAnswer` / `.ptyText` queued by plugins; pty writes go through `ptygate` |
+| `takeRequests()` | `HostRequest.notify` / `.ptyAnswer` queued by plugins |
+| `HauntCore.gatePluginRequest(request:)` | the only way to turn a `.ptyAnswer` into bytes (`core/src/ptygate.rs`); returns `PtyWrite { surfaceId, bytes }` or `nil` |
 
 Each call runs under a 50 ms CPU budget and 64 MB of memory; a trap or timeout disables that plugin until the next load.
+
+**pty writes** (`pty_write`): a plugin can only call `pty.answer(surface, allow, request-id: u64)`, where `request-id` is the `key` of that surface's pending request. There is no free-form text: a plugin typing arbitrary text with ESC or `\r` could drive the session. Pass every `.ptyAnswer` to `gatePluginRequest` and write exactly the bytes it returns to `surfaceId`; it goes through `answer_permission`, so the key must be the live request of that very surface, not suspicious and not retired by typing, and it is consumed. Never write anything for a request it returns `nil` for. The agent events plugins receive don't carry the key yet, so no plugin can use this until they do.
 
 ## Control socket and CLI
 

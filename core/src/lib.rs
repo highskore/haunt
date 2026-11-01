@@ -18,6 +18,8 @@ pub mod plugin_store;
 #[cfg(feature = "plugins")]
 pub mod plugins;
 pub mod progress;
+#[cfg(feature = "plugins")]
+pub mod ptygate;
 pub mod session;
 
 pub use allowlist::AllowSuggestion;

@@ -55,10 +55,10 @@ interface notify {
   notify: func(title: string, body: string, actions: list<action>, binding: option<string>) -> result<_, string>;
 }
 
-// Capability `pty_write`. `request-id` is the opaque id from the event, never the nonce.
+// Capability `pty_write`. `request-id` is the key of the surface's pending permission request.
+// haunt writes Allow or Deny only while that request is still live; there is no free-form text.
 interface pty {
-  answer: func(surface: string, allow: bool, request-id: string) -> result<_, string>;
-  text: func(surface: string, text: string) -> result<_, string>;
+  answer: func(surface: string, allow: bool, request-id: u64) -> result<_, string>;
 }
 
 // `read` and `list` need `fs_read`, `write` needs `fs_write`; paths must match the declared globs.

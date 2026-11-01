@@ -149,6 +149,17 @@ impl PluginHandle {
 
 #[cfg(feature = "plugins")]
 pub use haunt_core::plugins::{HostRequest, NotifyAction, PaletteItem};
+#[cfg(feature = "plugins")]
+pub use haunt_core::ptygate::PtyWrite;
+
+#[cfg(feature = "plugins")]
+#[uniffi::export]
+impl HauntCore {
+    /// For each request from `HauntPlugins.takeRequests()`: the bytes to write, or nil to write nothing.
+    pub fn gate_plugin_request(&self, request: HostRequest) -> Option<PtyWrite> {
+        self.core.gate_plugin_request(&request)
+    }
+}
 
 /// Installed plugins from `<haunt_dir>/plugins`, each with only the capabilities the user granted.
 #[cfg(feature = "plugins")]
