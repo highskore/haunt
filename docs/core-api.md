@@ -123,7 +123,7 @@ A surface becomes a Claude row with its first agent event and stays one until it
 
 - The directory is created with mode 0700. `start` refuses (`CoreError::Insecure`) a directory that is a symlink or is owned by another uid. If it has group or other bits, it is ours, so they are removed. The socket is chmod 0600, and its owner and mode are checked after `bind`.
 - A leftover socket of ours is replaced. `start` refuses anything else at that path, a socket owned by another uid, and a socket that still accepts connections (`CoreError::Io`: another haunt is running). It also refuses a path longer than `sun_path` allows.
-- Every connection's peer uid (`getpeereid`) must equal ours. At most 32 connections are open at once, each with a 2 s read timeout.
+- Every connection's peer uid (`getpeereid`) must equal ours. At most 32 connections are open at once. Each line must arrive whole within 2 s of the previous one, and a connection is closed after 10 s in total, so a peer trickling bytes can't hold the slots and silence the hooks.
 - Messages are newline-delimited JSON of at most 64 KB. A longer line is discarded, and the stream continues with the next line.
 - Each line is the hook's v1 envelope (`hooks/README.md`) plus `surface_id`. Lines for a surface that isn't registered are dropped before rate limiting, so random ids cost nothing. Each surface is rate-limited to 50 events/s with a burst of 200, separately for verified and unverified lines, so a flood of forged lines for a known surface id can't drop the real ones; extra lines are dropped and counted.
 
