@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use crate::event::{AgentEvent, EventKind, ToolCall};
+use crate::event::{Agent, AgentEvent, EventKind, ToolCall};
 use crate::progress::Progress;
 
 const MAX_PROMPT_CHARS: usize = 120;
@@ -29,6 +29,10 @@ pub struct Permission {
     pub raw_command: Option<String>,
     /// The hook's cwd, from the same verified event.
     pub cwd: Option<String>,
+    /// The agent that asked; it decides the answer keys.
+    pub agent: Agent,
+    /// The subagent that asked, `None` for the main thread.
+    thread: Option<String>,
     /// The `Session::generation` of the NeedsYou episode that created it.
     generation: u64,
     /// The user typed into the surface, so the terminal is answering; it only waits for its outcome.
@@ -52,14 +56,16 @@ pub enum Outcome {
 
 impl Permission {
     /// None when the input is missing: the user has to answer in the terminal then.
-    fn from_call(t: &ToolCall, cwd: Option<String>, generation: u64) -> Option<Self> {
+    fn from_call(t: &ToolCall, e: &AgentEvent, generation: u64) -> Option<Self> {
         let input = raw_input(t)?;
         Some(Self {
             tool: t.tool_name.clone(),
             input: Some(input),
             tool_use_id: t.tool_use_id.clone(),
             raw_command: t.raw_command.clone(),
-            cwd,
+            cwd: e.cwd.clone(),
+            agent: e.agent.as_str().into(),
+            thread: e.agent_id.clone(),
             generation,
             in_terminal: false,
         })
@@ -106,6 +112,8 @@ fn raw_input(t: &ToolCall) -> Option<String> {
 #[derive(Debug, Clone)]
 pub struct Session {
     pub is_agent: bool,
+    /// Set from verified events only, so a forged OSC body can't relabel the row.
+    pub agent: Agent,
     pub status: Status,
     pub prompt: Option<String>,
     /// The latest verified hook's cwd: a command-launched agent never reports its cwd through the shell.
@@ -128,6 +136,7 @@ impl Session {
     pub fn new(now: Instant) -> Self {
         Self {
             is_agent: false,
+            agent: Agent::Claude,
             status: Status::Idle,
             prompt: None,
             cwd: None,
@@ -157,6 +166,10 @@ impl Session {
             self.cwd = Some(c.clone());
             changed = true;
         }
+        if verified && self.agent.id() != e.agent {
+            self.agent = e.agent.as_str().into();
+            changed = true;
+        }
 
         match &e.kind {
             EventKind::PromptSubmit { query } => {
@@ -173,7 +186,7 @@ impl Session {
                     }
                     self.recent_starts.push_back(tool.clone());
                 }
-                if matches!(self.status, Status::Idle | Status::Done | Status::Failed) {
+                if matches!(self.status, Status::Idle | Status::Done | Status::Failed) || self.moved_on(e, tool, verified) {
                     self.set(Status::Running, now);
                 }
             }
@@ -186,6 +199,8 @@ impl Session {
                     if resolved {
                         self.end_permission(Outcome::AnsweredInTerminal);
                         self.set(Status::Running, now);
+                    } else if self.moved_on(e, tool, verified) {
+                        self.set(Status::Running, now);
                     }
                 }
             }
@@ -195,7 +210,7 @@ impl Session {
                 self.generation += 1;
                 self.end_permission(Outcome::Superseded);
                 if verified && !e.truncated
-                    && let Some(mut p) = Permission::from_call(tool, e.cwd.clone(), self.generation)
+                    && let Some(mut p) = Permission::from_call(tool, e, self.generation)
                 {
                     let start = self.recent_starts.iter().rev().find(|s| p.tool_use_id.is_none() && p.matches(s, false));
                     p.tool_use_id = start.and_then(|s| s.tool_use_id.clone());
@@ -218,6 +233,14 @@ impl Session {
             _ => {}
         }
         changed || before != (self.status, self.permission.clone(), self.prompt.clone())
+    }
+
+    /// A verified call other than the pending one, on the thread that asked: the prompt is gone. Only
+    /// for agents without Claude Code's failure hook (Codex), where a denied call never reports back.
+    fn moved_on(&self, e: &AgentEvent, tool: &ToolCall, verified: bool) -> bool {
+        self.permission.as_ref().is_some_and(|p| {
+            verified && p.agent != Agent::Claude && p.thread == e.agent_id && !p.matches(tool, e.truncated)
+        })
     }
 
     /// The permission an answer may go to: verified, created by the NeedsYou episode still on screen,
@@ -379,6 +402,77 @@ mod tests {
         assert_eq!(s.status, Status::Running);
     }
 
+    const CODEX_START: &str = r#"{"agent":"codex","event":"tool_start","tool_name":"Bash","tool_use_id":"c1","tool_input":{"command":"git push"}}"#;
+    const CODEX_PERM: &str = r#"{"agent":"codex","event":"permission_seen","tool_name":"Bash","tool_input":{"command":"git push"}}"#;
+
+    #[test]
+    fn the_agent_comes_from_verified_events_only() {
+        let (mut s, now) = running();
+        assert_eq!(s.agent, Agent::Claude, "no agent field is the legacy Claude hook");
+        assert!(s.apply(&ev(r#"{"agent":"codex","event":"session_start"}"#), true, now));
+        assert_eq!(s.agent, Agent::Codex);
+        s.apply(&ev(r#"{"agent":"claude","event":"session_start"}"#), false, now);
+        assert_eq!(s.agent, Agent::Codex, "a forged body can't relabel the row");
+        s.apply(&ev(r#"{"agent":"aider","event":"session_start"}"#), true, now);
+        assert_eq!(s.agent, Agent::Other { id: "aider".into() });
+    }
+
+    #[test]
+    fn a_codex_request_carries_its_agent_and_the_tool_start_id() {
+        let (mut s, now) = running();
+        s.apply(&ev(CODEX_START), true, now);
+        s.apply(&ev(CODEX_PERM), true, now);
+        let p = s.live_permission().unwrap();
+        assert_eq!((p.agent.clone(), p.tool_use_id.as_deref()), (Agent::Codex, Some("c1")));
+        s.apply(&ev(r#"{"agent":"codex","event":"tool_done","tool_name":"Bash","tool_use_id":"c1","tool_input":{"command":"git push"}}"#), true, now);
+        assert_eq!(s.status, Status::Running);
+        assert_eq!(s.take_ended().iter().map(|(_, o)| o.clone()).collect::<Vec<_>>(), [Outcome::AnsweredInTerminal]);
+    }
+
+    #[test]
+    fn a_codex_request_without_a_tool_start_matches_on_exact_input() {
+        let (mut s, now) = running();
+        s.apply(&ev(CODEX_PERM), true, now);
+        assert_eq!(s.live_permission().unwrap().tool_use_id, None);
+        s.apply(&ev(r#"{"agent":"codex","event":"tool_ran","tool_name":"Bash","tool_use_id":"c7","tool_input":{"command":"git push"}}"#), true, now);
+        assert_eq!(s.take_ended().iter().map(|(_, o)| o.clone()).collect::<Vec<_>>(), [Outcome::AnsweredInTerminal]);
+    }
+
+    #[test]
+    fn a_codex_request_ends_when_codex_moves_on() {
+        let other_start = r#"{"agent":"codex","event":"tool_start","tool_name":"Bash","tool_use_id":"c2","tool_input":{"command":"ls"}}"#;
+        let other_done = r#"{"agent":"codex","event":"tool_done","tool_name":"update_plan","tool_use_id":"c3","tool_input":{}}"#;
+        for next in [other_start, other_done, r#"{"agent":"codex","event":"prompt_submit","query":"no"}"#, r#"{"agent":"codex","event":"stop"}"#] {
+            let (mut s, now) = running();
+            s.apply(&ev(CODEX_START), true, now);
+            s.apply(&ev(CODEX_PERM), true, now);
+            s.apply(&ev(next), true, now);
+            assert_ne!(s.status, Status::NeedsYou, "{next}");
+            assert_eq!(s.take_ended().iter().map(|(_, o)| o.clone()).collect::<Vec<_>>(), [Outcome::Superseded], "{next}");
+        }
+    }
+
+    #[test]
+    fn a_codex_request_survives_other_threads_and_forged_calls() {
+        let (mut s, now) = running();
+        s.apply(&ev(CODEX_START), true, now);
+        s.apply(&ev(CODEX_PERM), true, now);
+        s.apply(&ev(r#"{"agent":"codex","event":"tool_start","agent_id":"th2","tool_name":"Bash","tool_input":{"command":"rg x"}}"#), true, now);
+        s.apply(&ev(r#"{"agent":"codex","event":"tool_start","tool_name":"Bash","tool_input":{"command":"ls"}}"#), false, now);
+        s.apply(&ev(r#"{"agent":"codex","event":"tool_start","tool_name":"Bash","tool_use_id":"c1","tool_input":{"command":"git push"}}"#), true, now);
+        assert!(s.live_permission().is_some(), "a subagent's call, a forged one and its own call leave it");
+        assert!(s.user_input());
+        assert_eq!(s.live_permission(), None, "typing retires it, as for Claude");
+    }
+
+    #[test]
+    fn a_claude_request_waits_through_other_calls() {
+        let (mut s, now) = running();
+        s.apply(&ev(PERM), true, now);
+        s.apply(&ev(r#"{"event":"tool_start","tool_name":"Bash","tool_input":{"command":"ls"}}"#), true, now);
+        assert!(s.live_permission().is_some(), "unchanged for Claude");
+    }
+
     #[test]
     fn unverified_events_change_status_but_never_the_permission() {
         let (mut s, now) = running();
@@ -449,7 +543,7 @@ mod tests {
         assert!(p.suspicious());
         assert!(!s.answer(p.key(), true, now), "answered in the terminal only");
         assert_eq!(s.live_permission(), Some(&p), "a refused answer leaves it live");
-        let p = Permission { tool: "Bash".into(), input: Some("a\u{202e}b".into()), tool_use_id: None, raw_command: None, cwd: None, generation: 0, in_terminal: false };
+        let p = Permission { tool: "Bash".into(), input: Some("a\u{202e}b".into()), tool_use_id: None, raw_command: None, cwd: None, agent: Agent::Claude, thread: None, generation: 0, in_terminal: false };
         assert_eq!(p.preview(), "a\\u{202e}b", "preview shows even input that skipped the parser");
     }
 

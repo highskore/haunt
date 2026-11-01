@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::event::Agent;
 use crate::session::{Session, Status};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -17,11 +18,13 @@ pub struct SidebarGroup {
     pub rows: Vec<Row>,
 }
 
+/// An agent with no kind of its own shows as `Claude`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 pub enum RowKind {
     Shell,
     Claude,
+    Codex,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -145,7 +148,10 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
     let subagents = if active { session.progress.subagents.iter().map(|a| subrow(session, a, now)).collect() } else { vec![] };
     Row {
         surface_id: s.id.to_owned(),
-        kind: RowKind::Claude,
+        kind: match session.agent {
+            Agent::Codex => RowKind::Codex,
+            _ => RowKind::Claude,
+        },
         name,
         meta: join(Some(place), task),
         status_text,
@@ -153,8 +159,10 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
         progress,
         subagents,
         selected: s.selected,
+        // An agent whose answer keys haunt doesn't know gets no Allow/Deny.
         pending: session
             .live_permission()
+            .filter(|p| p.agent.answer_bytes(true).is_some())
             .map(|p| PendingRequest { key: p.key(), tool: p.tool.clone(), preview: p.preview(), suspicious: p.suspicious() }),
     }
 }
@@ -353,6 +361,24 @@ mod tests {
         let views = [SurfaceView { id: "a", cwd: "/srv/app", branch: None, session: &s, selected: false }];
         let row = &snapshot(&views, HOME, Some("zsh"), t).groups[0].rows[0];
         assert_eq!((row.meta.as_str(), row.status_text.as_str()), ("/srv/app · fix the bug", ""));
+    }
+
+    #[test]
+    fn row_kind_follows_the_agent() {
+        let t = Instant::now();
+        let kind = |agent: &str, verified: bool| {
+            let mut s = Session::new(t);
+            let perm = format!(r#"{{"agent":"{agent}","event":"permission_seen","tool_name":"Bash","tool_input":{{"command":"git push"}}}}"#);
+            s.apply(&ev(&perm), verified, t);
+            let views = [SurfaceView { id: "a", cwd: "/w", branch: None, session: &s, selected: false }];
+            let row = snapshot(&views, HOME, None, t).groups[0].rows[0].clone();
+            (row.kind, row.meta, row.pending.is_some())
+        };
+        let approve = "/w · Approve: git push?".to_owned();
+        assert_eq!(kind("codex", true), (RowKind::Codex, approve.clone(), true));
+        assert_eq!(kind("codex", false), (RowKind::Claude, "/w · Waiting for you".into(), false), "unverified keeps the default");
+        assert_eq!(kind("claude", true), (RowKind::Claude, approve.clone(), true));
+        assert_eq!(kind("aider", true), (RowKind::Claude, approve, false), "shown, but answered in the terminal");
     }
 
     #[test]

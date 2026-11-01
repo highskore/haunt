@@ -370,9 +370,9 @@ impl Core {
     }
 
     /// Bytes for `ghostty_surface_text`, only while `request_key` is that surface's live,
-    /// nonce-verified permission request. The request is consumed. Allow is `1`, which Claude Code's
-    /// prompt maps to its first option, "Yes", wherever the highlight is; Enter would take the
-    /// highlighted one, which may be "don't ask again" or "No". Deny is Esc.
+    /// nonce-verified permission request. The request is consumed. The keys are the asking agent's
+    /// (`Agent::answer_bytes`); Enter is never sent, since it takes whichever option is highlighted.
+    /// An agent without known keys gets nothing and its request stays for the terminal.
     pub fn answer_permission(&self, surface_id: &str, request_key: u64, allow: bool) -> Option<Vec<u8>> {
         self.answer_by(surface_id, request_key, allow, None)
     }
@@ -385,12 +385,16 @@ impl Core {
             (Some(id), true) => Outcome::AllowedByPlugin { plugin_id: id.to_owned() },
             (Some(id), false) => Outcome::DeniedByPlugin { plugin_id: id.to_owned() },
         };
-        let answered = self.update(|st, now| {
-            let answered = st.surface(surface_id).is_some_and(|s| s.session.answer_as(request_key, outcome, now));
+        let mut bytes = None;
+        self.update(|st, now| {
+            bytes = st.surface(surface_id).and_then(|s| {
+                let b = s.session.live_permission()?.agent.answer_bytes(allow)?;
+                s.session.answer_as(request_key, outcome, now).then_some(b)
+            });
             st.settle();
-            answered
+            bytes.is_some()
         });
-        answered.then(|| if allow { b"1".to_vec() } else { b"\x1b".to_vec() })
+        bytes.map(<[u8]>::to_vec)
     }
 
     /// A key went to the surface's pty: from now on the terminal answers its pending request.
@@ -700,6 +704,69 @@ mod tests {
         let env = blocked(&c, true);
         assert_eq!(answer(&c, &env.surface_id, false), Some(b"\x1b".to_vec()));
         assert_eq!(answer(&c, "nope", true), None);
+    }
+
+    fn blocked_as(c: &Core, agent: &str) -> SurfaceEnv {
+        let env = c.register_surface("/w").unwrap();
+        let perm = format!(r#""agent":"{agent}",{PERM}"#);
+        c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &perm), Instant::now()));
+        env
+    }
+
+    #[test]
+    fn answer_keys_are_the_asking_agents() {
+        let c = core();
+        for (agent, allow, deny) in [("claude", b"1", b"\x1b"), ("codex", b"y", b"\x1b")] {
+            let env = blocked_as(&c, agent);
+            assert_eq!(answer(&c, &env.surface_id, true).as_deref(), Some(allow.as_slice()), "{agent}");
+            let env = blocked_as(&c, agent);
+            assert_eq!(answer(&c, &env.surface_id, false).as_deref(), Some(deny.as_slice()), "{agent}");
+        }
+        assert_eq!(c.decisions("", 4).iter().map(|d| d.agent.id()).collect::<Vec<_>>(), ["codex", "codex", "claude", "claude"]);
+    }
+
+    #[test]
+    fn an_unknown_agent_is_answered_in_the_terminal_only() {
+        let c = core();
+        let env = blocked_as(&c, "aider");
+        assert!(only_row(&c).needs_you && pending(&c).is_none());
+        assert_eq!(answer(&c, &env.surface_id, true), None);
+        assert_eq!(answer(&c, &env.surface_id, false), None);
+        assert!(c.with_state(|st| st.surface(&env.surface_id).unwrap().session.live_permission().is_some()), "not consumed");
+    }
+
+    #[test]
+    fn codex_approvals_are_never_suggested() {
+        let project = canonical_dir("allow-codex");
+        let c = core();
+        let env = c.register_surface(&project).unwrap();
+        let perm = format!(r#""agent":"codex","event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"cargo test"}}"#);
+        let ran = r#""agent":"codex","event":"tool_ran","tool_name":"Bash","tool_input":{"command":"cargo test"}"#;
+        let send = |body: &str| c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), body), Instant::now()));
+        for _ in 0..3 {
+            send(&perm);
+            answer(&c, &env.surface_id, true).unwrap();
+            send(&perm);
+            send(ran);
+        }
+        assert_eq!(c.decisions("", 10).len(), 6);
+        assert!(c.allow_suggestions().is_empty());
+        std::fs::remove_dir_all(&project).unwrap();
+    }
+
+    #[test]
+    fn a_codex_request_retires_on_typing_and_on_its_next_call() {
+        let c = core();
+        let env = blocked_as(&c, "codex");
+        let key = pending(&c).expect("live").key;
+        c.on_user_input(&env.surface_id);
+        assert_eq!(c.answer_permission(&env.surface_id, key, true), None);
+
+        let env = blocked_as(&c, "codex");
+        let next = r#""agent":"codex","event":"tool_start","tool_name":"Bash","tool_use_id":"c2","tool_input":{"command":"ls"}"#;
+        c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), next), Instant::now()));
+        assert_eq!(answer(&c, &env.surface_id, true), None, "Codex moved on: a `y` would land in its composer");
+        assert_eq!(c.decisions("", 1)[0].outcome, crate::Outcome::Superseded);
     }
 
     #[test]
