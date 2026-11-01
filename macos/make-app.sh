@@ -16,7 +16,8 @@ cp -R deps/share/ghostty "$APP/Contents/Resources/ghostty"
 cp -R deps/share/terminfo "$APP/Contents/Resources/terminfo"
 cp "$ROOT/design/icon/haunt.icns" "$APP/Contents/Resources/haunt.icns"
 
-ID="${HAUNT_SIGN_ID:-Apple Development: rera2k12@gmail.com (MRSS328396)}"
+# HAUNT_SIGN_ID or a gitignored .sign-id picks the identity; otherwise ad hoc.
+ID="${HAUNT_SIGN_ID:-$(cat "$ROOT/.sign-id" 2>/dev/null || echo -)}"
 if codesign --force --timestamp=none --sign "$ID" "$APP" 2>"$ROOT/build/codesign.log"; then
   echo "built $APP (signed: $ID)"
 else

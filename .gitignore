@@ -5,3 +5,4 @@ target/
 /build/
 *.xcodeproj/
 .DS_Store
+/.sign-id
