@@ -49,26 +49,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GhosttyAppDelegate {
             return
         }
         ghostty.delegate = self
+        buildMenu()
+
+        // The listener goes in before start() so no change is missed.
+        let c = MainWindowController(core: core, ghostty: ghostty, fixture: fixture)
+        controller = c
+        var startError: Error?
         do {
             try core.start()
         } catch {
+            startError = error
             Self.logger.error("core start failed: \(String(describing: error), privacy: .public)")
         }
-        buildMenu()
-
-        let c = MainWindowController(core: core, ghostty: ghostty, fixture: fixture)
-        controller = c
         Ghostty.App.desktopNotificationHook = { [weak c, weak self] view, title, body in
             guard let self, let tab = c?.tab(for: view) else { return false }
             self.core.onOscNotification(surfaceId: tab.env.surfaceId, title: title, body: body)
             // Agent events are the core's; other notifications still reach macOS.
-            return title.hasPrefix("warp://")
+            return title == "haunt://cli-agent" || title == "warp://cli-agent"
         }
         for _ in 0..<(fixture == nil ? 1 : Fixture.tabCount) { c.newTab(select: false) }
         c.refresh()
-        c.selectCoreSelection()
         c.window?.center()
         c.showWindow(nil)
+        if let startError { c.showStartError(startError) }
         // HAUNT_INACTIVE=1 lets the fidelity script capture the unfocused window state.
         if ProcessInfo.processInfo.environment["HAUNT_INACTIVE"] == "1" {
             NSApp.deactivate()
@@ -93,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GhosttyAppDelegate {
         let url = config.tomlURL
         if !FileManager.default.fileExists(atPath: url.path) {
             let template = """
-            # haunt config. Saved changes apply right away.
+            # Haunt config. Saved changes apply right away.
             # font = "\(Tok.Font.monoFamily)"
             # font_size = 12.5
 
@@ -121,16 +124,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GhosttyAppDelegate {
             return i
         }
 
-        submenu("haunt", [
-            item("About haunt", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), ""),
+        submenu("Haunt", [
+            item("About Haunt", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), ""),
             .separator(),
             item("Settings…", #selector(openConfig(_:)), ","),
             .separator(),
-            item("Hide haunt", #selector(NSApplication.hide(_:)), "h"),
+            item("Hide Haunt", #selector(NSApplication.hide(_:)), "h"),
             item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
             item("Show All", #selector(NSApplication.unhideAllApplications(_:)), ""),
             .separator(),
-            item("Quit haunt", #selector(NSApplication.terminate(_:)), "q"),
+            item("Quit Haunt", #selector(NSApplication.terminate(_:)), "q"),
         ])
         submenu("Edit", [
             item("Copy", #selector(Ghostty.SurfaceView.copy(_:)), "c"),

@@ -6,6 +6,7 @@ protocol CoreAPI: AnyObject {
     func registerSurface(cwd: String) -> SurfaceEnv
     func unregisterSurface(surfaceId: String)
     func setSurfaceInfo(surfaceId: String, title: String, cwd: String, gitBranch: String?)
+    func selectSurface(surfaceId: String)
     func onOscNotification(surfaceId: String, title: String, body: String)
     func snapshot() -> SidebarSnapshot
     func setListener(listener: CoreListener)
@@ -24,7 +25,8 @@ struct SurfaceEnv: Equatable, Hashable {
 }
 
 enum CoreError: Error {
-    case Io(message: String)
+    case Insecure(reason: String)
+    case Io(reason: String)
 }
 
 struct SidebarSnapshot: Equatable, Hashable {
@@ -42,8 +44,8 @@ enum RowKind: Equatable, Hashable {
 }
 
 struct Progress: Equatable, Hashable {
-    var done: UInt32
-    var total: UInt32
+    var done: UInt64
+    var total: UInt64
 }
 
 struct Subrow: Equatable, Hashable {
@@ -63,7 +65,20 @@ struct Row: Equatable, Hashable {
     var selected: Bool
 }
 
-protocol CoreListener: AnyObject {
+protocol CoreListener: AnyObject, Sendable {
     func changed()
 }
 #endif
+
+/// Bridges core change callbacks, which arrive on any thread, onto the main queue.
+final class MainQueueListener: CoreListener, @unchecked Sendable {
+    private let onChange: () -> Void
+
+    init(_ onChange: @escaping () -> Void) {
+        self.onChange = onChange
+    }
+
+    func changed() {
+        DispatchQueue.main.async(execute: onChange)
+    }
+}

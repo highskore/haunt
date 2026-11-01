@@ -36,11 +36,10 @@ enum Fixture: String {
 
     static let tabCount = tabs.count
 
-    func snapshot(surfaceIds ids: [String]) -> SidebarSnapshot {
-        let rows = zip(Self.tabs, ids).enumerated().map { i, pair in
-            let (t, id) = pair
+    func snapshot(surfaceIds ids: [String], selected: String?) -> SidebarSnapshot {
+        let rows = zip(Self.tabs, ids).map { t, id in
             return Row(surfaceId: id, kind: t.kind, name: t.name, meta: t.meta, statusText: t.status,
-                       needsYou: t.needs, progress: t.progress, subagents: t.subs, selected: i == 0)
+                       needsYou: t.needs, progress: t.progress, subagents: t.subs, selected: id == selected)
         }
         guard rows.count == Self.tabs.count else { return SidebarSnapshot(groups: []) }
         switch self {
@@ -48,9 +47,9 @@ enum Fixture: String {
             return SidebarSnapshot(groups: [SidebarGroup(label: "", rows: rows)])
         case .groupedFlat:
             return SidebarSnapshot(groups: [
-                SidebarGroup(label: "Needs you", rows: [rows[1]]),
-                SidebarGroup(label: "Running", rows: [rows[0]]),
-                SidebarGroup(label: "Idle", rows: [rows[2], rows[3]]),
+                SidebarGroup(label: "NEEDS YOU", rows: [rows[1]]),
+                SidebarGroup(label: "RUNNING", rows: [rows[0]]),
+                SidebarGroup(label: "IDLE", rows: [rows[2], rows[3]]),
             ])
         }
     }

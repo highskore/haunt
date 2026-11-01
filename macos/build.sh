@@ -1,6 +1,6 @@
 #!/bin/bash
-# Compiles the app against macos/deps/libghostty.a. HAUNT_CORE=real links haunt-core's UniFFI bindings;
-# the default builds against MockCore so the UI can be checked without the Rust core.
+# Compiles the app against macos/deps/libghostty.a and haunt-core's UniFFI bindings.
+# HAUNT_CORE=mock builds without Rust; fixtures (HAUNT_FIXTURE) use MockCore in either build.
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
@@ -11,7 +11,7 @@ BIN="$ROOT/build/macos"
 mkdir -p "$BIN"
 OPT="${HAUNT_SWIFT_OPT:--O}"
 CORE=()
-if [ "${HAUNT_CORE:-mock}" = real ]; then
+if [ "${HAUNT_CORE:-real}" = real ]; then
   U="$ROOT/build/uniffi"
   [ -f "$U/module.modulemap" ] || "$ROOT/scripts/build-core.sh"
   CORE=(-D HAUNT_REAL_CORE "$U"/*.swift -Xcc -fmodule-map-file="$U/module.modulemap" "$ROOT/target/release/libhaunt_ffi.a")
@@ -31,4 +31,4 @@ swiftc $OPT -enable-bare-slash-regex -module-name Haunt \
   -framework CoreGraphics -framework CoreFoundation -framework Carbon -framework UserNotifications \
   -framework UniformTypeIdentifiers -lc++ \
   -o "$BIN/haunt"
-echo "built $BIN/haunt (core: ${HAUNT_CORE:-mock})"
+echo "built $BIN/haunt (core: ${HAUNT_CORE:-real})"

@@ -12,6 +12,7 @@ final class MockCore: CoreAPI {
     private let fixture: Fixture?
     private var surfaces: [Surface] = []
     private var nextId = 1
+    private var selectedId: String?
     private weak var listener: CoreListener?
 
     init(fixture: Fixture?) {
@@ -42,6 +43,11 @@ final class MockCore: CoreAPI {
         notify()
     }
 
+    func selectSurface(surfaceId: String) {
+        selectedId = surfaceId
+        notify()
+    }
+
     func onOscNotification(surfaceId: String, title: String, body: String) {
         AppDelegate.logger.notice("mock core: osc surface=\(surfaceId, privacy: .public) title=\(title, privacy: .public) bytes=\(body.utf8.count)")
     }
@@ -53,14 +59,14 @@ final class MockCore: CoreAPI {
     func answerPermission(surfaceId: String, allow: Bool) -> Data? { nil }
 
     func snapshot() -> SidebarSnapshot {
-        if let fixture { return fixture.snapshot(surfaceIds: surfaces.map(\.id)) }
+        if let fixture { return fixture.snapshot(surfaceIds: surfaces.map(\.id), selected: selectedId) }
         let shell = ((ProcessInfo.processInfo.environment["SHELL"] ?? "zsh") as NSString).lastPathComponent
         let rows = surfaces.map { s in
             Row(surfaceId: s.id, kind: .shell, name: (s.cwd as NSString).lastPathComponent,
                 meta: "\((s.cwd as NSString).abbreviatingWithTildeInPath) · \(shell)",
-                statusText: "", needsYou: false, progress: nil, subagents: [], selected: false)
+                statusText: "", needsYou: false, progress: nil, subagents: [], selected: s.id == selectedId)
         }
-        return SidebarSnapshot(groups: rows.isEmpty ? [] : [SidebarGroup(label: "Idle", rows: rows)])
+        return SidebarSnapshot(groups: rows.isEmpty ? [] : [SidebarGroup(label: "IDLE", rows: rows)])
     }
 
     private func notify() {

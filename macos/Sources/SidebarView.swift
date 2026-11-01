@@ -3,7 +3,6 @@ import AppKit
 /// Mockup 06's grouped flat sidebar, drawn from a core `SidebarSnapshot`.
 final class SidebarView: NSView {
     var snapshot = SidebarSnapshot(groups: []) { didSet { relayout() } }
-    var selectedId: String? { didSet { needsDisplay = true } }
     var onSelect: ((String) -> Void)?
 
     private enum Item {
@@ -72,7 +71,7 @@ final class SidebarView: NSView {
     }
 
     private func drawRow(_ row: Row, top: CGFloat, height: CGFloat, ctx: CGContext) {
-        if row.surfaceId == selectedId {
+        if row.selected {
             Draw.fill(NSRect(x: 0, y: top, width: contentWidth, height: height), Tok.Color.rowSelected)
         }
         let padY = Tok.Size.rowPad[0], padX = Tok.Size.rowPad[1]

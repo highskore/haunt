@@ -44,7 +44,7 @@ private final class RootView: NSView {
     }
 }
 
-final class MainWindowController: NSWindowController, NSWindowDelegate, CoreListener {
+final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let core: CoreAPI
     private let ghostty: Ghostty.App
     private let fixture: Fixture?
@@ -53,6 +53,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, CoreList
     private var selectedId: String?
     private var refreshQueued = false
     private var observers: [NSObjectProtocol] = []
+    private var ticker: Timer?
+    private lazy var listener = MainQueueListener { [weak self] in self?.coalescedRefresh() }
 
     init(core: CoreAPI, ghostty: Ghostty.App, fixture: Fixture?) {
         self.core = core
@@ -62,7 +64,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, CoreList
         let win = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                            backing: .buffered, defer: false)
-        win.title = "haunt"
+        // Hidden in the title bar; still names the window in the Window menu and to accessibility.
+        win.title = "Haunt"
         win.titleVisibility = .hidden
         win.titlebarAppearsTransparent = true
         win.colorSpace = .sRGB
@@ -80,7 +83,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, CoreList
         root.titleBar.accessory = fixture?.titleAccessory ?? .icons
         root.titleBar.onIcon = { [weak self] icon in self?.titleIcon(icon) }
         root.sidebar.onSelect = { [weak self] id in self?.select(id) }
-        core.setListener(listener: self)
+        core.setListener(listener: listener)
+        // Subagent elapsed times are computed in snapshot(), so poll once a second to keep them ticking.
+        ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
 
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: Ghostty.Notification.ghosttyCloseSurface, object: nil, queue: .main) { [weak self] n in
@@ -140,7 +145,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, CoreList
     func select(_ id: String) {
         guard let tab = tabs.first(where: { $0.env.surfaceId == id }) else { return }
         selectedId = id
-        root.sidebar.selectedId = id
+        core.selectSurface(surfaceId: id)
         // Every surface stays in the window (hidden when not selected) so its size and display stay current.
         for t in tabs { t.host.isHidden = t !== tab }
         window?.makeFirstResponder(tab.view)
@@ -207,25 +212,30 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, CoreList
 
     // MARK: Core
 
-    func changed() {
+    /// A burst of hook events becomes one redraw.
+    private func coalescedRefresh() {
+        guard !refreshQueued else { return }
+        refreshQueued = true
         DispatchQueue.main.async { [weak self] in
-            guard let self, !self.refreshQueued else { return }
-            self.refreshQueued = true
-            DispatchQueue.main.async {
-                self.refreshQueued = false
-                self.refresh()
-            }
+            self?.refreshQueued = false
+            self?.refresh()
         }
     }
 
     func refresh() {
-        root.sidebar.snapshot = core.snapshot()
+        let snap = core.snapshot()
+        if snap != root.sidebar.snapshot { root.sidebar.snapshot = snap }
     }
 
-    /// Selects the row the core marks selected; the UI owns selection after launch.
-    func selectCoreSelection() {
-        if let row = root.sidebar.snapshot.groups.flatMap(\.rows).first(where: \.selected) { select(row.surfaceId) }
+    /// The core keeps running without its socket; agent rows then only get OSC status.
+    func showStartError(_ error: Error) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Haunt can't receive agent events"
+        alert.informativeText = "The hook socket didn't start: \(error). Agent rows will only show basic status."
+        alert.beginSheetModal(for: window)
     }
+
 
     // MARK: Title bar
 
