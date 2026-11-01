@@ -88,7 +88,7 @@ Requests only exist for verified events, so unverified events never add an entry
 
 ## Allowlist suggestions
 
-Nothing is allowed by default; the core only suggests. After 3 verified approvals (`AllowedInHaunt` or `AnsweredInTerminal`) of the same Bash command with the same hook cwd, `allow_suggestions()` lists it with the exact rule `Bash(<command>)`, most recently approved first.
+Nothing is allowed by default; the core only suggests. After 3 approvals in haunt (`AllowedInHaunt`; `AnsweredInTerminal` never counts, see the nonce limit below) of the same Bash command with the same hook cwd, `allow_suggestions()` lists it with the exact rule `Bash(<command>)`, most recently approved first.
 
 - Counting uses `Decision.command`, the command exactly as the hook sent it (`ToolCall.raw_command`), not the cleaned `preview`. An approval counts only if the two are equal, so a command that had invisible characters, tabs or newlines removed never counts, and a rule can't allow a cleaned variant of what was approved. Log lines without `command` (written before it existed) don't count.
 - Wildcards are never suggested: a command containing `*`, `(` or `)`, anything outside printable ASCII, leading or trailing spaces, or over 1024 bytes gets no suggestion.
@@ -139,6 +139,8 @@ A request resolves when a verified `tool_ran`, `tool_done` or `tool_failed` matc
 **Invisible characters**: the hook sends `tool_input` strings over the socket unmodified (JSON escapes keep them on one line). Every other decoded string has control characters and Unicode format characters (General_Category Cf: bidi overrides U+202A–202E and U+2066–2069, zero-widths U+200B–200F, U+2060, U+FEFF, soft hyphen, tags and so on) removed, and other whitespace turned into a space.
 
 A request keeps its command or file path exactly as sent. Its `preview` hides nothing: a newline shows as `⏎`, a tab as `⇥`, and any other control, Cf or non-space whitespace character as `\u{…}`, so `ls #\nrm -rf ~/x` shows as `ls #⏎rm -rf ~/x` and can't pass for a comment. A request with any such character is `suspicious`: `answer_permission` refuses it (it stays live until the terminal answers) and it is never suggested for the allowlist. Matching a request to its `tool_ran` uses the exact input too.
+
+**What the nonce does not protect against**: `HAUNT_HOOK_NONCE` is in the pty environment, so every process the session starts inherits it, including the commands Claude's tools run. Code running inside the session can therefore read it and forge verified events for its own surface: a fake `permission_seen` (which retires the real request and shows its own preview), a fake `tool_ran` (which logs `AnsweredInTerminal`), a fake cwd. Verification separates the hooks from other local programs and from text printed into the pty (OSC), not from the session's own tools. That is why `AnsweredInTerminal` never counts toward allowlist suggestions, only a click in haunt does, and why a plugin's `${cwd}` grant never widens to `$HOME` or the haunt dir.
 
 **OSC 777 fallback**: `haunt://cli-agent` and `warp://cli-agent` bodies go through the same parser, but they count for status only. The haunt hook sends a stripped-down status body there (no nonce, at most 250 bytes).
 

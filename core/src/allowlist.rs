@@ -51,8 +51,10 @@ pub fn rule_for(command: &str) -> Option<String> {
     ok.then(|| format!("Bash({command})"))
 }
 
+/// Only a click in haunt counts: an `AnsweredInTerminal` outcome rests on hook events, which code
+/// running inside the session can forge with the nonce it inherited.
 fn is_approval(d: &Decision) -> bool {
-    matches!(d.outcome, Outcome::AllowedInHaunt | Outcome::AnsweredInTerminal)
+    d.outcome == Outcome::AllowedInHaunt
 }
 
 /// The command an approval may count for: the raw one, and only if cleaning changed nothing, so
@@ -252,7 +254,10 @@ mod tests {
             approval("/p", "cargo test", DeniedInHaunt),
             approval("/p", "cargo test", Superseded),
         ];
-        assert!(suggestions(log.iter(), |_| true, |_, _| false).is_empty(), "2 approvals in /p, 1 in /q");
+        assert!(suggestions(log.iter(), |_| true, |_, _| false).is_empty(), "1 approval in /p, 1 in /q");
+        log.push(approval("/p", "cargo test", AllowedInHaunt));
+        log.push(approval("/p", "cargo test", AnsweredInTerminal));
+        assert!(suggestions(log.iter(), |_| true, |_, _| false).is_empty(), "terminal answers never count");
         log.push(approval("/p", "cargo test", AllowedInHaunt));
         let s = suggestions(log.iter(), |_| true, |_, _| false);
         assert_eq!(s, [AllowSuggestion { project: "/p".into(), command: "cargo test".into(), rule: "Bash(cargo test)".into(), approvals: 3 }]);

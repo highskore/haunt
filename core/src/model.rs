@@ -550,11 +550,15 @@ mod tests {
         assert!(c.allow_suggestions().is_empty(), "unverified approvals never count");
         send(Some(&env.nonce), &perm);
         answer(&c, &env.surface_id, true).unwrap();
-        send(Some(&env.nonce), &perm);
-        send(Some(&env.nonce), ran);
-        assert!(c.allow_suggestions().is_empty());
-        send(Some(&env.nonce), &perm);
-        answer(&c, &env.surface_id, true).unwrap();
+        for _ in 0..3 {
+            send(Some(&env.nonce), &perm);
+            send(Some(&env.nonce), ran);
+        }
+        assert!(c.allow_suggestions().is_empty(), "answers in the terminal never count");
+        for _ in 0..2 {
+            send(Some(&env.nonce), &perm);
+            answer(&c, &env.surface_id, true).unwrap();
+        }
         let s = c.allow_suggestions();
         assert_eq!((s.len(), s[0].rule.as_str(), s[0].approvals), (1, "Bash(cargo test)", 3));
 
