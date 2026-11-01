@@ -171,7 +171,7 @@ Each call runs under a 50 ms CPU budget and 64 MB of memory; a trap or timeout d
 
 ## Control socket and CLI
 
-`<config_dir>/ctl` (`core/src/ctl.rs`) is bound by `start` next to `sock`, with the same directory, 0600, stale-socket and peer-uid rules, but separately, so hook floods and rate limits never reach it. At most 8 connections, a 5 s read timeout, lines up to 64 KB. Each request is one JSON line and gets one JSON line back, `{"ok":false,"error":…}` on failure:
+`<config_dir>/ctl` (`core/src/ctl.rs`) is bound by `start` next to `sock`, with the same directory, 0600, stale-socket and peer-uid rules, but separately, so hook floods and rate limits never reach it. At most 8 connections; each line must arrive whole within 5 s of the previous one and a connection is closed after 10 s; lines up to 64 KB. Each request is one JSON line and gets one JSON line back, `{"ok":false,"error":…}` on failure:
 
 | request | response |
 |---|---|

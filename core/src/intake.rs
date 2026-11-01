@@ -257,7 +257,7 @@ fn serve(stream: UnixStream, s: &Shared) {
     }
 }
 
-enum Line {
+pub(crate) enum Line {
     Done,
     /// Over `max` bytes; it was read to its newline and dropped.
     TooLong(usize),
@@ -267,7 +267,7 @@ enum Line {
 
 /// Reads one line into `out`; all of it must arrive before `deadline`. A last line without a
 /// newline counts at EOF.
-fn read_line(r: &mut BufReader<UnixStream>, max: usize, deadline: Instant, out: &mut Vec<u8>) -> Line {
+pub(crate) fn read_line(r: &mut BufReader<UnixStream>, max: usize, deadline: Instant, out: &mut Vec<u8>) -> Line {
     let mut seen = 0;
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
