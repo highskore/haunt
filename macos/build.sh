@@ -13,7 +13,9 @@ OPT="${HAUNT_SWIFT_OPT:--O}"
 CORE=()
 if [ "${HAUNT_CORE:-real}" = real ]; then
   U="$ROOT/build/uniffi"
-  [ -f "$U/module.modulemap" ] || "$ROOT/scripts/build-core.sh"
+  # Always regenerate: stale bindings from an older core fail to compile. Cargo is a no-op when nothing changed.
+  rm -rf "$U"
+  "$ROOT/scripts/build-core.sh"
   CORE=(-D HAUNT_REAL_CORE "$U"/*.swift -Xcc -fmodule-map-file="$U/module.modulemap" "$ROOT/target/release/libhaunt_ffi.a")
 fi
 
