@@ -45,7 +45,7 @@ impl HauntCore {
         self.core.start()
     }
 
-    pub fn register_surface(&self, cwd: String) -> SurfaceEnv {
+    pub fn register_surface(&self, cwd: String) -> Result<SurfaceEnv, CoreError> {
         self.core.register_surface(&cwd)
     }
 

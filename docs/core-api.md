@@ -8,7 +8,7 @@ The Swift app talks to the core through one UniFFI object, `HauntCore` (`ffi/src
 object HauntCore {
   constructor(config_dir: string)                 // normally ~/.haunt
   fn start() -> Result<(), CoreError>             // binds sock and ctl, opens decisions.jsonl; a second call is a no-op
-  fn register_surface(cwd: string) -> SurfaceEnv
+  fn register_surface(cwd: string) -> Result<SurfaceEnv, CoreError>   // Invalid past 512 surfaces
   fn unregister_surface(surface_id: string)
   fn set_surface_info(surface_id: string, title: string, cwd: string, git_branch: Option<string>)
   fn select_surface(surface_id: string)           // marks Row.selected
@@ -52,7 +52,7 @@ In Swift, the generated `Progress` struct shadows `Foundation.Progress` inside t
 ## Using it
 
 1. Create one `HauntCore(configDir: "~/.haunt" expanded)`, call `setListener`, then `start()`. If `start` throws, show the reason and keep running: the OSC fallback still works, but only for status.
-2. For each new surface, call `registerSurface(cwd:)` and put these in the pty environment:
+2. For each new surface, call `try registerSurface(cwd:)` and put these in the pty environment. It throws `Invalid` once 512 surfaces are registered; open the tab without the env then (hooks fall back to status-only OSC).
 
    | variable | value |
    |---|---|
@@ -82,7 +82,7 @@ Every verified permission request is recorded once, when it ends, with its outco
 | `AnsweredInTerminal` | a verified `tool_ran`/`tool_done`/`tool_failed` matched it, so it was allowed at the terminal prompt |
 | `Superseded` | anything else ended it: a newer prompt, leaving `needs you` (including a denial typed in the terminal, which then shows up as the next prompt or stop), or the surface closing |
 
-Requests only exist for verified events, so unverified events never add an entry; they can only end a verified request, which is then logged as `Superseded`. Entries live in memory (the last 10,000) and in `<config_dir>/decisions.jsonl`, one JSON object per line, appended. `start` opens it with `O_NOFOLLOW`, refuses a symlink or a file of another uid, keeps it 0600, and loads the existing lines. Before `start` the log is memory-only.
+Requests only exist for verified events, so unverified events never add an entry; they can only end a verified request, which is then logged as `Superseded`. Entries live in memory (the last 10,000) and in `<config_dir>/decisions.jsonl`, one JSON object per line, appended. `start` opens it with `O_NOFOLLOW`, refuses a symlink or a file of another uid, keeps it 0600, and loads the existing lines. Loading is strict: a line with an unknown field or outcome, an empty surface id or tool, or a `command` that isn't a Bash command whose `preview` shows exactly that command is skipped. Before `start` the log is memory-only.
 
 `decisions(query, limit)` is for the ⌘K `log` mode: newest first, `query` is a case-insensitive substring of tool, preview, cwd, outcome (`allowed_in_haunt`, …) or surface id; empty matches all.
 

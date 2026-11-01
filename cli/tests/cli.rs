@@ -11,7 +11,7 @@ fn dump_and_decisions_over_ctl() {
     let _ = std::fs::remove_dir_all(&dir);
     let core = haunt_core::Core::new(&dir);
     core.start().unwrap();
-    let env = core.register_surface("/w");
+    let env = core.register_surface("/w").unwrap();
     let ctl = format!("{dir}/ctl");
 
     let (ok, out, _) = haunt(&ctl, &["dump"]);

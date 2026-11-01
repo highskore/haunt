@@ -34,7 +34,7 @@ fn hook_over_socket_drives_a_verified_permission() {
     let _ = std::fs::remove_dir_all(&dir);
     let core = Core::new(&dir);
     core.start().unwrap();
-    let env = core.register_surface("/w");
+    let env = core.register_surface("/w").unwrap();
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
     core.set_listener(Arc::new(move || {
@@ -72,7 +72,7 @@ fn hook_keeps_a_hidden_newline_visible_and_unanswerable() {
     let _ = std::fs::remove_dir_all(&dir);
     let core = Core::new(&dir);
     core.start().unwrap();
-    let env = core.register_surface("/w");
+    let env = core.register_surface("/w").unwrap();
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
     core.set_listener(Arc::new(move || {

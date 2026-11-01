@@ -33,8 +33,8 @@ mod tests {
     #[test]
     fn only_the_live_key_on_its_own_surface_writes() {
         let c = Core::new(format!("/tmp/haunt-gate-{}", std::process::id()));
-        let a = c.register_surface("/a");
-        let b = c.register_surface("/b");
+        let a = c.register_surface("/a").unwrap();
+        let b = c.register_surface("/b").unwrap();
         let perm = |env: &crate::SurfaceEnv| {
             let line = format!(
                 r#"{{"v":1,"surface_id":"{}","nonce":"{}","event":"permission_seen","tool_name":"Bash","tool_input":{{"command":"git push"}}}}"#,
