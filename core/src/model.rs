@@ -356,15 +356,22 @@ impl Core {
         lock(&self.state).listener = Some(listener);
     }
 
-    /// Bytes for `ghostty_surface_text` (Enter allows, Esc denies), only while `request_key` is
-    /// that surface's live, nonce-verified permission request. The request is consumed.
+    /// Bytes for `ghostty_surface_text`, only while `request_key` is that surface's live,
+    /// nonce-verified permission request. The request is consumed. Allow is `1`, which Claude Code's
+    /// prompt maps to its first option, "Yes", wherever the highlight is; Enter would take the
+    /// highlighted one, which may be "don't ask again" or "No". Deny is Esc.
     pub fn answer_permission(&self, surface_id: &str, request_key: u64, allow: bool) -> Option<Vec<u8>> {
         let answered = self.update(|st, now| {
             let answered = st.surface(surface_id).is_some_and(|s| s.session.answer(request_key, allow, now));
             st.settle();
             answered
         });
-        answered.then(|| if allow { b"\r".to_vec() } else { b"\x1b".to_vec() })
+        answered.then(|| if allow { b"1".to_vec() } else { b"\x1b".to_vec() })
+    }
+
+    /// A key went to the surface's pty: from now on the terminal answers its pending request.
+    pub fn on_user_input(&self, surface_id: &str) {
+        self.update(|st, _| st.surface(surface_id).is_some_and(|s| s.session.user_input()));
     }
 
     /// Ended permission requests, newest first; see `DecisionLog::query`.
@@ -476,6 +483,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::canonicalize(d).unwrap().to_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn a_key_typed_in_the_terminal_retires_the_request() {
+        let c = core();
+        let env = blocked(&c, true);
+        let key = pending(&c).expect("live").key;
+        c.on_user_input("other");
+        c.on_user_input(&env.surface_id);
+        assert!(pending(&c).is_none());
+        assert_eq!(c.snapshot().groups[0].rows[0].meta, "~/code/orchestrator · Waiting for you");
+        assert_eq!(c.answer_permission(&env.surface_id, key, true), None);
+        c.with_state(|st| {
+            let ran = r#""event":"tool_ran","tool_name":"Bash","tool_input":{"command":"git push"}"#;
+            st.handle_line(&line(&env, Some(&env.nonce), ran), Instant::now())
+        });
+        assert_eq!(c.decisions("", 1)[0].outcome, crate::Outcome::AnsweredInTerminal);
     }
 
     #[test]
@@ -595,7 +619,7 @@ mod tests {
     fn answer_only_for_a_verified_live_request() {
         let c = core();
         let env = blocked(&c, true);
-        assert_eq!(answer(&c, &env.surface_id, true), Some(b"\r".to_vec()));
+        assert_eq!(answer(&c, &env.surface_id, true), Some(b"1".to_vec()));
         assert_eq!(answer(&c, &env.surface_id, true), None, "consumed");
 
         let env = blocked(&c, true);
@@ -715,7 +739,7 @@ mod tests {
         writeln!(s, "{}", line(&env, Some(&env.nonce), PERM)).unwrap();
         drop(s);
         rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert_eq!(answer(&c, &env.surface_id, true), Some(b"\r".to_vec()));
+        assert_eq!(answer(&c, &env.surface_id, true), Some(b"1".to_vec()));
         drop(c);
         let _ = std::fs::remove_dir_all(&dir);
     }

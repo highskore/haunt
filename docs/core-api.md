@@ -16,6 +16,7 @@ object HauntCore {
   fn snapshot() -> SidebarSnapshot
   fn set_listener(listener: CoreListener)
   fn answer_permission(surface_id: string, request_key: u64, allow: bool) -> Option<bytes>
+  fn on_user_input(surface_id: string)           // every keyDown routed to that surface
   fn decisions(query: string, limit: u32) -> sequence<Decision>     // newest first
   fn allow_suggestions() -> sequence<AllowSuggestion>
   fn accept_allow_suggestion(project: string, command: string) -> Result<(), CoreError>
@@ -63,7 +64,11 @@ In Swift, the generated `Progress` struct shadows `Foundation.Progress` inside t
 3. On `PWD` and title changes, and whenever the git branch is known, call `setSurfaceInfo`. On tab selection, call `selectSurface`. When a tab closes, call `unregisterSurface`.
 4. On `GHOSTTY_ACTION_DESKTOP_NOTIFICATION` with title `haunt://cli-agent` or `warp://cli-agent`, call `onOscNotification`. The core ignores other titles, so the UI can pass every notification through and still show the non-agent ones itself.
 5. `changed()` fires on whatever thread made the change. That is often the socket thread. Hop to the main actor, then call `snapshot()`. It is never called while the core holds its lock, so calling back into the core is safe.
-6. Allow/Deny: a row with `pending` has a nonce-verified request. If `pending.suspicious` is set, show the preview with a warning and no Allow/Deny: the command is multi-line or has hidden characters, so it is answered only in the terminal, and `answerPermission` returns `nil` for it. Keep `pending.key` with whatever offers the answer (the button, a notification's `userInfo`) and pass it back: `answerPermission(surfaceId, requestKey, allow)` returns `"\r"` (allow) or `"\u{1b}"` (deny) for `ghostty_surface_text`. It returns them only while that key is still the surface's live request, and consumes the request, so a second call, or a key from a prompt that has since changed, returns `nil`. If it returns `nil`, write nothing.
+6. Allow/Deny: a row with `pending` has a nonce-verified request. If `pending.suspicious` is set, show the preview with a warning and no Allow/Deny: the command is multi-line or has hidden characters, so it is answered only in the terminal, and `answerPermission` returns `nil` for it. Keep `pending.key` with whatever offers the answer (the button, a notification's `userInfo`) and pass it back: `answerPermission(surfaceId, requestKey, allow)` returns `"1"` (allow) or `"\u{1b}"` (deny) for `ghostty_surface_text`. `1` picks Claude Code's first option, "Yes", wherever the highlight is, where Enter would pick the highlighted one ("Yes, and don't ask again" or "No" if the highlight moved). In a prompt that defaults to No, Claude Code hides the indexes and ignores digits, so `1` does nothing there rather than answering No. It returns them only while that key is still the surface's live request, and consumes the request, so a second call, or a key from a prompt that has since changed, returns `nil`. If it returns `nil`, write nothing.
+
+### UI must call
+
+- `onUserInput(surfaceId)` on every keyDown routed to a surface (before or as it goes to the pty). Once the user types at the terminal, the prompt may already be answered and the tool running until `PostToolUse` arrives, so a late Allow (`1`) or Deny (Esc) from haunt would be typed into the running session. The call retires the surface's live request: `pending` disappears, `answerPermission` returns `nil`, and the request is logged when its outcome is known (`AnsweredInTerminal` if the matching tool runs, else `Superseded`).
 
 Elapsed times in subrow meta are computed when `snapshot()` runs. A UI that wants them to tick can call `snapshot()` once a second while any row is running.
 
@@ -120,14 +125,14 @@ A surface becomes a Claude row with its first agent event and stays one until it
 - A leftover socket of ours is replaced. `start` refuses anything else at that path, a socket owned by another uid, and a socket that still accepts connections (`CoreError::Io`: another haunt is running). It also refuses a path longer than `sun_path` allows.
 - Every connection's peer uid (`getpeereid`) must equal ours. At most 32 connections are open at once, each with a 2 s read timeout.
 - Messages are newline-delimited JSON of at most 64 KB. A longer line is discarded, and the stream continues with the next line.
-- Each line is the hook's v1 envelope (`hooks/README.md`) plus `surface_id`. Lines for a surface that isn't registered are dropped before rate limiting, so random ids cost nothing. Each surface is rate-limited to 50 events/s with a burst of 200; extra lines are dropped and counted.
+- Each line is the hook's v1 envelope (`hooks/README.md`) plus `surface_id`. Lines for a surface that isn't registered are dropped before rate limiting, so random ids cost nothing. Each surface is rate-limited to 50 events/s with a burst of 200, separately for verified and unverified lines, so a flood of forged lines for a known surface id can't drop the real ones; extra lines are dropped and counted.
 
 **Nonce gating** (`core/src/session.rs`): an event is *verified* only if it came over the socket and its `nonce` matches that surface's nonce, compared in constant time. Unverified events (wrong or missing nonce, or any OSC 777 event) may change status and progress, but can never create an answerable request. The rules:
 
 - Only a verified `permission_seen` creates a request, and only if it isn't `truncated` and carries a command or file path. Otherwise the row shows "Waiting for you" and the user answers in the terminal.
 - Leaving `needs you` for any reason, verified or not, drops the request.
 - Each entry into `needs you`, and each `permission_seen`, starts a new generation. A request can be answered only in the generation that created it. So an unverified event that puts the row back into `needs you` (a forged stop and then a forged `permission_prompt`, say) can never revive an old request. A forged `permission_seen` retires the real one, which costs the user the button but never sends an answer to the wrong prompt.
-- `answer_permission` needs the surface to be in `needs you` with a live request at that moment whose key is the one passed in, and consumes it.
+- `answer_permission` needs the surface to be in `needs you` with a live request at that moment whose key is the one passed in, not `suspicious` and not retired by `on_user_input`, and consumes it.
 
 A request resolves when a verified `tool_ran`, `tool_done` or `tool_failed` matches it. The match is on `tool_use_id` when both sides have one (the id is taken from the matching `tool_start`), otherwise on tool name plus exact command or file path. An event with `truncated: true` never matches. Any change out of `needs you`, or an answer, also clears it.
 

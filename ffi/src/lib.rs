@@ -77,6 +77,11 @@ impl HauntCore {
         self.core.answer_permission(&surface_id, request_key, allow)
     }
 
+    /// Call on every keyDown routed to the surface, before it reaches the pty.
+    pub fn on_user_input(&self, surface_id: String) {
+        self.core.on_user_input(&surface_id);
+    }
+
     pub fn decisions(&self, query: String, limit: u32) -> Vec<Decision> {
         self.core.decisions(&query, limit)
     }

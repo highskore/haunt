@@ -72,7 +72,8 @@ struct Bucket {
 
 struct Shared {
     nonces: Mutex<HashMap<String, String>>,
-    buckets: Mutex<HashMap<String, Bucket>>,
+    /// Per (surface, verified): a flood of unverified lines can't use up the verified budget.
+    buckets: Mutex<HashMap<(String, bool), Bucket>>,
     limits: Limits,
     sink: Sink,
     conns: AtomicUsize,
@@ -111,7 +112,7 @@ impl Intake {
 
     pub fn unregister_surface(&self, surface_id: &str) {
         self.shared.nonces.lock().unwrap().remove(surface_id);
-        self.shared.buckets.lock().unwrap().remove(surface_id);
+        self.shared.buckets.lock().unwrap().retain(|(id, _), _| id != surface_id);
     }
 }
 
@@ -278,8 +279,8 @@ fn handle_line(line: &[u8], s: &Shared) {
     if !s.nonces.lock().unwrap().contains_key(&surface_id) {
         return;
     }
-    let Some(dropped_before) = take_token(s, &surface_id) else { return };
     let mut d = decode(text, &s.nonces.lock().unwrap());
+    let Some(dropped_before) = take_token(s, &surface_id, d.verified) else { return };
     d.dropped_before = dropped_before;
     (s.sink)(d);
 }
@@ -307,12 +308,12 @@ pub(crate) fn decode(text: &str, nonces: &HashMap<String, String>) -> Delivery {
     }
 }
 
-/// Token bucket per surface; None means drop. Returns the drop count to report on success.
-fn take_token(s: &Shared, surface_id: &str) -> Option<u32> {
+/// Token bucket per surface and verified-ness; None means drop. Returns the drop count to report on success.
+fn take_token(s: &Shared, surface_id: &str, verified: bool) -> Option<u32> {
     let now = Instant::now();
     let mut buckets = s.buckets.lock().unwrap();
     let b = buckets
-        .entry(surface_id.to_owned())
+        .entry((surface_id.to_owned(), verified))
         .or_insert(Bucket { tokens: s.limits.burst, at: now, dropped: 0 });
     b.tokens = (b.tokens + now.duration_since(b.at).as_secs_f64() * s.limits.per_sec).min(s.limits.burst);
     b.at = now;
@@ -427,6 +428,22 @@ mod tests {
         let got: Vec<_> = (0..6).map(|_| recv(&rx)).collect();
         assert_eq!(got.iter().filter(|x| x.surface_id == "s1").count(), 5);
         assert_eq!(got.iter().filter(|x| x.surface_id == "s2").count(), 1, "other surfaces unaffected");
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+        drop(intake);
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn an_unverified_flood_does_not_starve_verified_events() {
+        let limits = Limits { per_sec: 0.001, burst: 5.0, ..Limits::default() };
+        let (intake, rx, d) = start("starve", limits);
+        intake.register_surface("s1", "n1");
+        let forged = format!("{{{EV},\"surface_id\":\"s1\",\"nonce\":\"guess\"}}\n");
+        send(intake.path(), forged.repeat(50).as_bytes());
+        send(intake.path(), format!("{{{EV},\"surface_id\":\"s1\",\"nonce\":\"n1\"}}\n").as_bytes());
+        let got: Vec<_> = (0..6).map(|_| recv(&rx)).collect();
+        assert_eq!(got.iter().filter(|x| !x.verified).count(), 5);
+        assert_eq!(got.iter().filter(|x| x.verified).count(), 1, "the real event still arrives");
         assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
         drop(intake);
         fs::remove_dir_all(d).unwrap();

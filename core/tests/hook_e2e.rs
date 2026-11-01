@@ -55,7 +55,7 @@ fn hook_over_socket_drives_a_verified_permission() {
     let row = core.snapshot().groups[0].rows[0].clone();
     assert_eq!(row.meta, "/w · Approve: git push?");
     let key = row.pending.expect("verified request").key;
-    assert_eq!(core.answer_permission(&env.surface_id, key, true), Some(b"\r".to_vec()));
+    assert_eq!(core.answer_permission(&env.surface_id, key, true), Some(b"1".to_vec()));
     assert_eq!(core.decisions("git push", 5)[0].outcome, haunt_core::Outcome::AllowedInHaunt);
 
     drop(core);
