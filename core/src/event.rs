@@ -57,6 +57,11 @@ pub fn parse_osc(title: &str, body: &str) -> Result<AgentEvent, ParseError> {
     if !TITLES.contains(&title) {
         return Err(ParseError::NotAgentTitle { title: title.to_owned() });
     }
+    parse_body(body)
+}
+
+/// Parses one v1 event body, from OSC 777 or a socket line.
+pub fn parse_body(body: &str) -> Result<AgentEvent, ParseError> {
     if body.chars().any(char::is_control) {
         return Err(ParseError::ControlCharacter);
     }

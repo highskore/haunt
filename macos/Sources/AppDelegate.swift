@@ -1,6 +1,7 @@
 import AppKit
 import GhosttyKit
 import os
+import Security
 
 final class AppDelegate: NSObject, NSApplicationDelegate, GhosttyAppDelegate {
     static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "dev.haunt.Haunt", category: "app")
@@ -35,13 +36,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GhosttyAppDelegate {
         bridge = HauntBridge()
         buildMenu()
 
+        let surfaceId = UUID()
+        var nonceBytes = [UInt8](repeating: 0, count: 16)
+        _ = SecRandomCopyBytes(kSecRandomDefault, nonceBytes.count, &nonceBytes)
+        let nonce = nonceBytes.map { String(format: "%02x", $0) }.joined()
+        bridge?.intake?.registerSurface(surfaceId: surfaceId.uuidString, nonce: nonce)
+
         var config = Ghostty.SurfaceConfiguration()
-        config.environmentVariables = ["HAUNT": "1"]
+        config.environmentVariables = [
+            "HAUNT": "1",
+            "HAUNT_SURFACE_ID": surfaceId.uuidString,
+            "HAUNT_HOOK_NONCE": nonce,
+            "HAUNT_SOCK": bridge?.intake?.path() ?? "",
+        ]
         // Spike hook: HAUNT_INITIAL_INPUT is typed into the shell's pty once it starts.
         if let input = ProcessInfo.processInfo.environment["HAUNT_INITIAL_INPUT"] {
             config.initialInput = input
         }
-        let view = Ghostty.SurfaceView(app, baseConfig: config, uuid: nil)
+        let view = Ghostty.SurfaceView(app, baseConfig: config, uuid: surfaceId)
         surface = view
 
         let win = NSWindow(

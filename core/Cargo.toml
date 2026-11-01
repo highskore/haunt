@@ -7,7 +7,7 @@ version.workspace = true
 [features]
 default = ["plugins"]
 ffi = ["dep:uniffi"]
-plugins = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:sha2", "dep:hmac", "dep:getrandom", "dep:libc"]
+plugins = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:sha2", "dep:hmac", "dep:getrandom"]
 
 [dependencies]
 serde.workspace = true
@@ -18,7 +18,7 @@ wasmtime = { version = "50", optional = true, default-features = false, features
 sha2 = { version = "0.10", optional = true }
 hmac = { version = "0.12", optional = true }
 getrandom = { version = "0.3", optional = true }
-libc = { version = "0.2", optional = true }
+libc = "0.2"
 wasmtime-wasi = { version = "50", optional = true, default-features = false, features = ["p2"] }
 
 [dev-dependencies]

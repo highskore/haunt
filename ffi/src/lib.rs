@@ -64,3 +64,46 @@ impl PluginHandle {
         self.plugin.lock().unwrap().take_logs()
     }
 }
+
+pub use haunt_core::intake::Delivery;
+
+#[uniffi::export(with_foreign)]
+pub trait IntakeListener: Send + Sync {
+    /// Called on the intake thread; hop to the main actor before touching UI.
+    fn on_delivery(&self, delivery: Delivery);
+}
+
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum IntakeBindError {
+    #[error("{reason}")]
+    Failed { reason: String },
+}
+
+/// Hook-event socket at `<dir>/sock`; dropping it closes and unlinks the socket.
+#[derive(uniffi::Object)]
+pub struct HauntIntake {
+    inner: haunt_core::intake::Intake,
+}
+
+#[uniffi::export]
+impl HauntIntake {
+    #[uniffi::constructor]
+    pub fn bind(dir: String, listener: std::sync::Arc<dyn IntakeListener>) -> Result<std::sync::Arc<Self>, IntakeBindError> {
+        let sink: haunt_core::intake::Sink = std::sync::Arc::new(move |d| listener.on_delivery(d));
+        haunt_core::intake::Intake::bind(dir.as_ref(), Default::default(), sink)
+            .map(|inner| std::sync::Arc::new(Self { inner }))
+            .map_err(|e| IntakeBindError::Failed { reason: e.to_string() })
+    }
+
+    pub fn path(&self) -> String {
+        self.inner.path().display().to_string()
+    }
+
+    pub fn register_surface(&self, surface_id: String, nonce: String) {
+        self.inner.register_surface(&surface_id, &nonce);
+    }
+
+    pub fn unregister_surface(&self, surface_id: String) {
+        self.inner.unregister_surface(&surface_id);
+    }
+}
