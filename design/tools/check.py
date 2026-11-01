@@ -18,10 +18,13 @@ def run(capture, screen, offset=(0, 0), out_dir=DESIGN / "out"):
         sys.exit(f"unknown screen {screen!r}; known: {', '.join(manifest)}")
     spec = manifest[screen]
     ref = Image.open(DESIGN / f"reference/{screen}.png").convert("RGB")
-    raw = load_srgb(capture)
+    raw, profile = load_srgb(capture)
     dx, dy = offset
     app = raw.crop((dx, dy, dx + ref.width, dy + ref.height))
     results = []
+    if profile and "srgb" not in profile.lower():
+        print(f"WARNING: capture is tagged {profile!r}, not sRGB; converted to sRGB before comparing. "
+              "haunt should render in sRGB so its colours match the tokens.", file=sys.stderr)
     if (raw.width - dx, raw.height - dy) != ref.size:
         results.append({"kind": "size", "name": "window.size", "ok": False,
                         "detail": f"capture is {raw.width - dx}x{raw.height - dy} px after offset, reference is {ref.width}x{ref.height} px "
@@ -46,7 +49,7 @@ def run(capture, screen, offset=(0, 0), out_dir=DESIGN / "out"):
     out_dir.mkdir(parents=True, exist_ok=True)
     heatmap(ref, app, results).save(out_dir / f"{screen}-diff.png")
     ok = all(r["ok"] for r in results)
-    report = {"screen": screen, "capture": str(capture), "pass": ok,
+    report = {"screen": screen, "capture": str(capture), "profile": profile, "pass": ok,
               "failed": [r["name"] for r in results if not r["ok"]],
               "results": [{k: v for k, v in r.items() if k not in ("anchor", "edge")} for r in results]}
     (out_dir / f"{screen}-report.json").write_text(json.dumps(report, indent=1, ensure_ascii=False) + "\n")

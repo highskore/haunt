@@ -43,9 +43,10 @@ def delta_e(a, b):
 
 
 def load_srgb(path):
-    """Load a capture as sRGB RGB: screencapture tags PNGs with the display profile."""
+    """Load a capture as sRGB RGB; returns (image, source profile name or None)."""
     im = Image.open(path)
     icc = im.info.get("icc_profile")
+    name = None
     if im.mode in ("RGBA", "LA", "P"):
         im = im.convert("RGBA")
         bg = Image.new("RGBA", im.size, (0, 0, 0, 255))
@@ -53,8 +54,9 @@ def load_srgb(path):
     im = im.convert("RGB")
     if icc:
         src = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+        name = ImageCms.getProfileDescription(src).strip()
         im = ImageCms.profileToProfile(im, src, ImageCms.createProfile("sRGB"), outputMode="RGB")
-    return im
+    return im, name
 
 
 def in_bounds(im, x, y):

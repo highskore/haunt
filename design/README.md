@@ -29,9 +29,9 @@ design/check /tmp/shot.png ui-06-grouped-flat  # exit 0 = pass
 
 - Size the window to the screen's `size_pt` first, and load the mockup's `TABS` data so the rows line up.
 - Pass `--offset DX,DY` if the capture has extra pixels at its top-left, such as a window frame.
-- Anchors pass at ΔE76 ≤ 2 against the token colour. Text anchors use the inkiest pixel in the glyph box.
+- Anchors pass at ΔE76 ≤ 0.5 against the token colour for surfaces, hairlines and greys. Text and the Claude orange pass at ≤ 1.0, because text is read from the inkiest pixel in the glyph box. Override per anchor with `tol` in `screens.json`.
 - Edges pass at ±2 px, which is ±1 pt at 2x.
-- Captures that carry an ICC profile are converted to sRGB first. Untagged captures are assumed to be sRGB.
+- **haunt should render in sRGB**, because the tokens are sRGB hex values. Captures tagged with another profile, such as Display P3, are converted to sRGB with a loud warning. Untagged captures are assumed to be sRGB.
 - Output goes to `out/<screen>-diff.png`, which shows the diff in red with markers (green passes, red fails and is named), and to `out/<screen>-report.json`.
 
 ## Changing things
@@ -45,8 +45,6 @@ design/check /tmp/shot.png ui-06-grouped-flat  # exit 0 = pass
   - Every reference must pass its own check.
   - Every screen must fail when brightened +6 or shifted down 2 pt.
   - A sidebar made 2 pt wider must fail on `sidebar.right`.
-  - A recoloured selected row must fail on `row.sel.bg`.
+  - Near-identical greys must fail on the element that changed: `#0e0e0e` → `#0b0b0b` on `sidebar.bg`, `#1a1a1a` → `#1c1c1c` (and `#202020`) on `row.sel.bg`, and `#6b6b6b` → `#6f6f6f` on `label.text`.
+  - A Display P3-tagged copy of a reference must convert back and pass.
   - A one-step grey change in a copy of the mockup CSS must fail the token check.
-
-ΔE ≤ 2 can't tell some of these greys apart. For example, `#0b0b0b` vs `#0e0e0e` is ΔE 0.9, and `#6b6b6b`
-vs `#6f6f6f` is 1.6. To catch those, tighten `tol` on the anchors where it matters.

@@ -72,6 +72,11 @@ def expand(spec, groups):
     return anchors, edges
 
 
+def default_tol(a):
+    # Text is sampled as its inkiest pixel, so it gets a little slack that flat surfaces don't.
+    return 1.0 if a.get("text") or a["token"] == "color.claude" else 0.5
+
+
 def coord(expr, box, axis):
     if expr.endswith("%"):
         return (box["left"] if axis == "x" else box["top"]) + float(expr[:-1]) / 100 * (box["width"] if axis == "x" else box["height"])
@@ -117,7 +122,7 @@ def render(name, spec, groups, tokens):
         if box is None:
             continue
         expect = tokens[a["token"]]["value"]
-        entry = {"name": a["name"], "token": a["token"], "expect": expect, "tol": a.get("tol", 2.0)}
+        entry = {"name": a["name"], "token": a["token"], "expect": expect, "tol": a.get("tol", default_tol(a))}
         if a.get("text"):
             t = geo["text"][a["sel"]]
             rect = [math.floor(t["left"] * SCALE), math.floor(t["top"] * SCALE), math.ceil(t["right"] * SCALE), math.ceil(t["bottom"] * SCALE)]
