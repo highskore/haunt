@@ -7,6 +7,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::event::Agent;
 use crate::session::{Outcome, Permission};
 
 pub const FILE_NAME: &str = "decisions.jsonl";
@@ -26,6 +27,9 @@ pub struct Decision {
     pub command: Option<String>,
     pub cwd: Option<String>,
     pub outcome: Outcome,
+    /// Lines written before agents were recorded are Claude's.
+    #[serde(default)]
+    pub agent: Agent,
 }
 
 impl Decision {
@@ -39,6 +43,7 @@ impl Decision {
             command: p.raw_command.clone(),
             cwd: p.cwd.clone(),
             outcome,
+            agent: p.agent.clone(),
         }
     }
 
@@ -47,6 +52,7 @@ impl Decision {
     fn well_formed(&self) -> bool {
         !self.surface_id.is_empty()
             && !self.tool.is_empty()
+            && !self.agent.id().is_empty()
             && self.command.as_deref().is_none_or(|c| self.tool == "Bash" && crate::event::visible(c) == self.preview)
     }
 
@@ -153,7 +159,7 @@ mod tests {
     }
 
     fn decision(preview: &str, outcome: Outcome) -> Decision {
-        Decision { at_ms: 1, surface_id: "s".into(), tool: "Bash".into(), preview: preview.into(), command: None, cwd: Some("/p".into()), outcome }
+        Decision { at_ms: 1, surface_id: "s".into(), tool: "Bash".into(), preview: preview.into(), command: None, cwd: Some("/p".into()), outcome, agent: Agent::Claude }
     }
 
     #[test]
@@ -197,6 +203,18 @@ mod tests {
         log.open(&d).unwrap();
         assert_eq!(log.iter().count(), 1);
         fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn lines_without_an_agent_are_claudes() {
+        let old = r#"{"at_ms":1,"surface_id":"s","tool":"Bash","preview":"ls","command":"ls","cwd":"/p","outcome":"allowed_in_haunt"}"#;
+        assert_eq!(serde_json::from_str::<Decision>(old).unwrap().agent, Agent::Claude);
+        let codex = Decision { agent: Agent::Codex, ..decision("ls", Outcome::AllowedInHaunt) };
+        let line = serde_json::to_string(&codex).unwrap();
+        assert!(line.ends_with(r#""agent":"codex"}"#), "{line}");
+        assert_eq!(serde_json::from_str::<Decision>(&line).unwrap(), codex);
+        let other = r#"{"at_ms":1,"surface_id":"s","tool":"Bash","preview":"ls","cwd":"/p","outcome":"superseded","agent":"aider"}"#;
+        assert_eq!(serde_json::from_str::<Decision>(other).unwrap().agent, Agent::Other { id: "aider".into() });
     }
 
     #[test]

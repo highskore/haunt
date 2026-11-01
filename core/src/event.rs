@@ -4,6 +4,61 @@ use serde_json::Value;
 
 pub const TITLES: [&str; 2] = ["haunt://cli-agent", "warp://cli-agent"];
 
+/// The coding agent behind a session, from the envelope's `agent` id (docs/agent-events.md).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[serde(from = "String", into = "String")]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
+pub enum Agent {
+    #[default]
+    Claude,
+    Codex,
+    Other { id: String },
+}
+
+impl Agent {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Other { id } => id,
+        }
+    }
+
+    /// The keys that pick Allow or Deny in this agent's approval prompt; None where haunt doesn't know them.
+    /// Claude Code: `1` is "Yes" wherever the highlight is. Codex (0.136 tui keymap): `y` proceeds.
+    /// Esc cancels in both, declining the call.
+    pub fn answer_bytes(&self, allow: bool) -> Option<&'static [u8]> {
+        match (self, allow) {
+            (Self::Claude, true) => Some(b"1"),
+            (Self::Codex, true) => Some(b"y"),
+            (Self::Claude | Self::Codex, false) => Some(b"\x1b"),
+            (Self::Other { .. }, _) => None,
+        }
+    }
+}
+
+impl From<&str> for Agent {
+    fn from(id: &str) -> Self {
+        match id {
+            "claude" => Self::Claude,
+            "codex" => Self::Codex,
+            id => Self::Other { id: id.to_owned() },
+        }
+    }
+}
+
+impl From<String> for Agent {
+    fn from(id: String) -> Self {
+        id.as_str().into()
+    }
+}
+
+impl From<Agent> for String {
+    fn from(a: Agent) -> Self {
+        a.id().to_owned()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct AgentEvent {
@@ -308,4 +363,13 @@ mod tests {
         let e = parse_osc("haunt://cli-agent", r#"{"v":1,"event":"new_thing"}"#).unwrap();
         assert_eq!(e.kind.name(), "new_thing");
     }
+
+    #[test]
+    fn agent_ids_round_trip() {
+        for a in [Agent::Claude, Agent::Codex, Agent::Other { id: "aider".into() }] {
+            assert_eq!(Agent::from(a.id()), a);
+        }
+        assert_eq!(parse_body(r#"{"v":1,"event":"stop"}"#).unwrap().agent, "claude", "the legacy hook sends none");
+    }
+
 }
