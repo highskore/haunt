@@ -94,8 +94,20 @@ fn missing(field: &str) -> ParseError {
 }
 
 // JSON escapes can still decode to control characters, so every string is cleaned after decoding.
-fn clean(s: &str) -> String {
-    s.chars().filter_map(|c| if c.is_whitespace() { Some(' ') } else { (!c.is_control()).then_some(c) }).collect()
+/// Drops control and format (Cf) characters, so bidi overrides and zero-widths cannot disguise text.
+pub fn clean(s: &str) -> String {
+    s.chars()
+        .filter_map(|c| if c.is_whitespace() && !is_format(c) { Some(' ') } else { (!c.is_control() && !is_format(c)).then_some(c) })
+        .collect()
+}
+
+/// Unicode General_Category Cf (Unicode 16).
+pub fn is_format(c: char) -> bool {
+    matches!(c as u32,
+        0xAD | 0x600..=0x605 | 0x61C | 0x6DD | 0x70F | 0x890..=0x891 | 0x8E2 | 0x180E
+        | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB
+        | 0x110BD | 0x110CD | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A
+        | 0xE0001 | 0xE0020..=0xE007F)
 }
 
 fn str_field(v: &Value, k: &str) -> Option<String> {
@@ -240,6 +252,13 @@ mod tests {
     fn escaped_control_chars_are_stripped() {
         let e = parse_body(r#"{"v":1,"event":"prompt_submit","query":"a\u001b[2Jb\u0007c\nd"}"#).unwrap();
         assert_eq!(e.kind, EventKind::PromptSubmit { query: Some("a[2Jbc d".into()) });
+    }
+
+    #[test]
+    fn format_characters_are_stripped() {
+        let raw = "{\"v\":1,\"event\":\"prompt_submit\",\"query\":\"rm -rf \u{202E}/ \u{2066}x\u{2069}\u{200B}\u{200F}\u{2060}\u{FEFF}\u{AD}\u{E0041}y\"}";
+        assert_eq!(parse_body(raw).unwrap().kind, EventKind::PromptSubmit { query: Some("rm -rf / xy".into()) });
+        assert!(!is_format('a') && !is_format('é') && !is_format('👻'));
     }
 
     #[test]

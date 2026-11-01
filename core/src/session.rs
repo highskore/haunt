@@ -24,11 +24,15 @@ pub struct Permission {
     pub tool: String,
     pub input: Option<String>,
     pub tool_use_id: Option<String>,
+    /// The `Session::generation` of the NeedsYou episode that created it.
+    generation: u64,
 }
 
 impl Permission {
-    fn from_call(t: &ToolCall) -> Self {
-        Self { tool: t.tool_name.clone(), input: t.command.clone().or_else(|| t.file_path.clone()), tool_use_id: t.tool_use_id.clone() }
+    /// None when the input is missing: the user has to answer in the terminal then.
+    fn from_call(t: &ToolCall, generation: u64) -> Option<Self> {
+        let input = t.command.clone().or_else(|| t.file_path.clone())?;
+        Some(Self { tool: t.tool_name.clone(), input: Some(input), tool_use_id: t.tool_use_id.clone(), generation })
     }
 
     /// A truncated preview may differ from what was asked, so it never matches.
@@ -44,11 +48,12 @@ impl Permission {
 
     /// "git push" for Bash, "Edit /w/a.rs" for the rest.
     pub fn preview(&self) -> String {
-        match &self.input {
+        let text = match &self.input {
             Some(i) if self.tool == "Bash" => i.clone(),
             Some(i) => format!("{} {i}", self.tool),
             None => self.tool.clone(),
-        }
+        };
+        crate::event::clean(&text)
     }
 }
 
@@ -58,8 +63,10 @@ pub struct Session {
     pub status: Status,
     pub prompt: Option<String>,
     pub progress: Progress,
-    /// Only ever set from verified events.
+    /// Only ever set from a verified, untruncated `permission_seen`, and only while NeedsYou.
     pub permission: Option<Permission>,
+    /// Bumped on every entry into NeedsYou and every `permission_seen`.
+    generation: u64,
     pub turn_started: Option<Instant>,
     pub turn_finished: Option<Instant>,
     pub status_changed: Instant,
@@ -75,6 +82,7 @@ impl Session {
             prompt: None,
             progress: Progress::default(),
             permission: None,
+            generation: 0,
             turn_started: None,
             turn_finished: None,
             status_changed: now,
@@ -98,9 +106,6 @@ impl Session {
                 self.turn_started = Some(now);
                 self.turn_finished = None;
                 self.set(Status::Running, now);
-                if verified {
-                    self.permission = None;
-                }
             }
             EventKind::ToolStart { tool } => {
                 if verified {
@@ -120,29 +125,30 @@ impl Session {
                         None => main,
                     };
                     if resolved {
-                        if verified {
-                            self.permission = None;
-                        }
                         self.set(Status::Running, now);
                     }
                 }
             }
             EventKind::PermissionSeen { tool } => {
-                if verified {
-                    let mut p = Permission::from_call(tool);
+                self.set(Status::NeedsYou, now);
+                // Every prompt, forged or not, retires the one before it.
+                self.generation += 1;
+                self.permission = None;
+                if verified && !e.truncated
+                    && let Some(mut p) = Permission::from_call(tool, self.generation)
+                {
                     let start = self.recent_starts.iter().rev().find(|s| p.tool_use_id.is_none() && p.matches(s, false));
                     p.tool_use_id = start.and_then(|s| s.tool_use_id.clone());
                     self.permission = Some(p);
                 }
-                self.set(Status::NeedsYou, now);
             }
             EventKind::Notification { notification_type: Some(t), .. } if t == "permission_prompt" => {
                 self.set(Status::NeedsYou, now);
             }
-            EventKind::Stop => self.finish(Status::Done, verified, now),
+            EventKind::Stop => self.finish(Status::Done, now),
             // Names the official Warp plugin uses; status only.
             EventKind::Unknown { event } => match event.as_str() {
-                "stop_failure" => self.finish(Status::Failed, verified, now),
+                "stop_failure" => self.finish(Status::Failed, now),
                 "permission_request" | "question_asked" | "agent_needs_input" => self.set(Status::NeedsYou, now),
                 "permission_replied" | "tool_complete" if self.status == Status::NeedsYou && self.permission.is_none() => {
                     self.set(Status::Running, now)
@@ -154,9 +160,9 @@ impl Session {
         changed || before != (self.status, self.permission.clone(), self.prompt.clone())
     }
 
-    /// The permission an answer may go to: verified and still blocking.
+    /// The permission an answer may go to: verified, and created by the NeedsYou episode still on screen.
     pub fn live_permission(&self) -> Option<&Permission> {
-        self.permission.as_ref().filter(|_| self.status == Status::NeedsYou)
+        self.permission.as_ref().filter(|p| self.status == Status::NeedsYou && p.generation == self.generation)
     }
 
     /// Consumes the live permission after the UI answered it.
@@ -169,19 +175,24 @@ impl Session {
         true
     }
 
-    fn finish(&mut self, status: Status, verified: bool, now: Instant) {
+    fn finish(&mut self, status: Status, now: Instant) {
         self.turn_finished = Some(now);
         self.set(status, now);
-        if verified {
-            self.permission = None;
-        }
     }
 
+    /// Leaving NeedsYou always drops the request; entering it starts a new generation.
     fn set(&mut self, status: Status, now: Instant) {
-        if self.status != status {
-            self.status = status;
-            self.status_changed = now;
+        if self.status == status {
+            return;
         }
+        if self.status == Status::NeedsYou {
+            self.permission = None;
+        }
+        if status == Status::NeedsYou {
+            self.generation += 1;
+        }
+        self.status = status;
+        self.status_changed = now;
     }
 }
 
@@ -277,13 +288,66 @@ mod tests {
         assert_eq!(s.live_permission(), None);
 
         s.apply(&ev(PERM), true, now);
-        let key = s.permission.clone();
-        s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#), false, now);
+        assert!(s.live_permission().is_some());
         s.apply(&ev(RAN), false, now);
-        s.apply(&ev(r#"{"event":"stop"}"#), false, now);
-        assert_eq!(s.permission, key, "forged events leave the verified request alone");
-        assert_eq!(s.status, Status::Done);
-        assert_eq!(s.live_permission(), None, "and an answer needs the request to still block");
+        assert!(s.live_permission().is_some(), "a forged tool_ran does not resolve it");
+        s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#), false, now);
+        assert_eq!(s.status, Status::NeedsYou);
+        assert_eq!(s.live_permission(), None, "a forged prompt retires the real one rather than taking its place");
+    }
+
+    #[test]
+    fn stale_request_is_not_revived_by_unverified_needs_you() {
+        for middle in [None, Some(r#"{"event":"prompt_submit","query":"next"}"#)] {
+            let (mut s, now) = running();
+            s.apply(&ev(PERM), true, now);
+            s.apply(&ev(r#"{"event":"stop"}"#), false, now);
+            if let Some(m) = middle {
+                s.apply(&ev(m), false, now);
+            }
+            for revive in [r#"{"event":"notification","notification_type":"permission_prompt"}"#, r#"{"event":"permission_request"}"#] {
+                s.apply(&ev(revive), false, now);
+                assert_eq!(s.status, Status::NeedsYou);
+                assert_eq!(s.live_permission(), None, "{middle:?} {revive}");
+                assert!(!s.answered(now));
+            }
+        }
+    }
+
+    #[test]
+    fn a_request_belongs_to_its_own_needs_you_episode() {
+        let (mut s, now) = running();
+        s.apply(&ev(PERM), true, now);
+        let first = s.live_permission().cloned().unwrap();
+        s.apply(&ev(PERM), true, now);
+        let second = s.live_permission().cloned().unwrap();
+        assert_ne!(first, second, "a new prompt is a new generation even with the same text");
+        s.apply(&ev(r#"{"event":"notification","notification_type":"permission_prompt"}"#), true, now);
+        assert_eq!(s.live_permission(), Some(&second), "the prompt's own notification keeps it");
+    }
+
+    #[test]
+    fn truncated_or_inputless_prompt_is_not_answerable() {
+        for p in [
+            r#"{"event":"permission_seen","tool_name":"Bash","truncated":true,"tool_input":{"command":"git push"}}"#,
+            r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{}}"#,
+            r#"{"event":"permission_seen","tool_name":"ExitPlanMode","tool_input":{}}"#,
+        ] {
+            let (mut s, now) = running();
+            s.apply(&ev(p), true, now);
+            assert_eq!(s.status, Status::NeedsYou, "{p}");
+            assert_eq!(s.live_permission(), None, "{p}");
+        }
+    }
+
+    #[test]
+    fn preview_strips_invisible_characters() {
+        let (mut s, now) = running();
+        let spoof = "{\"event\":\"permission_seen\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hi \\u202e\\u2066/ fr- mr\\u2069\\u200b\\ufeff\"}}";
+        s.apply(&ev(spoof), true, now);
+        assert_eq!(s.live_permission().unwrap().preview(), "echo hi / fr- mr");
+        let p = Permission { tool: "Bash".into(), input: Some("a\u{202e}b\u{200d}c".into()), tool_use_id: None, generation: 0 };
+        assert_eq!(p.preview(), "abc", "preview cleans even input that skipped the parser");
     }
 
     #[test]

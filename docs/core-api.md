@@ -64,7 +64,7 @@ Groups, in order: `NEEDS YOU`, `RUNNING`, `IDLE`. Done, failed and shell rows go
 | field | shell | Claude |
 |---|---|---|
 | `name` | last path component of the cwd (`~` for home) | same |
-| `meta` | git branch, else the `~`-abbreviated cwd | `branch · task`; the cwd stands in for a missing branch |
+| `meta` | `~cwd · <shell>`, e.g. `~/code/vibes · zsh` (the basename of `$SHELL`) | `branch · task`; the cwd stands in for a missing branch |
 | `status_text` | empty | `needs you`, `3/5` (running with progress), empty (running without progress), `done`, `failed`, empty (idle) |
 | `progress` | none | `done/total` of the main agent's tasks, else of its latest TodoWrite |
 | `subagents` | none | while running or needing you: `label` = `Explore · trace hooks`, `meta` = `2/4 · 1m12s` or `14 tools · 48s` |
@@ -84,14 +84,21 @@ A surface becomes a Claude row with its first agent event and stays one until it
 
 - The directory is created with mode 0700. `start` refuses (`CoreError::Insecure`) a directory that is a symlink or is owned by another uid. If it has group or other bits, it is ours, so they are removed. The socket is chmod 0600, and its owner and mode are checked after `bind`.
 - A leftover socket of ours is replaced. `start` refuses anything else at that path, a socket owned by another uid, and a socket that still accepts connections (`CoreError::Io`: another haunt is running). It also refuses a path longer than `sun_path` allows.
-- Every connection's peer uid (`getpeereid`) must equal ours. At most 32 connections are open at once, each with a 5 s read timeout.
+- Every connection's peer uid (`getpeereid`) must equal ours. At most 32 connections are open at once, each with a 2 s read timeout.
 - Messages are newline-delimited JSON of at most 64 KB. A longer line is discarded, and the stream continues with the next line.
 - Each line is the hook's v1 envelope (`hooks/README.md`) plus `surface_id`. Lines for a surface that isn't registered are dropped before rate limiting, so random ids cost nothing. Each surface is rate-limited to 50 events/s with a burst of 200; extra lines are dropped and counted.
 
-**Nonce gating** (`core/src/session.rs`): an event is *verified* only if it came over the socket and its `nonce` matches that surface's nonce, compared in constant time. Unverified events (wrong or missing nonce, or any OSC 777 event) may change status and progress, but never the permission request. Only a verified request can be answered. Unverified events can't set, replace or clear one. `answer_permission` also requires the surface to be in `needs you` at that moment.
+**Nonce gating** (`core/src/session.rs`): an event is *verified* only if it came over the socket and its `nonce` matches that surface's nonce, compared in constant time. Unverified events (wrong or missing nonce, or any OSC 777 event) may change status and progress, but can never create an answerable request. The rules:
 
-A request resolves when a verified `tool_ran`, `tool_done` or `tool_failed` matches it. The match is on `tool_use_id` when both sides have one (the id is taken from the matching `tool_start`), otherwise on tool name plus exact command or file path. An event with `truncated: true` never matches. A verified `stop` or `prompt_submit`, or an answer, also clears the request.
+- Only a verified `permission_seen` creates a request, and only if it isn't `truncated` and carries a command or file path. Otherwise the row shows "Waiting for you" and the user answers in the terminal.
+- Leaving `needs you` for any reason, verified or not, drops the request.
+- Each entry into `needs you`, and each `permission_seen`, starts a new generation. A request can be answered only in the generation that created it. So an unverified event that puts the row back into `needs you` (a forged stop and then a forged `permission_prompt`, say) can never revive an old request. A forged `permission_seen` retires the real one, which costs the user the button but never sends an answer to the wrong prompt.
+- `answer_permission` needs the surface to be in `needs you` with a live request at that moment, and consumes it.
 
-**OSC 777 fallback**: `haunt://cli-agent` and `warp://cli-agent` bodies go through the same parser, but they count for status only. The haunt hook sends a stripped-down status body there (no nonce, under 255 bytes).
+A request resolves when a verified `tool_ran`, `tool_done` or `tool_failed` matches it. The match is on `tool_use_id` when both sides have one (the id is taken from the matching `tool_start`), otherwise on tool name plus exact command or file path. An event with `truncated: true` never matches. Any change out of `needs you`, or an answer, also clears it.
+
+**Invisible characters**: every decoded string has control characters and Unicode format characters (General_Category Cf: bidi overrides U+202A–202E and U+2066–2069, zero-widths U+200B–200F, U+2060, U+FEFF, soft hyphen, tags and so on) removed. `Permission::preview` cleans again, so an approval preview cannot hide `rm -rf /` behind a right-to-left override.
+
+**OSC 777 fallback**: `haunt://cli-agent` and `warp://cli-agent` bodies go through the same parser, but they count for status only. The haunt hook sends a stripped-down status body there (no nonce, at most 250 bytes).
 
 The app must not bind `HauntIntake` (the spike's standalone export) at the same time: `HauntCore.start()` owns the socket, and a second bind fails with "in use".

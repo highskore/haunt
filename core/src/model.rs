@@ -56,6 +56,8 @@ pub(crate) struct State {
     surfaces: Vec<Surface>,
     selected: Option<String>,
     home: Option<String>,
+    /// Basename of the login shell surfaces run, for shell rows.
+    shell: Option<String>,
     listener: Option<Listener>,
 }
 
@@ -93,7 +95,7 @@ impl State {
                 selected: self.selected.as_deref() == Some(s.id.as_str()),
             })
             .collect();
-        layout::snapshot(&views, self.home.as_deref(), now)
+        layout::snapshot(&views, self.home.as_deref(), self.shell.as_deref(), now)
     }
 }
 
@@ -129,7 +131,8 @@ fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
 
 impl Core {
     pub fn new(config_dir: impl Into<PathBuf>) -> Self {
-        let state = State { home: std::env::var("HOME").ok(), ..State::default() };
+        let shell = std::env::var("SHELL").ok().and_then(|s| s.rsplit('/').next().map(str::to_owned)).filter(|s| !s.is_empty());
+        let state = State { home: std::env::var("HOME").ok(), shell, ..State::default() };
         Self { dir: config_dir.into(), state: Arc::new(Mutex::new(state)), intake: Mutex::new(None) }
     }
 
@@ -337,6 +340,23 @@ mod tests {
         let b = c.register_surface("/b");
         c.with_state(|st| st.handle_line(&line(&b, Some(&a.nonce), PERM), Instant::now()));
         assert_eq!(c.answer_permission(&b.surface_id, true), None);
+    }
+
+    #[test]
+    fn unverified_stop_then_prompt_cannot_revive_an_answer() {
+        for middle in [None, Some(r#""event":"prompt_submit","query":"next""#)] {
+            let c = core();
+            let env = blocked(&c, true);
+            let forged = |body: &str| c.with_state(|st| st.handle_line(&line(&env, None, body), Instant::now()));
+            forged(r#""event":"stop""#);
+            if let Some(m) = middle {
+                forged(m);
+            }
+            let body = r#"{"v":1,"event":"notification","notification_type":"permission_prompt"}"#;
+            c.on_osc_notification(&env.surface_id, "haunt://cli-agent", body);
+            assert!(c.snapshot().groups[0].rows[0].needs_you);
+            assert_eq!(c.answer_permission(&env.surface_id, true), None, "{middle:?}");
+        }
     }
 
     #[test]

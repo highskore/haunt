@@ -219,7 +219,7 @@ fn accept_loop(listener: UnixListener, s: Arc<Shared>) {
 
 fn serve(stream: UnixStream, s: &Shared) {
     // Hooks write a few lines and hang up; an idle peer cannot pin a thread forever.
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let mut r = BufReader::new(stream);
     let mut line = Vec::new();
     loop {
