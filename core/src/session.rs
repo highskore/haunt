@@ -105,6 +105,8 @@ pub struct Session {
     pub is_agent: bool,
     pub status: Status,
     pub prompt: Option<String>,
+    /// The latest verified hook's cwd: a command-launched agent never reports its cwd through the shell.
+    pub cwd: Option<String>,
     pub progress: Progress,
     /// Only ever set from a verified, untruncated `permission_seen`, and only while NeedsYou.
     pub permission: Option<Permission>,
@@ -125,6 +127,7 @@ impl Session {
             is_agent: false,
             status: Status::Idle,
             prompt: None,
+            cwd: None,
             progress: Progress::default(),
             permission: None,
             generation: 0,
@@ -144,6 +147,13 @@ impl Session {
         changed |= self.progress.apply(e, now);
         let before = (self.status, self.permission.clone(), self.prompt.clone());
         let main = e.agent_id.is_none();
+        if verified
+            && let Some(c) = e.cwd.as_ref().filter(|c| c.starts_with('/'))
+            && self.cwd.as_ref() != Some(c)
+        {
+            self.cwd = Some(c.clone());
+            changed = true;
+        }
 
         match &e.kind {
             EventKind::PromptSubmit { query } => {

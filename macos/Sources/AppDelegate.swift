@@ -98,7 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GhosttyAppDelegate {
             let template = """
             # Haunt config. Saved changes apply right away.
             # font = "\(Tok.Font.monoFamily)"
-            # font_size = 12.5
+            # font_size = 11
 
             # Raw Ghostty keys, passed through as is.
             [ghostty]

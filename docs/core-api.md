@@ -104,8 +104,10 @@ Groups, in order: `NEEDS YOU`, `RUNNING`, `IDLE`. Done, failed and shell rows go
 
 | field | shell | Claude |
 |---|---|---|
-| `name` | last path component of the cwd (`~` for home) | same |
-| `meta` | `~cwd · <shell>`, e.g. `~/code/vibes · zsh` (the basename of `$SHELL`) | `branch · task`; the cwd stands in for a missing branch |
+| `name` | last path component of the cwd (`~` for home) | same, of the agent cwd |
+| `meta` | `~cwd · <shell>`, e.g. `~/code/vibes · zsh` (the basename of `$SHELL`) | `branch · task`; the agent cwd stands in for a missing branch |
+
+The agent cwd is the latest verified hook event's `cwd`, falling back to the surface cwd from `setSurfaceInfo`. A Claude launched as the surface's command never changes the shell's `PWD`, so the hook is the only place its cwd shows up. Once there is an agent cwd, the core reads the branch from `.git/HEAD` above it on every verified event and ignores the `git_branch` the UI passed; the API is unchanged.
 | `status_text` | empty | `needs you`, `3/5` (running with progress), empty (running without progress), `done`, `failed`, empty (idle) |
 | `progress` | none | `done/total` of the main agent's tasks, else of its latest TodoWrite |
 | `subagents` | none | while running or needing you: `label` = `Explore · trace hooks`, `meta` = `2/4 · 1m12s` or `14 tools · 48s` |

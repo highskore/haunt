@@ -4,6 +4,7 @@ pub mod allowlist;
 pub mod ctl;
 pub mod decisions;
 pub mod event;
+pub mod git;
 pub mod intake;
 pub mod layout;
 pub mod model;

@@ -67,6 +67,8 @@ struct Surface {
     nonce: String,
     cwd: String,
     branch: Option<String>,
+    /// Branch at `session.cwd`, looked up here because the UI only knows the surface cwd.
+    agent_branch: Option<String>,
     session: Session,
 }
 
@@ -91,7 +93,16 @@ impl State {
     /// One intake delivery; the intake already checked the nonce and the rate limit.
     pub(crate) fn deliver(&mut self, d: &Delivery, now: Instant) -> bool {
         let Some(event) = &d.event else { return false };
-        let changed = self.surface(&d.surface_id).is_some_and(|s| s.session.apply(event, d.verified, now));
+        let changed = self.surface(&d.surface_id).is_some_and(|s| {
+            let mut changed = s.session.apply(event, d.verified, now);
+            // Every verified event re-reads HEAD, so a checkout inside the session shows up.
+            if d.verified && let Some(cwd) = &s.session.cwd {
+                let b = crate::git::branch(cwd);
+                changed |= b != s.agent_branch;
+                s.agent_branch = b;
+            }
+            changed
+        });
         self.settle();
         changed
     }
@@ -134,12 +145,12 @@ impl State {
         let views: Vec<SurfaceView> = self
             .surfaces
             .iter()
-            .map(|s| SurfaceView {
-                id: &s.id,
-                cwd: &s.cwd,
-                branch: s.branch.as_deref(),
-                session: &s.session,
-                selected: self.selected.as_deref() == Some(s.id.as_str()),
+            .map(|s| {
+                let (cwd, branch) = match &s.session.cwd {
+                    Some(c) => (c.as_str(), s.agent_branch.as_deref()),
+                    None => (s.cwd.as_str(), s.branch.as_deref()),
+                };
+                SurfaceView { id: &s.id, cwd, branch, session: &s.session, selected: self.selected.as_deref() == Some(s.id.as_str()) }
             })
             .collect();
         layout::snapshot(&views, self.home.as_deref(), self.shell.as_deref(), now)
@@ -297,7 +308,7 @@ impl Core {
                 return false;
             }
             let (id, nonce, cwd) = (env.surface_id.clone(), env.nonce.clone(), cwd.to_owned());
-            st.surfaces.push(Surface { id, nonce, cwd, branch: None, session: Session::new(now) });
+            st.surfaces.push(Surface { id, nonce, cwd, branch: None, agent_branch: None, session: Session::new(now) });
             true
         });
         if !added {
@@ -446,6 +457,43 @@ mod tests {
 
     fn pending(c: &Core) -> Option<crate::layout::PendingRequest> {
         c.snapshot().groups.iter().flat_map(|g| &g.rows).find_map(|r| r.pending.clone())
+    }
+
+    fn only_row(c: &Core) -> crate::layout::Row {
+        c.snapshot().groups.into_iter().flat_map(|g| g.rows).next().expect("a row")
+    }
+
+    #[test]
+    fn claude_rows_follow_the_verified_hook_cwd() {
+        let repo = std::env::temp_dir().join(format!("haunt-model-cwd-{}", std::process::id()));
+        let specs = repo.join("specs");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(&specs).unwrap();
+        std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+
+        let c = core();
+        let env = c.register_surface("/Users/me").unwrap();
+        let forged = r#""event":"prompt_submit","cwd":"/Users/me/code/elsewhere""#;
+        c.with_state(|st| st.handle_line(&line(&env, None, forged), Instant::now()));
+        let row = only_row(&c);
+        assert_eq!((row.name.as_str(), row.meta.as_str()), ("~", "~"), "an unverified cwd is ignored");
+
+        let body = format!(r#""event":"stop","cwd":"{}""#, specs.display());
+        c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &body), Instant::now()));
+        let row = only_row(&c);
+        assert_eq!(row.name, "specs");
+        assert!(row.meta.starts_with("main · Done in"), "{}", row.meta);
+
+        std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/next\n").unwrap();
+        c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &body), Instant::now()));
+        assert!(only_row(&c).meta.starts_with("next · "), "a checkout shows on the next event");
+        let _ = std::fs::remove_dir_all(&repo);
+
+        let body = r#""event":"stop","cwd":"/Users/me/code/vibes/specs""#;
+        c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), body), Instant::now()));
+        let row = only_row(&c);
+        assert_eq!(row.name, "specs");
+        assert!(row.meta.starts_with("~/code/vibes/specs · Done in"), "no branch falls back to the cwd: {}", row.meta);
     }
 
     #[test]
