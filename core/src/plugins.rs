@@ -336,6 +336,19 @@ impl Epoch {
     fn exit(&self) {
         self.active.fetch_sub(1, Ordering::AcqRel);
     }
+
+    /// Runs `f`, which enters wasm, with the epoch ticking so its deadline can fire.
+    fn ticking<R>(&self, f: impl FnOnce() -> R) -> R {
+        struct Exit<'a>(&'a Epoch);
+        impl Drop for Exit<'_> {
+            fn drop(&mut self) {
+                self.0.exit();
+            }
+        }
+        self.enter();
+        let _exit = Exit(self);
+        f()
+    }
 }
 
 fn spawn_epoch(engine: EngineWeak) -> Result<Arc<Epoch>, PluginError> {
@@ -385,9 +398,8 @@ impl LoadedPlugin {
             return Err(PluginError(why.clone()));
         }
         self.store.set_epoch_deadline(CALL_TICKS);
-        self.epoch.enter();
-        let res = f(&self.bindings, &mut self.store);
-        self.epoch.exit();
+        let (bindings, store) = (&self.bindings, &mut self.store);
+        let res = self.epoch.ticking(|| f(bindings, store));
         res.map_err(|e| {
             let why = if e.downcast_ref::<Trap>() == Some(&Trap::Interrupt) {
                 format!("plugin {} exceeded its {} ms CPU budget and was disabled", self.id(), CALL_TICKS * TICK.as_millis() as u64)
@@ -544,8 +556,9 @@ impl PluginHost {
         let linker = self.linker(&spec.caps)?;
         let mut store = Store::new(&self.engine, HostState::new(&spec.id, &spec.caps, spec.kv_path.clone(), spec.haunt_dir.as_deref()));
         store.limiter(|s| &mut s.limits);
+        // Instantiation runs the component's start functions, which get the same budget as a call.
         store.set_epoch_deadline(CALL_TICKS);
-        let bindings = Plugin::instantiate(&mut store, component, &linker)?;
+        let bindings = self.epoch.ticking(|| Plugin::instantiate(&mut store, component, &linker))?;
         let mut plugin = LoadedPlugin { store, bindings, epoch: self.epoch.clone(), disabled: None };
         plugin.init(&spec.settings_json)?;
         Ok(plugin)
@@ -677,12 +690,29 @@ mod tests {
         let inst = Linker::new(&host.engine).instantiate(&mut store, &c).unwrap();
         let spin = inst.get_typed_func::<(), ()>(&mut store, "spin").unwrap();
         store.set_epoch_deadline(CALL_TICKS);
-        host.epoch.enter();
         let t = Instant::now();
-        let e = spin.call(&mut store, ()).unwrap_err();
-        host.epoch.exit();
+        let e = host.epoch.ticking(|| spin.call(&mut store, ())).unwrap_err();
         assert_eq!(e.downcast_ref::<Trap>(), Some(&Trap::Interrupt));
         assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn looping_start_function_is_interrupted() {
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(
+            &host.engine,
+            r#"(component
+                (core module $m (func $spin (loop $l (br $l))) (start $spin))
+                (core instance $i (instantiate $m)))"#,
+        )
+        .unwrap();
+        let mut store = raw_store(&host);
+        store.set_epoch_deadline(CALL_TICKS);
+        let t = Instant::now();
+        let e = host.epoch.ticking(|| Linker::new(&host.engine).instantiate(&mut store, &c)).expect_err("start must not finish");
+        assert_eq!(e.downcast_ref::<Trap>(), Some(&Trap::Interrupt), "{e:#}");
+        assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
+        assert_eq!(host.epoch.active.load(Ordering::Acquire), 0, "ticking stops after the trap");
     }
 
     #[test]
