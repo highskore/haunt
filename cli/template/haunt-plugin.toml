@@ -1,9 +1,9 @@
 [plugin]
-id = "dev.haunt.hello"
-name = "Hello"
+id = "{{id}}"
+name = "{{name}}"
 version = "0.1.0"
 api = "0.1"
-entry = "target/wasm32-wasip2/release/hello_plugin.wasm"
+entry = "target/wasm32-wasip2/release/haunt_plugin.wasm"
 license = "MIT"
 
 [capabilities]
