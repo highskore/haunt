@@ -97,7 +97,7 @@ impl CwasmCache {
     }
 }
 
-fn check_dir(dir: &Path) -> Result<(), CacheError> {
+pub(crate) fn check_dir(dir: &Path) -> Result<(), CacheError> {
     let unsafe_dir = |why| CacheError::UnsafeDir(dir.to_owned(), why);
     let meta = fs::symlink_metadata(dir)?;
     if !meta.is_dir() {
@@ -140,7 +140,7 @@ fn load_or_create_key(path: &Path) -> Result<[u8; KEY_LEN], CacheError> {
 }
 
 /// Temp file created O_EXCL with 0600 in the same dir, then renamed over the target.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), CacheError> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), CacheError> {
     let mut nonce = [0u8; 8];
     getrandom::fill(&mut nonce).map_err(|e| CacheError::Random(e.to_string()))?;
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("entry");
@@ -158,7 +158,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), CacheError> {
     Ok(res?)
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

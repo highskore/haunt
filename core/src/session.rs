@@ -24,6 +24,8 @@ pub struct Permission {
     pub tool: String,
     pub input: Option<String>,
     pub tool_use_id: Option<String>,
+    /// The Bash command exactly as sent, for allow rules; `input` is the cleaned one.
+    pub raw_command: Option<String>,
     /// The hook's cwd, from the same verified event.
     pub cwd: Option<String>,
     /// The `Session::generation` of the NeedsYou episode that created it.
@@ -46,7 +48,14 @@ impl Permission {
     /// None when the input is missing: the user has to answer in the terminal then.
     fn from_call(t: &ToolCall, cwd: Option<String>, generation: u64) -> Option<Self> {
         let input = t.command.clone().or_else(|| t.file_path.clone())?;
-        Some(Self { tool: t.tool_name.clone(), input: Some(input), tool_use_id: t.tool_use_id.clone(), cwd, generation })
+        Some(Self {
+            tool: t.tool_name.clone(),
+            input: Some(input),
+            tool_use_id: t.tool_use_id.clone(),
+            raw_command: t.raw_command.clone(),
+            cwd,
+            generation,
+        })
     }
 
     /// The request key: an answer must name it, so it can only reach the prompt it was shown for.
@@ -389,7 +398,7 @@ mod tests {
         let spoof = "{\"event\":\"permission_seen\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hi \\u202e\\u2066/ fr- mr\\u2069\\u200b\\ufeff\"}}";
         s.apply(&ev(spoof), true, now);
         assert_eq!(s.live_permission().unwrap().preview(), "echo hi / fr- mr");
-        let p = Permission { tool: "Bash".into(), input: Some("a\u{202e}b\u{200d}c".into()), tool_use_id: None, cwd: None, generation: 0 };
+        let p = Permission { tool: "Bash".into(), input: Some("a\u{202e}b\u{200d}c".into()), tool_use_id: None, raw_command: None, cwd: None, generation: 0 };
         assert_eq!(p.preview(), "abc", "preview cleans even input that skipped the parser");
     }
 

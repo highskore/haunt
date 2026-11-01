@@ -1,4 +1,4 @@
-// Phase 0 sketch of the plugin API; the real one grows per plan section 3.3.
+// haunt plugin API, plan section 3.3. Gated imports are linked only when the capability is granted.
 package haunt:plugin@0.1.0;
 
 interface types {
@@ -17,10 +17,69 @@ interface types {
     style: style,
     meta-suffix: option<string>,
   }
+
+  record palette-item {
+    id: string,
+    title: string,
+    subtitle: option<string>,
+  }
+
+  enum log-level { debug, info, warn, error }
+}
+
+// Always linked.
+interface log {
+  use types.{log-level};
+  log: func(level: log-level, msg: string);
+}
+
+// Always linked. Per-plugin state, 10 MB in total.
+interface kv {
+  get: func(key: string) -> option<string>;
+  set: func(key: string, value: string) -> result<_, string>;
+  delete: func(key: string);
+}
+
+// Always linked.
+interface palette {
+  mode: func(word: string, title: string);
+  command: func(id: string, title: string, default-key: option<string>);
+}
+
+// Capability `notifications`. Replies arrive at `on-action`.
+interface notify {
+  record action {
+    id: string,
+    title: string,
+  }
+  notify: func(title: string, body: string, actions: list<action>, binding: option<string>) -> result<_, string>;
+}
+
+// Capability `pty_write`. `request-id` is the opaque id from the event, never the nonce.
+interface pty {
+  answer: func(surface: string, allow: bool, request-id: string) -> result<_, string>;
+  text: func(surface: string, text: string) -> result<_, string>;
+}
+
+// `read` and `list` need `fs_read`, `write` needs `fs_write`; paths must match the declared globs.
+interface fs {
+  read: func(path: string) -> result<list<u8>, string>;
+  write: func(path: string, data: list<u8>) -> result<_, string>;
+  %list: func(path: string) -> result<list<string>, string>;
 }
 
 world plugin {
-  use types.{agent-event, decoration};
-  import log: func(msg: string);
+  use types.{agent-event, decoration, palette-item};
+  import log;
+  import kv;
+  import palette;
+  import notify;
+  import pty;
+  import fs;
+
+  export init: func(settings: string);
+  export on-settings-changed: func(settings: string);
   export on-event: func(event: agent-event) -> option<decoration>;
+  export palette-items: func(mode: string, query: string) -> list<palette-item>;
+  export on-action: func(action-id: string, payload: string);
 }
