@@ -1,15 +1,12 @@
 //! The debug/CLI socket `<config_dir>/ctl`: one NDJSON request per line, one response line each.
 //! Separate from the hook socket so hook floods and rate limits never touch it.
 
-use std::fs;
-use std::io::{BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use crate::intake::{IntakeError, Line, bind_private, peer_allowed, read_line, uid};
+use crate::intake::{IntakeError, bind_private};
+use crate::serve::{self, Input, Server};
 
 pub const CTL_NAME: &str = "ctl";
 const MAX_LINE: usize = 64 * 1024;
@@ -29,8 +26,7 @@ struct Deadlines {
 pub type Handler = Arc<dyn Fn(&str) -> String + Send + Sync>;
 
 pub struct Ctl {
-    path: PathBuf,
-    stop: Arc<AtomicBool>,
+    server: Server,
 }
 
 impl Ctl {
@@ -40,74 +36,24 @@ impl Ctl {
 
     fn bind_with(dir: &Path, handler: Handler, limits: Deadlines) -> Result<Self, IntakeError> {
         let (listener, path) = bind_private(dir, CTL_NAME)?;
-        let stop = Arc::new(AtomicBool::new(false));
-        let s = stop.clone();
-        std::thread::Builder::new().name("haunt-ctl".into()).spawn(move || accept_loop(listener, handler, s, limits))?;
-        Ok(Self { path, stop })
+        let limits = serve::Limits { max_line: MAX_LINE, max_conns: MAX_CONNS, line_timeout: limits.line, conn_timeout: limits.conn };
+        let serve = Box::new(move |input: Input<'_>, out: &mut Vec<u8>| {
+            let reply = match input {
+                Input::TooLong(_) => error(&format!("line over {MAX_LINE} bytes")),
+                Input::Line(line) => match String::from_utf8_lossy(line).trim() {
+                    "" => return true,
+                    text => handler(text),
+                },
+            };
+            out.extend_from_slice(reply.as_bytes());
+            out.push(b'\n');
+            matches!(input, Input::Line(_))
+        });
+        Ok(Self { server: Server::spawn("haunt-ctl", listener, path, limits, serve)? })
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for Ctl {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        let _ = UnixStream::connect(&self.path);
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-fn accept_loop(listener: UnixListener, handler: Handler, stop: Arc<AtomicBool>, limits: Deadlines) {
-    let me = uid();
-    let conns = Arc::new(AtomicUsize::new(0));
-    for stream in listener.incoming() {
-        if stop.load(Ordering::SeqCst) {
-            return;
-        }
-        let Ok(stream) = stream else { continue };
-        if !peer_allowed(&stream, me) {
-            continue;
-        }
-        if conns.fetch_add(1, Ordering::SeqCst) >= MAX_CONNS {
-            conns.fetch_sub(1, Ordering::SeqCst);
-            continue;
-        }
-        let (h, c) = (handler.clone(), conns.clone());
-        let spawned = std::thread::Builder::new().name("haunt-ctl-conn".into()).spawn(move || {
-            serve(stream, &h, limits);
-            c.fetch_sub(1, Ordering::SeqCst);
-        });
-        if spawned.is_err() {
-            conns.fetch_sub(1, Ordering::SeqCst);
-        }
-    }
-}
-
-fn serve(stream: UnixStream, handler: &Handler, limits: Deadlines) {
-    let end = Instant::now() + limits.conn;
-    let Ok(mut out) = stream.try_clone() else { return };
-    let mut r = BufReader::new(stream);
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        match read_line(&mut r, MAX_LINE, end.min(Instant::now() + limits.line), &mut line) {
-            Line::End => return,
-            Line::TooLong(_) => {
-                let _ = writeln!(out, "{}", error(&format!("line over {MAX_LINE} bytes")));
-                return;
-            }
-            Line::Done => {}
-        }
-        let text = String::from_utf8_lossy(&line);
-        let text = text.trim();
-        if text.is_empty() {
-            continue;
-        }
-        if writeln!(out, "{}", handler(text)).is_err() {
-            return;
-        }
+        self.server.path()
     }
 }
 
@@ -118,7 +64,10 @@ pub fn error(reason: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
+    use std::fs;
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Instant;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     use crate::testdir::TempDir;
@@ -137,6 +86,21 @@ mod tests {
         assert_eq!(got, "got a\ngot b\n");
         drop(ctl);
         assert!(!d.join(CTL_NAME).exists());
+    }
+
+    #[test]
+    fn a_peer_that_never_reads_its_replies_does_not_stall_others() {
+        let d = TempDir::new("hc-stuck");
+        let ctl = Ctl::bind(&d, Arc::new(|l: &str| l.repeat(64 * 1024))).unwrap();
+        let mut stuck = UnixStream::connect(ctl.path()).unwrap();
+        stuck.write_all(&b"x\n".repeat(1000)).unwrap();
+        let mut other = UnixStream::connect(ctl.path()).unwrap();
+        other.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        other.write_all(b"y\n").unwrap();
+        let mut got = vec![0; 64 * 1024 + 1];
+        other.read_exact(&mut got).unwrap();
+        assert!(got[..64 * 1024].iter().all(|&b| b == b'y') && got[64 * 1024] == b'\n');
+        drop(stuck);
     }
 
     fn closed_within(s: &mut UnixStream, limit: Duration) -> bool {

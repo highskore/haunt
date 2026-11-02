@@ -25,6 +25,7 @@ pub mod plugins;
 pub mod progress;
 #[cfg(feature = "plugins")]
 pub mod ptygate;
+mod serve;
 pub mod session;
 #[doc(hidden)]
 pub mod sync;

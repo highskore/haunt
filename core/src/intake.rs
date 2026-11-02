@@ -4,16 +4,16 @@
 
 use std::collections::HashMap;
 use std::fs::{self, DirBuilder};
-use std::io::{BufRead, BufReader, ErrorKind};
+use std::io::ErrorKind;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::event::{AgentEvent, parse_line};
+use crate::serve::{self, Input, Server};
 use crate::sync::{lock, read};
 
 pub const SOCKET_NAME: &str = "sock";
@@ -89,12 +89,10 @@ struct Shared {
     buckets: Mutex<HashMap<String, [Bucket; 2]>>,
     limits: Limits,
     sink: Sink,
-    conns: AtomicUsize,
-    stop: AtomicBool,
 }
 
 pub struct Intake {
-    path: PathBuf,
+    server: Server,
     shared: Arc<Shared>,
 }
 
@@ -102,21 +100,27 @@ impl Intake {
     /// Binds `<dir>/sock` (0600) in a 0700 dir we own, and serves it on a background thread.
     pub fn bind(dir: &Path, limits: Limits, nonces: Nonces, sink: Sink) -> Result<Self, IntakeError> {
         let (listener, path) = bind_private(dir, SOCKET_NAME)?;
-        let shared = Arc::new(Shared {
-            nonces,
-            buckets: Mutex::new(HashMap::new()),
-            limits,
-            sink,
-            conns: AtomicUsize::new(0),
-            stop: AtomicBool::new(false),
-        });
+        let serve_limits = serve::Limits {
+            max_line: limits.max_line,
+            max_conns: limits.max_conns,
+            line_timeout: limits.line_timeout,
+            conn_timeout: limits.conn_timeout,
+        };
+        let shared = Arc::new(Shared { nonces, buckets: Mutex::new(HashMap::new()), limits, sink });
         let s = shared.clone();
-        std::thread::Builder::new().name("haunt-intake".into()).spawn(move || accept_loop(listener, s))?;
-        Ok(Self { path, shared })
+        let handler = Box::new(move |input: Input<'_>, _: &mut Vec<u8>| {
+            match input {
+                Input::Line(line) => handle_line(line, &s),
+                Input::TooLong(n) => (s.sink)(reject(String::new(), n, format!("line over {} bytes", s.limits.max_line))),
+            }
+            true
+        });
+        let server = Server::spawn("haunt-intake", listener, path, serve_limits, handler)?;
+        Ok(Self { server, shared })
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
+        self.server.path()
     }
 
     /// Drops the surface's rate-limit state; its nonce leaves `Nonces` with it.
@@ -129,15 +133,6 @@ impl Intake {
 impl Intake {
     pub(crate) fn register_surface(&self, surface_id: &str, nonce: &str) {
         self.shared.nonces.write().unwrap().insert(surface_id.to_owned(), nonce.to_owned());
-    }
-}
-
-impl Drop for Intake {
-    fn drop(&mut self) {
-        self.shared.stop.store(true, Ordering::SeqCst);
-        // Wake the accept loop so it sees `stop`.
-        let _ = UnixStream::connect(&self.path);
-        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -212,92 +207,6 @@ fn peer_uid(stream: &UnixStream) -> Option<u32> {
     // SAFETY: the fd is a live socket owned by `stream`; uid and gid are valid out-pointers.
     let rc = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
     (rc == 0).then_some(uid)
-}
-
-fn accept_loop(listener: UnixListener, s: Arc<Shared>) {
-    let me = uid();
-    for stream in listener.incoming() {
-        if s.stop.load(Ordering::SeqCst) {
-            return;
-        }
-        let Ok(stream) = stream else { continue };
-        if !peer_allowed(&stream, me) {
-            continue;
-        }
-        if s.conns.fetch_add(1, Ordering::SeqCst) >= s.limits.max_conns {
-            s.conns.fetch_sub(1, Ordering::SeqCst);
-            continue;
-        }
-        let s2 = s.clone();
-        let spawned = std::thread::Builder::new().name("haunt-intake-conn".into()).spawn(move || {
-            serve(stream, &s2);
-            s2.conns.fetch_sub(1, Ordering::SeqCst);
-        });
-        if spawned.is_err() {
-            s.conns.fetch_sub(1, Ordering::SeqCst);
-        }
-    }
-}
-
-fn serve(stream: UnixStream, s: &Shared) {
-    // Hooks write a few lines and hang up. Deadlines, not idle timeouts, so a peer trickling a byte
-    // at a time can't hold one of the `max_conns` slots and starve the hooks.
-    let end = Instant::now() + s.limits.conn_timeout;
-    let mut r = BufReader::new(stream);
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        let deadline = end.min(Instant::now() + s.limits.line_timeout);
-        match read_line(&mut r, s.limits.max_line, deadline, &mut line) {
-            Line::End => return,
-            Line::TooLong(n) => (s.sink)(reject(String::new(), n, format!("line over {} bytes", s.limits.max_line))),
-            Line::Done => {
-                while matches!(line.last(), Some(b'\n' | b'\r')) {
-                    line.pop();
-                }
-                if !line.is_empty() {
-                    handle_line(&line, s);
-                }
-            }
-        }
-    }
-}
-
-pub(crate) enum Line {
-    Done,
-    /// Over `max` bytes; it was read to its newline and dropped.
-    TooLong(usize),
-    /// EOF, an error or the deadline: stop serving.
-    End,
-}
-
-/// Reads one line into `out`; all of it must arrive before `deadline`. A last line without a
-/// newline counts at EOF.
-pub(crate) fn read_line(r: &mut BufReader<UnixStream>, max: usize, deadline: Instant, out: &mut Vec<u8>) -> Line {
-    let mut seen = 0;
-    loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Line::End;
-        }
-        // macOS refuses (EINVAL) once the peer has hung up, and then reads never block anyway.
-        let _ = r.get_ref().set_read_timeout(Some(left));
-        let buf = match r.fill_buf() {
-            Ok([]) if seen > 0 && seen <= max => return Line::Done,
-            Ok([]) | Err(_) => return Line::End,
-            Ok(b) => b,
-        };
-        let newline = buf.iter().position(|&b| b == b'\n');
-        let take = newline.map_or(buf.len(), |i| i + 1);
-        if seen + take <= max + 1 {
-            out.extend_from_slice(&buf[..take]);
-        }
-        seen += take;
-        r.consume(take);
-        if newline.is_some() {
-            return if seen > max + 1 { Line::TooLong(seen) } else { Line::Done };
-        }
-    }
 }
 
 fn reject(surface_id: String, bytes: usize, error: String) -> Delivery {
