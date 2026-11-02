@@ -9,6 +9,8 @@ protocol CoreAPI: AnyObject {
     func selectSurface(surfaceId: String)
     func onOscNotification(surfaceId: String, title: String, body: String)
     func snapshot() -> SidebarSnapshot
+    /// nil while nothing changed since the snapshot with `version`.
+    func snapshotIfNewer(version: UInt64) -> SidebarSnapshot?
     func setListener(listener: CoreListener)
     func answerPermission(surfaceId: String, requestKey: UInt64, allow: Bool) -> Data?
     func onUserInput(surfaceId: String)
@@ -166,6 +168,8 @@ enum CoreError: Error {
 struct SidebarSnapshot: Equatable, Hashable {
     var groups: [SidebarGroup]
     var colorStyle: ColorStyle
+    var version: UInt64 = 0
+    var nextTickMs: UInt64?
 }
 
 struct SidebarGroup: Equatable, Hashable {

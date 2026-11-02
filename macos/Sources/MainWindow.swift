@@ -149,7 +149,7 @@ private final class RootView: NSView {
         pane.wantsLayer = true
         pane.layer?.backgroundColor = Tok.Color.windowBg.cgColor
         scrim.wantsLayer = true
-        scrim.layer?.backgroundColor = NSColor(white: 0, alpha: Tok.Size.paletteScrimAlpha).cgColor
+        scrim.layer?.backgroundColor = Tok.App.scrim.withAlphaComponent(Tok.Size.paletteScrimAlpha).cgColor
         scrim.isHidden = true
         agents.isHidden = true
         for v in [titleBar, sidebar, pane, scrim, agents] { addSubview(v) }
@@ -175,7 +175,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let ghostty: Ghostty.App
     private let fixture: Fixture?
     /// The mockups' window size in points.
-    private static let defaultSize = NSSize(width: 900, height: Tok.Size.windowH)
+    private static let defaultSize = NSSize(width: Tok.App.windowW, height: Tok.Size.windowH)
     private let config: HauntConfig
     private let store = TabStore()
     private let bridge: PluginBridge
@@ -195,12 +195,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }()
     private let root = RootView()
     var tabs: [Tab] { store.tabs }
-    private var refreshQueued = false
     private var observers: [NSObjectProtocol] = []
+    /// The core's branch lookup can stall on a dead mount the shell's cwd points at; serial keeps each surface's updates in order.
+    private let infoQueue = DispatchQueue(label: "haunt.surface-info", qos: .utility)
+    /// One-shot, for when a running subagent's elapsed time next reads differently.
     private var ticker: Timer?
+    /// The version of the snapshot on screen; 0 is older than any the core makes.
+    private var shownVersion: UInt64 = 0
     /// Applied in showWindow, once the window has its launch position to restore to.
     private var agentsViewAtLaunch = false
-    private lazy var listener = MainQueueListener { [weak self] in self?.coalescedRefresh() }
+    /// The core fires once per burst of changes and re-arms on the next snapshot, so each call is one redraw.
+    private lazy var listener = MainQueueListener { [weak self] in
+        self?.refreshIfNewer()
+        self?.bridge.drain()
+    }
     private lazy var reviewer = ReviewCoordinator(host: self)
 
     init(core: CoreAPI, ghostty: Ghostty.App, fixture: Fixture?, config: HauntConfig) {
@@ -220,7 +228,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         win.colorSpace = .sRGB
         win.appearance = NSAppearance(named: .darkAqua)
         win.backgroundColor = Tok.Color.windowBg
-        win.minSize = NSSize(width: Tok.Size.sidebarW + 300, height: 240)
+        win.minSize = NSSize(width: Tok.Size.sidebarW + Tok.App.minPaneW, height: Tok.App.minWindowH)
         win.tabbingMode = .disallowed
         for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             win.standardWindowButton(b)?.isHidden = true
@@ -300,7 +308,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let tab = Tab(env: env, view: view, size: root.pane.bounds.size)
         tab.subscriptions.append(view.$title.combineLatest(view.$pwd)
             .debounce(for: .milliseconds(50), scheduler: DispatchQueue.main)
-            .sink { [weak self] title, pwd in self?.reportInfo(tab, title: title, pwd: pwd ?? dir) })
+            .sink { [core, infoQueue] title, pwd in
+                // The core finds the branch itself.
+                infoQueue.async { core.setSurfaceInfo(surfaceId: env.surfaceId, title: title, cwd: pwd ?? dir, gitBranch: nil) }
+            })
         store.add(tab)
         tab.host.frame = root.pane.bounds
         tab.host.autoresizingMask = [.width, .height]
@@ -342,21 +353,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     #else
     private func fixtureCommand() -> String? { nil }
     #endif
-
-    private static let gitQueue = DispatchQueue(label: "dev.haunt.git", qos: .utility)
-
-    /// The branch lookup reads files a pty-chosen pwd points at, so it stays off the main thread.
-    private func reportInfo(_ tab: Tab, title: String, pwd: String) {
-        tab.infoGeneration += 1
-        let gen = tab.infoGeneration
-        Self.gitQueue.async { [weak self, weak tab] in
-            let branch = Git.branch(at: pwd)
-            DispatchQueue.main.async {
-                guard let self, let tab, tab.infoGeneration == gen else { return }
-                self.core.setSurfaceInfo(surfaceId: tab.env.surfaceId, title: title, cwd: pwd, gitBranch: branch)
-            }
-        }
-    }
 
     func select(_ id: String) {
         guard let tab = store.tab(id) else { return }
@@ -445,37 +441,31 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: Core
 
-    /// A burst of hook events becomes one redraw.
-    private func coalescedRefresh() {
-        guard !refreshQueued else { return }
-        refreshQueued = true
-        DispatchQueue.main.async { [weak self] in
-            self?.refreshQueued = false
-            self?.refresh()
-            self?.bridge.drain()
-        }
+    /// Elapsed times change without a core event, so a tick or a UI change takes a full snapshot.
+    func refresh() { show(core.snapshot()) }
+
+    /// A listener call: nothing to redraw unless the core has moved past the snapshot on screen.
+    private func refreshIfNewer() {
+        if let snap = core.snapshotIfNewer(version: shownVersion) { show(snap) }
     }
 
-    /// Subagent elapsed times are computed in snapshot(), so poll once a second to keep them ticking,
-    /// but only while the window can be seen; becoming visible again catches up at once.
-    private func updateTicker() {
-        let visible = window?.occlusionState.contains(.visible) ?? false
-        guard visible != (ticker != nil) else { return }
+    /// Fires when the core says the next elapsed time changes, and only while the window can be seen;
+    /// becoming visible again catches up with a full refresh.
+    private func scheduleTick(in ms: UInt64?) {
         ticker?.invalidate()
         ticker = nil
-        guard visible else { return }
-        refresh()
-        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-            self?.refresh()
-            self?.bridge.drain()
-        }
-        t.tolerance = 0.2
+        guard let ms, window?.occlusionState.contains(.visible) == true else { return }
+        let interval = TimeInterval(ms) / 1000
+        let t = Timer(timeInterval: interval, repeats: false) { [weak self] _ in self?.refresh() }
+        t.tolerance = min(interval * 0.1, 0.1)
         RunLoop.main.add(t, forMode: .common)
         ticker = t
     }
 
-    func refresh() {
-        let snap = store.named(core.snapshot())
+    private func show(_ raw: SidebarSnapshot) {
+        shownVersion = raw.version
+        scheduleTick(in: raw.nextTickMs)
+        let snap = store.named(raw)
         if snap != root.sidebar.snapshot { root.sidebar.snapshot = snap }
         if root.agentsOn { root.agents.update(snap) }
         let sel = snap.groups.lazy.flatMap(\.rows).first { $0.selected }
@@ -594,7 +584,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             // The strip neither zooms nor goes full screen (windowShouldZoom), whatever asks.
             window.collectionBehavior.insert(.fullScreenNone)
             refresh()
-            window.minSize = NSSize(width: Tok.Size.narrowW - 2, height: 200)
+            window.minSize = NSSize(width: Tok.Size.narrowW - 2 * Tok.App.hairline, height: Tok.App.narrowMinH)
             let frame = AgentsView.dockedFrame(on: window.screen ?? NSScreen.main, height: fixture == nil ? nil : Fixture.narrowHeight)
             window.setFrame(frame, display: true, animate: animate)
             window.makeFirstResponder(root.agents)
@@ -636,7 +626,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func windowDidResignKey(_ notification: Notification) { syncFocus() }
     func windowDidChangeScreen(_ notification: Notification) { syncFocus() }
     func windowDidChangeOcclusionState(_ notification: Notification) {
-        updateTicker()
+        if window?.occlusionState.contains(.visible) == true { refresh() } else { scheduleTick(in: nil) }
         syncFocus()
     }
 

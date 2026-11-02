@@ -130,7 +130,6 @@ HAUNT_REQUIRE_ADAPTERS=1 cargo test --workspace   # ...and fail instead
 macos/tests/keys.sh      # [keys], [layout], the generated Ghostty config and its refusals
 macos/tests/paste.sh     # the paste preview and what needs confirming
 macos/tests/sidebar.sh   # sidebar drop targets, the agents view's restored frame
-macos/tests/git.sh       # reading .git safely when its contents are hostile
 macos/tests/loginpath.sh # the login-shell PATH lookup
 macos/fidelity.sh        # pixel check against the mockups (HAUNT_INACTIVE=1 for the unfocused window)
 ```

@@ -15,6 +15,8 @@ final class MockCore: CoreAPI {
     private var nextId = 1
     private var selectedId: String?
     private weak var listener: CoreListener?
+    /// Bumped on every change, as the core's is.
+    private var version: UInt64 = 1
 
     init(fixture: Fixture?) {
         self.fixture = fixture
@@ -36,7 +38,12 @@ final class MockCore: CoreAPI {
         notify()
     }
 
+    /// Called off the main queue, as the real core is; the mock's state lives on main.
     func setSurfaceInfo(surfaceId: String, title: String, cwd: String, gitBranch: String?) {
+        DispatchQueue.main.async { self.applySurfaceInfo(surfaceId: surfaceId, title: title, cwd: cwd, gitBranch: gitBranch) }
+    }
+
+    private func applySurfaceInfo(surfaceId: String, title: String, cwd: String, gitBranch: String?) {
         guard let i = surfaces.firstIndex(where: { $0.id == surfaceId }) else { return }
         let next = Surface(id: surfaceId, title: title, cwd: cwd, branch: gitBranch)
         guard surfaces[i].title != next.title || surfaces[i].cwd != next.cwd || surfaces[i].branch != next.branch else { return }
@@ -65,7 +72,17 @@ final class MockCore: CoreAPI {
 
     func gatePluginRequest(request: HostRequest) -> PtyWrite? { nil }
 
+    func snapshotIfNewer(version: UInt64) -> SidebarSnapshot? {
+        version == self.version ? nil : snapshot()
+    }
+
     func snapshot() -> SidebarSnapshot {
+        var snap = rawSnapshot()
+        snap.version = version
+        return snap
+    }
+
+    private func rawSnapshot() -> SidebarSnapshot {
         if let fixture { return fixture.snapshot(surfaceIds: surfaces.map(\.id), selected: selectedId) }
         let shell = ((ProcessInfo.processInfo.environment["SHELL"] ?? "zsh") as NSString).lastPathComponent
         let rows = surfaces.map { s in
@@ -77,6 +94,7 @@ final class MockCore: CoreAPI {
     }
 
     private func notify() {
+        version += 1
         listener?.changed()
     }
 }

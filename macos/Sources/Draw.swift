@@ -106,7 +106,7 @@ enum Draw {
     }()
 
     /// The mark's native size; drawn at it on whole pixels, neither rep is resampled.
-    static var openAIMarkSize: CGFloat { openAIMark?.size.width ?? 18 }
+    static var openAIMarkSize: CGFloat { openAIMark?.size.width ?? Tok.App.openAIMarkFallback }
 
     /// The Codex icon: the OpenAI mark tinted `color`. `rect` should be backing-aligned and mark-sized.
     static func codexMark(in rect: NSRect, color: NSColor, ctx: CGContext) {

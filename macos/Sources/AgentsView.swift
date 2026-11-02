@@ -59,10 +59,10 @@ final class AgentsView: NSView {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let top = bounds.height - Tok.Size.footH
         Draw.fill(NSRect(x: 0, y: top, width: bounds.width, height: Tok.Size.footH), Tok.Color.windowBg)
-        Draw.fill(NSRect(x: 0, y: top, width: bounds.width, height: 1), Tok.Color.hairline)
+        Draw.fill(NSRect(x: 0, y: top, width: bounds.width, height: Tok.App.hairline), Tok.Color.hairline)
         let font = Draw.ui(Tok.Size.footFont)
         let lh = Tok.Size.footFont * Tok.Font.baseLine
-        let y = top + 1 + (Tok.Size.footH - 1 - lh) / 2
+        let y = top + Tok.App.hairline + (Tok.Size.footH - Tok.App.hairline - lh) / 2
         if hiddenShells > 0 {
             let text = hiddenShells == 1 ? "1 shell tab hidden" : "\(hiddenShells) shell tabs hidden"
             Draw.text(Draw.line(text, font, Tok.Color.textLabel), font: font, x: Tok.Size.footPadx, top: y, lineHeight: lh, in: ctx)
@@ -93,7 +93,7 @@ final class AgentsView: NSView {
     /// The mockup's 280 is its border box; the window draws its own border, so the content is 278.
     static func dockedFrame(on screen: NSScreen?, height: CGFloat? = nil) -> NSRect {
         let area = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let w = Tok.Size.narrowW - 2
+        let w = Tok.Size.narrowW - 2 * Tok.App.hairline
         let h = min(height ?? area.height, area.height)
         return NSRect(x: area.maxX - w, y: area.maxY - h, width: w, height: h)
     }

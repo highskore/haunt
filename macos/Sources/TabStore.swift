@@ -9,8 +9,6 @@ final class Tab {
     /// Ghostty's scroll wrapper; it is what tells the surface its size.
     let host: SurfaceScrollView
     var subscriptions: [AnyCancellable] = []
-    /// Bumped per info report, so a slow branch lookup never overwrites a newer one.
-    var infoGeneration = 0
 
     init(env: SurfaceEnv, view: Ghostty.SurfaceView, size: CGSize) {
         self.env = env
