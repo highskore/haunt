@@ -1,5 +1,6 @@
 import Foundation
 
+#if HAUNT_FIXTURES
 /// Stand-in for haunt-core until the UniFFI bindings land: shells only, or a mockup fixture.
 final class MockCore: CoreAPI {
     private struct Surface {
@@ -77,3 +78,4 @@ final class MockCore: CoreAPI {
         listener?.changed()
     }
 }
+#endif
