@@ -189,7 +189,7 @@ Installed with `haunt plugin install <path>` (cli/), which shows the capabilitie
 
 | call | what |
 |---|---|
-| `HauntPlugins.load(hauntDir:core:)` | loads every pinned plugin from `<hauntDir>/plugins` with only its granted imports; runs `init`. `core` (the `HauntCore`) backs the `decisions` and `allowlist` imports, and from then on every event for a registered surface reaches the plugins whose `events` grant covers it, verified or not. Call it after `core.start()` so the decision log is loaded. |
+| `HauntPlugins.load(hauntDir:core:)` | loads every pinned plugin from `<hauntDir>/plugins` with only its granted imports; runs `init`. `core` (the `HauntCore`) backs the `decisions` and `allowlist` imports, and from then on every event for a registered surface reaches the plugins whose `events` grant covers it, with `verified` set as below. Call it after `core.start()` so the decision log is loaded. |
 | `loadErrors()` | plugins skipped, with the reason (hash mismatch, link error, trap) |
 | `paletteItems(mode: nil, query:)` | registered commands and modes (`isMode`), title-filtered by `query` |
 | `paletteItems(mode: "word", query:)` | the items that mode's plugin returns for `query`, each with optional `atMs` (time column), `mark` (`open`, `filled`, `round`) and `surfaceId` (Enter jumps to that tab, if it is open, instead of invoking the item) |
@@ -204,10 +204,12 @@ Each call runs under a 50 ms CPU budget and 64 MB of memory; a trap or timeout d
 
 Events reach plugins on the thread that delivered them (usually the socket thread), after the core has released its lock. A plugin call holds the plugins' lock and may then take the core's, through `decisions` or `allowlist`; the core never calls a plugin while holding its own. `propose` and `arrange` fire `changed()` from inside a plugin call, so the listener must hop to the main actor and not call `HauntPlugins` synchronously. Row decorations from `on-event` are dropped for now: the snapshot has no field for them yet.
 
+**Verified events**: `agent-event.verified` is true when the event came over the socket with the surface's nonce (see Nonce gating). An unverified one (OSC 777, wrong or no nonce) can be forged by anything that prints into the terminal, so treat its fields as untrusted. A plugin granted `pty_write`, `allowlist_suggest` or `decisions_read` gets verified events only. Only a verified event's `cwd` widens a `${cwd}` grant.
+
 **API version**: `haunt:plugin@0.3.0`; manifests say `api = "0.3"`. Older plugins no longer install or load; rebuild them against the 0.3 WIT.
 
 - 0.2 added the `decisions` and `allowlist` imports (below), and `at-ms`, `mark` and `surface` on `palette-item`, plus the `mark` enum.
-- 0.3 added the `sidebar` import (below), and two exports every plugin implements. `row-menu(surface) -> list<menu-item>` builds context-menu entries; a chosen entry calls `on-action(id, surface)`. `on-row-moved(surface, group, before)` is called only for plugins granted `sidebar`.
+- 0.3 added `verified` on `agent-event`, the `sidebar` import (below), and two exports every plugin implements. `row-menu(surface) -> list<menu-item>` builds context-menu entries; a chosen entry calls `on-action(id, surface)`. `on-row-moved(surface, group, before)` is called only for plugins granted `sidebar`.
 
 **sidebar** (`sidebar`):
 
@@ -217,7 +219,7 @@ Events reach plugins on the thread that delivered them (usually the socket threa
 
 **decisions** (`decisions_read`): `query(text, limit)` returns the same records as `HauntCore.decisions`, at most 1000, without the raw `command` (the preview shows it with nothing hidden). It is read only: nothing a plugin can call adds, changes or removes a decision.
 
-**allowlist** (`allowlist_suggest`): `approvals(min-count)` returns the counted approvals, at least `min-count` of them, per project and exact command, newest first. `propose(project, command)` adds a pending suggestion; it errors if the proposal fails a check (see Allowlist suggestions). No import writes a settings file, and none can accept a suggestion. Only `HauntCore.acceptAllowSuggestion` does, after the user accepts it in the UI.
+**allowlist** (`allowlist_suggest`): `approvals(min-count)` returns the counted approvals (Claude Code, clicked in haunt, the raw command equal to its preview) per project and exact command, newest first. The host raises `min-count` to at least 2 (`APPROVALS_MIN`), so a one-off approval, such as an `export TOKEN=…`, never reaches a plugin. `propose(project, command)` adds a pending suggestion; it errors if the proposal fails a check (see Allowlist suggestions). No import writes a settings file, and none can accept a suggestion. Only `HauntCore.acceptAllowSuggestion` does, after the user accepts it in the UI.
 
 An ungranted import is absent: a component that imports it fails to link at install and at load.
 

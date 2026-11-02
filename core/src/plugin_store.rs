@@ -436,7 +436,7 @@ impl PluginSet {
     pub fn on_event(&mut self, event: &AgentEvent, verified: bool) -> Vec<(String, Decoration)> {
         let mut out = Vec::new();
         for (caps, p) in &mut self.plugins {
-            if caps.wants_event(&event.kind)
+            if caps.wants_event(&event.kind, verified)
                 && let Ok(Some(d)) = p.on_event(event, verified)
             {
                 out.push((p.id().to_owned(), d));

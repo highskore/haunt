@@ -84,7 +84,7 @@ pub(crate) struct State {
     /// Basename of the login shell surfaces run, for shell rows.
     shell: Option<String>,
     listener: Option<Listener>,
-    decisions: DecisionLog,
+    pub(crate) decisions: DecisionLog,
     /// (project, command) suggestions the user accepted or dismissed.
     allow_done: HashSet<(String, String)>,
     /// Rules plugins proposed, newest first, as (plugin id, project, command).

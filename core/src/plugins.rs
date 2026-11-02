@@ -39,6 +39,8 @@ const MAX_OUTBOX: usize = 256;
 const MAX_LOGS: usize = 1000;
 const MAX_STR: usize = 4096;
 const MAX_DECISIONS: u32 = 1000;
+/// One-off approvals (an `export TOKEN=…`, say) never reach a plugin; repeats are what rules are for.
+pub const APPROVALS_MIN: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decoration {
@@ -366,7 +368,7 @@ impl wdec::Host for HostState {
 impl wallow::Host for HostState {
     fn approvals(&mut self, min_count: u32) -> Vec<wallow::Approval> {
         let Some(core) = &self.core else { return Vec::new() };
-        core.approvals(min_count)
+        core.approvals(min_count.max(APPROVALS_MIN))
             .into_iter()
             .map(|a| wallow::Approval { project: a.project, command: a.command, count: a.count, last_at_ms: a.last_at_ms })
             .collect()
@@ -576,6 +578,7 @@ impl LoadedPlugin {
             agent_id: event.agent_id.clone(),
             cwd: event.cwd.clone(),
             summary,
+            verified,
         };
         let out = self.call(|b, s| b.call_on_event(s, &ev))?;
         Ok(out.map(|d| Decoration {
@@ -954,6 +957,41 @@ mod tests {
         let mut detached = HostState::new("x", &Capabilities::default(), None, None, None);
         assert!(detached.propose(p, "cargo test".into()).is_err());
         std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn the_approvals_import_hides_one_offs_other_agents_and_cleaned_commands() {
+        use crate::{decisions::Decision, event::Agent, session::Outcome};
+        use wallow::Host as _;
+        let core = crate::Core::new(tempdir("approvals-floor"));
+        let d = |cmd: &str, preview: &str, outcome, agent| Decision {
+            at_ms: 1,
+            surface_id: "s".into(),
+            tool: "Bash".into(),
+            preview: preview.into(),
+            command: Some(cmd.into()),
+            cwd: Some("/p".into()),
+            outcome,
+            agent,
+        };
+        core.with_state(|st| {
+            for x in [
+                d("export TOKEN=abc", "export TOKEN=abc", Outcome::AllowedInHaunt, Agent::Claude),
+                d("cargo test", "cargo test", Outcome::AllowedInHaunt, Agent::Claude),
+                d("cargo test", "cargo test", Outcome::AllowedInHaunt, Agent::Claude),
+                d("make", "make", Outcome::AnsweredInTerminal, Agent::Claude),
+                d("make", "make", Outcome::AnsweredInTerminal, Agent::Claude),
+                d("npm i", "npm i", Outcome::AllowedInHaunt, Agent::Codex),
+                d("npm i", "npm i", Outcome::AllowedInHaunt, Agent::Codex),
+                d("ls\u{1b}[2K", "ls", Outcome::AllowedInHaunt, Agent::Claude),
+                d("ls\u{1b}[2K", "ls", Outcome::AllowedInHaunt, Agent::Claude),
+            ] {
+                st.decisions.record(x);
+            }
+        });
+        let mut st = HostState::new("p", &Capabilities::default(), None, None, Some(core.handle()));
+        let got: Vec<_> = st.approvals(0).into_iter().map(|a| (a.command, a.count)).collect();
+        assert_eq!(got, [("cargo test".to_owned(), 2)]);
     }
 
     fn raw_store(host: &PluginHost) -> Store<HostState> {

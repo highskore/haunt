@@ -52,7 +52,7 @@ mod tests {
     use super::*;
 
     fn event(kind: &str, summary: Option<&str>) -> AgentEvent {
-        AgentEvent { kind: kind.into(), session_id: None, agent_id: None, cwd: None, summary: summary.map(Into::into) }
+        AgentEvent { kind: kind.into(), session_id: None, agent_id: None, cwd: None, summary: summary.map(Into::into), verified: true }
     }
 
     #[test]

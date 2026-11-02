@@ -1,6 +1,6 @@
 // haunt plugin API, plan section 3.3. Gated imports are linked only when the capability is granted.
 // 0.2: `decisions` and `allowlist` imports; palette items carry a time, a mark and a surface.
-// 0.3: `sidebar` import; `row-menu` and `on-row-moved` exports.
+// 0.3: `verified` on agent-event; `sidebar` import; `row-menu` and `on-row-moved` exports.
 package haunt:plugin@0.3.0;
 
 interface types {
@@ -10,6 +10,10 @@ interface types {
     agent-id: option<string>,
     cwd: option<string>,
     summary: option<string>,
+    // Came over the socket with the surface's nonce. Unverified events (OSC, wrong or no nonce) can be
+    // forged by anything in the terminal; plugins holding pty_write, allowlist_suggest or
+    // decisions_read never get them.
+    verified: bool,
   }
 
   enum style { meta, needs, dot, hollow-dot, kbd, mono }

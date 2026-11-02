@@ -29,13 +29,13 @@ Every plugin can add palette commands and modes, add entries to a tab's context 
 
 | key | grants |
 |---|---|
-| `events = [...]` | agent events delivered to `on-event`: `agent.session-start`, `agent.prompt`, `agent.task`, `agent.subagent`, `agent.tool`, `agent.permission-request`, `agent.notification`, `agent.plan-exit`, `agent.question`, `agent.todos`, `agent.file-edited`, `agent.stop`, `agent.unknown`, or `agent.*` for all. Events carry commands, paths and prompts, which can contain secrets. `terminal.*` names are accepted but not delivered yet. |
+| `events = [...]` | agent events delivered to `on-event`: `agent.session-start`, `agent.prompt`, `agent.task`, `agent.subagent`, `agent.tool`, `agent.permission-request`, `agent.notification`, `agent.plan-exit`, `agent.question`, `agent.todos`, `agent.file-edited`, `agent.stop`, `agent.unknown`, or `agent.*` for all. Events carry commands, paths and prompts, which can contain secrets. `terminal.*` names are accepted but not delivered yet. `verified` is false for an event anything in the terminal could have forged; plugins with `pty_write`, `decisions_read` or `allowlist_suggest` get verified events only. |
 | `notifications = true` | `notify.notify`, notifications with action buttons; replies arrive at `on-action` |
 | `pty_write = true` | `pty.answer`: Allow or Deny for the surface's pending permission request, nothing else. No event carries the request key yet, so this can't be used today. |
 | `fs_read = ["glob", ...]` | `fs.read` and `fs.list` on matching paths |
 | `fs_write = ["glob", ...]` | `fs.write` on matching paths |
 | `decisions_read = true` | `decisions.query`: the verified permission decisions, newest first. Read only. |
-| `allowlist_suggest = true` | `allowlist.approvals` (how often each exact Bash command was approved in haunt, per project) and `allowlist.propose`, which only offers a rule; Haunt writes it when the user accepts. |
+| `allowlist_suggest = true` | `allowlist.approvals` (each exact Bash command approved in haunt at least twice, per project, with its folder) and `allowlist.propose`, which only offers a rule; Haunt writes it when the user accepts. |
 | `sidebar = true` | `sidebar.rows` (tab names, kinds and state groups, no task text) and `sidebar.arrange`: pins, named sections, manual order and colours over Haunt's grouping. Rows needing you always stay first. Drags arrive at `on-row-moved`. |
 
 An fs glob is absolute or starts with `${cwd}/` (the agent's folder, from verified events only, never `$HOME` or the haunt dir). It may use `*` within a path segment, but not `**`, `.` or `..`. Nothing inside the haunt dir is ever reachable.

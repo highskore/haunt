@@ -99,9 +99,15 @@ pub fn event_topic(kind: &EventKind) -> &'static str {
 }
 
 impl Capabilities {
-    pub fn wants_event(&self, kind: &EventKind) -> bool {
+    /// Whether an event goes to this plugin. Anything in the terminal can forge an unverified one,
+    /// so a plugin that can answer prompts or sees approved commands only gets verified events.
+    pub fn wants_event(&self, kind: &EventKind, verified: bool) -> bool {
         let topic = event_topic(kind);
-        self.events.iter().any(|e| e == topic || e == "agent.*")
+        (verified || !self.verified_only()) && self.events.iter().any(|e| e == topic || e == "agent.*")
+    }
+
+    pub fn verified_only(&self) -> bool {
+        self.pty_write || self.allowlist_suggest || self.decisions_read
     }
 
     pub fn fs_read_granted(&self) -> bool {
@@ -152,10 +158,10 @@ impl Capabilities {
             out.push(("can show notifications with action buttons".into(), false));
         }
         if self.decisions_read {
-            out.push(("can read your permission decision log: commands, file paths and folders, which can contain secrets".into(), false));
+            out.push(("can read your whole permission decision log: every command and file path an agent asked to use, its folder, tab and your answer; these can contain secrets".into(), false));
         }
         if self.allowlist_suggest {
-            out.push(("can read how often you approved commands, and suggest allow rules (nothing is written until you accept)".into(), false));
+            out.push(("can read the commands you approved in Haunt more than once and the folders they ran in; these can contain secrets. Can suggest allow rules for them (nothing is written until you accept)".into(), false));
         }
         if self.sidebar {
             out.push(("can see your tabs' names and states, and reorder, pin, group and colour them (rows needing you stay on top)".into(), false));
@@ -259,6 +265,35 @@ mod tests {
         .unwrap();
         assert!(m.capabilities.notifications);
         assert!(m.capabilities.describe().iter().any(|(l, _)| l.contains("<agent folder>/.claude/settings.json")));
+    }
+
+    #[test]
+    fn plugins_that_act_or_see_approvals_get_verified_events_only() {
+        let kind = EventKind::SubagentStart;
+        for (caps, unverified) in [
+            ("", true),
+            ("notifications = true\nsidebar = true", true),
+            ("pty_write = true", false),
+            ("allowlist_suggest = true", false),
+            ("decisions_read = true", false),
+        ] {
+            let m = Manifest::parse(&manifest(&format!("events = [\"agent.*\"]\n{caps}"))).unwrap();
+            assert!(m.capabilities.wants_event(&kind, true), "{caps}");
+            assert_eq!(m.capabilities.wants_event(&kind, false), unverified, "{caps}");
+        }
+    }
+
+    #[test]
+    fn the_consent_text_says_what_the_log_imports_expose() {
+        let m = Manifest::parse(&manifest("decisions_read = true\nallowlist_suggest = true")).unwrap();
+        let lines: Vec<_> = m.capabilities.describe().into_iter().map(|(l, _)| l).collect();
+        let [log, allow] = &lines[..] else { panic!("{lines:?}") };
+        for want in ["every command and file path", "folder", "secrets"] {
+            assert!(log.contains(want), "{log}");
+        }
+        for want in ["commands you approved", "folders they ran in", "secrets", "nothing is written until you accept"] {
+            assert!(allow.contains(want), "{allow}");
+        }
     }
 
     #[test]
