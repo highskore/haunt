@@ -50,6 +50,8 @@ final class PaletteController: NSObject, NSWindowDelegate {
     private var query = ""
     /// ⇥ in a mode whose rows name tabs (`log`): only the selected tab's rows.
     private var tabFilter: String?
+    /// The start of the day the rows were last built, for their times.
+    private var today = Date()
     private var rowsNameTabs = false
     /// Fixture captures keep it open when focus moves to another app mid-capture.
     var sticky = false
@@ -188,6 +190,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
     // MARK: Rows
 
     private func reload() {
+        today = Calendar.current.startOfDay(for: Date())
         let rows: [PaletteRow]
         var foot: [String]
         switch mode {
@@ -252,7 +255,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
         let logLine = item.atMs != nil || item.mark != nil || item.surfaceId != nil
         // The binding `[keys]` gave it, which may differ from, or have refused, the plugin's default.
         let key = host?.paletteKeys.plugin[KeyMap.pluginName(item.pluginId, item.id)].map { PaletteRow.Right.key($0.display) } ?? .none
-        return PaletteRow(left: item.atMs.map { Self.time($0) } ?? "", mark: item.mark.map(Self.mark),
+        return PaletteRow(left: item.atMs.map { Self.time($0, today: today) } ?? "", mark: item.mark.map(Self.mark),
                           title: item.title, sub: item.subtitle ?? (logLine ? "" : item.pluginId),
                           right: tab == nil ? key : .jump,
                           action: tab.map { .tab($0) } ?? (item.isMode ? .enterMode(item.id) : .plugin(pluginId: item.pluginId, itemId: item.id)))
@@ -266,21 +269,21 @@ final class PaletteController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// "14:02" today, "Sat" this week, "10/3" before that.
-    static func time(_ ms: UInt64, now: Date = Date()) -> String {
-        let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
-        let cal = Calendar.current
+    private static func formatter(_ format: String) -> DateFormatter {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        if cal.isDate(date, inSameDayAs: now) {
-            f.dateFormat = "HH:mm"
-        } else if let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: now)).day,
-                  days < 7 {
-            f.dateFormat = "EEE"
-        } else {
-            f.dateFormat = "M/d"
-        }
-        return f.string(from: date)
+        f.dateFormat = format
+        return f
+    }
+
+    private static let clock = formatter("HH:mm"), weekday = formatter("EEE"), monthDay = formatter("M/d")
+
+    /// "14:02" today, "Sat" this week, "10/3" before that. `today` is the start of the current day.
+    static func time(_ ms: UInt64, today: Date) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
+        let cal = Calendar.current
+        let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: today).day ?? .max
+        return (days == 0 ? clock : days < 7 ? weekday : monthDay).string(from: date)
     }
 }
 
@@ -364,21 +367,21 @@ final class PaletteView: NSView {
     /// `maxRows`, cut to what fits in `heightLimit` with every entry at its full (ruled) height.
     private var rowsShown: Int {
         let fixed = 2 * border + inputH + footH + Tok.Size.paletteListPad[0] * 2
-        let entry = Tok.Size.paletteEntryPad[0] * 2 + textLines + 1
+        let entry = Tok.Size.paletteEntryPad[0] * 2 + textLines + border
         let fit = heightLimit.isFinite ? Int(((heightLimit - fixed) / entry).rounded(.down)) : maxRows
         return max(Self.minRows, min(maxRows, fit))
     }
 
-    // MARK: Geometry (pt, inside the 1 pt border)
+    // MARK: Geometry (pt, inside the border); rules are as thick as the border
 
     private let lh = Tok.Font.baseLine
-    private var border: CGFloat { 1 }
+    private var border: CGFloat { Tok.App.hairline }
     private var width: CGFloat { Tok.Size.paletteW - 2 * border }
     private var padX: CGFloat { Tok.Size.paletteInputPad[1] }
-    private var inputH: CGFloat { Tok.Size.paletteInputPad[0] * 2 + Tok.Size.paletteInputFont * lh + 1 }
+    private var inputH: CGFloat { Tok.Size.paletteInputPad[0] * 2 + Tok.Size.paletteInputFont * lh + border }
     private var textLines: CGFloat { Tok.Size.paletteFont * lh + Tok.Size.paletteSmallFont * lh }
     private var footH: CGFloat {
-        foot.isEmpty ? 0 : 1 + Tok.Size.paletteFootPad[0] * 2 + Tok.Size.paletteSmallFont * lh
+        foot.isEmpty ? 0 : border + Tok.Size.paletteFootPad[0] * 2 + Tok.Size.paletteSmallFont * lh
     }
     private var visible: Range<Int> { scroll..<min(rows.count, scroll + rowsShown) }
 
@@ -386,7 +389,7 @@ final class PaletteView: NSView {
     private func hasRule(_ i: Int) -> Bool { i != selected && i != visible.upperBound - 1 }
 
     private func entryH(_ i: Int) -> CGFloat {
-        Tok.Size.paletteEntryPad[0] * 2 + textLines + (hasRule(i) ? 1 : 0)
+        Tok.Size.paletteEntryPad[0] * 2 + textLines + (hasRule(i) ? border : 0)
     }
 
     private var listH: CGFloat {
@@ -448,13 +451,13 @@ final class PaletteView: NSView {
             x += Draw.width(line) + gap
         }
         let ch = Tok.Size.paletteCursorH
-        Draw.fill(NSRect(x: x, y: mid - ch / 2, width: 1, height: ch), Tok.Color.paletteInk)
+        Draw.fill(NSRect(x: x, y: mid - ch / 2, width: Tok.App.caretW, height: ch), Tok.Color.paletteInk)
         if query.isEmpty && chip == nil && !placeholder.isEmpty {
             let line = Draw.line(placeholder, f, Tok.Color.paletteMute)
             Draw.text(line, font: f, x: x + gap, top: padY, lineHeight: lineH, in: ctx)
         }
         drawKey("esc", right: width - padX, mid: mid, font: Tok.Size.paletteSmallFont, ctx: ctx)
-        Draw.fill(NSRect(x: 0, y: inputH - 1, width: width, height: 1), Tok.Color.paletteRule)
+        Draw.fill(NSRect(x: 0, y: inputH - border, width: width, height: border), Tok.Color.paletteRule)
     }
 
     /// The mockup's `.kbd` (and `.jmp` with its own font and line height), right-aligned at `right`.
@@ -465,14 +468,14 @@ final class PaletteView: NSView {
         let line = Draw.line(label, f, Tok.Color.paletteMute)
         let pad = Tok.Size.paletteKbdPad[1]
         let lineH = lineHeight ?? size * lh
-        let w = Draw.width(line) + pad * 2 + 2, h = lineH + 2
+        let w = Draw.width(line) + pad * 2 + border * 2, h = lineH + border * 2
         let box = NSRect(x: right - w, y: top ?? (mid! - h / 2), width: w, height: h)
         let kr = Tok.Size.paletteKbdRadius
-        let path = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: kr - 0.5, yRadius: kr - 0.5)
-        path.lineWidth = 1
+        let path = NSBezierPath(roundedRect: box.insetBy(dx: border / 2, dy: border / 2), xRadius: kr - border / 2, yRadius: kr - border / 2)
+        path.lineWidth = border
         Tok.Color.paletteRule.setStroke()
         path.stroke()
-        Draw.text(line, font: f, x: box.minX + 1 + pad, top: box.minY + 1, lineHeight: lineH, in: ctx)
+        Draw.text(line, font: f, x: box.minX + border + pad, top: box.minY + border, lineHeight: lineH, in: ctx)
         return box
     }
 
@@ -497,13 +500,13 @@ final class PaletteView: NSView {
         if let mark = row.mark {
             let s = Tok.Size.paletteMark
             let box = NSRect(x: markX, y: y + Tok.Size.paletteMarkMt, width: s, height: s)
-            let path = mark == .round ? NSBezierPath(ovalIn: box.insetBy(dx: 0.5, dy: 0.5))
-                : NSBezierPath(rect: box.insetBy(dx: 0.5, dy: 0.5))
+            let path = mark == .round ? NSBezierPath(ovalIn: box.insetBy(dx: border / 2, dy: border / 2))
+                : NSBezierPath(rect: box.insetBy(dx: border / 2, dy: border / 2))
             if mark == .filled {
                 Tok.Color.paletteInk.setFill()
                 NSBezierPath(rect: box).fill()
             } else {
-                path.lineWidth = 1
+                path.lineWidth = border
                 Tok.Color.paletteInk.setStroke()
                 path.stroke()
             }
@@ -526,17 +529,17 @@ final class PaletteView: NSView {
             Draw.text(sub, font: small, x: textX, top: y + bodyH, lineHeight: smallH, in: ctx)
         }
         if hasRule(index) {
-            Draw.fill(NSRect(x: padX, y: top + h - 1, width: width - 2 * padX, height: 1), Tok.Color.paletteEntryRule)
+            Draw.fill(NSRect(x: padX, y: top + h - border, width: width - 2 * padX, height: border), Tok.Color.paletteEntryRule)
         }
     }
 
     private func drawFoot(top: CGFloat, ctx: CGContext) {
-        Draw.fill(NSRect(x: 0, y: top, width: width, height: 1), Tok.Color.paletteRule)
+        Draw.fill(NSRect(x: 0, y: top, width: width, height: border), Tok.Color.paletteRule)
         let f = mono(Tok.Size.paletteSmallFont), h = Tok.Size.paletteSmallFont * lh
         var x = Tok.Size.paletteFootPad[1]
         for hint in foot {
             let line = Draw.line(hint, f, Tok.Color.paletteMute)
-            Draw.text(line, font: f, x: x, top: top + 1 + Tok.Size.paletteFootPad[0], lineHeight: h, in: ctx)
+            Draw.text(line, font: f, x: x, top: top + border + Tok.Size.paletteFootPad[0], lineHeight: h, in: ctx)
             x += Draw.width(line) + Tok.Size.paletteFootGap
         }
     }

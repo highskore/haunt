@@ -1,5 +1,6 @@
 import AppKit
 
+#if HAUNT_FIXTURES
 /// Mockup screens the app can reproduce for `design/check`, selected with HAUNT_FIXTURE=<screen>.
 enum Fixture: String {
     case iconOnly = "ui-03-icon-only"
@@ -34,9 +35,6 @@ enum Fixture: String {
     static var current: Fixture? {
         ProcessInfo.processInfo.environment["HAUNT_FIXTURE"].flatMap(Fixture.init(rawValue:))
     }
-
-    /// The mockup's window size in points.
-    static let windowSize = NSSize(width: 900, height: Tok.Size.windowH)
 
     var titleAccessory: TitleBarView.Accessory {
         self == .iconOnly || self == .zen || isSheet || self == .pasteRisky ? .icons : .kbd
@@ -193,3 +191,15 @@ enum Fixture: String {
         return "\u{1b}[?25l" + lines.map { $0 + "\u{1b}[0m" }.joined(separator: "\r\n")
     }
 }
+#else
+/// Release builds carry no fixtures: with no cases, every `Fixture?` is nil.
+enum Fixture: Equatable {
+    static var current: Fixture? { nil }
+    static let narrowHeight: CGFloat = 0
+    var titleAccessory: TitleBarView.Accessory { switch self {} }
+    var titlebarButtons: [TitlebarButton] { switch self {} }
+    var sidebarHidden: Bool { switch self {} }
+    var agentsView: Bool { switch self {} }
+    var tabCount: Int { switch self {} }
+}
+#endif

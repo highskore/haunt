@@ -9,6 +9,8 @@ protocol CoreAPI: AnyObject {
     func selectSurface(surfaceId: String)
     func onOscNotification(surfaceId: String, title: String, body: String)
     func snapshot() -> SidebarSnapshot
+    /// nil while nothing changed since the snapshot with `version`.
+    func snapshotIfNewer(version: UInt64) -> SidebarSnapshot?
     func setListener(listener: CoreListener)
     func answerPermission(surfaceId: String, requestKey: UInt64, allow: Bool) -> Data?
     func onUserInput(surfaceId: String)
@@ -36,6 +38,7 @@ func loadPlugins(hauntDir: String, core: CoreAPI, bundledDir: String?) throws ->
     return try HauntPlugins.load(hauntDir: hauntDir, core: core, bundledDir: bundledDir)
 }
 
+#if HAUNT_FIXTURES
 private var fixtureCore: HauntCore?
 
 /// The log palettes in the real build: the bundled decision-log plugin over a throwaway core that holds
@@ -73,6 +76,7 @@ func fixturePlugins(_ fixture: Fixture, bundledDir: String?) throws -> PluginsAP
     fixtureCore = core
     return try HauntPlugins.load(hauntDir: dir.path, core: core, bundledDir: bundledDir)
 }
+#endif
 #else
 func loadPlugins(hauntDir: String, core: CoreAPI, bundledDir: String?) throws -> PluginsAPI? { NoPlugins() }
 
@@ -163,6 +167,8 @@ enum CoreError: Error {
 struct SidebarSnapshot: Equatable, Hashable {
     var groups: [SidebarGroup]
     var colorStyle: ColorStyle
+    var version: UInt64 = 0
+    var nextTickMs: UInt64?
 }
 
 struct SidebarGroup: Equatable, Hashable {

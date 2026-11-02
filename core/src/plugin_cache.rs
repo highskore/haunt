@@ -67,11 +67,7 @@ impl CwasmCache {
     pub fn get(&self, name: &str) -> Option<Vec<u8>> {
         let (art, mac) = self.paths(name);
         let bytes = fs::read(&art).ok()?;
-        let ok = fs::read(&mac).is_ok_and(|tag| {
-            let mut m = self.mac();
-            m.update(&bytes);
-            m.verify_slice(&tag).is_ok()
-        });
+        let ok = fs::read(&mac).is_ok_and(|tag| self.mac(name, &bytes).verify_slice(&tag).is_ok());
         if ok {
             Some(bytes)
         } else {
@@ -83,10 +79,8 @@ impl CwasmCache {
 
     pub fn put(&self, name: &str, bytes: &[u8]) -> Result<(), CacheError> {
         let (art, mac) = self.paths(name);
-        let mut m = self.mac();
-        m.update(bytes);
         write_atomic(&art, bytes)?;
-        write_atomic(&mac, &m.finalize().into_bytes())?;
+        write_atomic(&mac, &self.mac(name, bytes).finalize().into_bytes())?;
         Ok(())
     }
 
@@ -94,8 +88,13 @@ impl CwasmCache {
         (self.dir.join(format!("{name}.cwasm")), self.dir.join(format!("{name}.cwasm.mac")))
     }
 
-    fn mac(&self) -> HmacSha256 {
-        HmacSha256::new_from_slice(&self.key).expect("hmac accepts any key length")
+    /// Over the name too, so an artefact verifies only under the name (engine and wasm) it was made for.
+    fn mac(&self, name: &str, bytes: &[u8]) -> HmacSha256 {
+        let mut m = HmacSha256::new_from_slice(&self.key).expect("hmac accepts any key length");
+        m.update(&(name.len() as u64).to_le_bytes());
+        m.update(name.as_bytes());
+        m.update(bytes);
+        m
     }
 }
 
@@ -192,6 +191,17 @@ mod tests {
         fs::write(dir.join("a.cwasm"), b"evil code!!").unwrap();
         assert!(c.get("a").is_none());
         assert!(!dir.join("a.cwasm").exists() && !dir.join("a.cwasm.mac").exists());
+    }
+
+    #[test]
+    fn an_entry_moved_to_another_name_is_rejected() {
+        let dir = tempdir("moved");
+        let c = CwasmCache::open(&dir).unwrap();
+        c.put("a", b"native code").unwrap();
+        fs::copy(dir.join("a.cwasm"), dir.join("b.cwasm")).unwrap();
+        fs::copy(dir.join("a.cwasm.mac"), dir.join("b.cwasm.mac")).unwrap();
+        assert!(c.get("b").is_none());
+        assert!(c.get("a").is_some());
     }
 
     #[test]
