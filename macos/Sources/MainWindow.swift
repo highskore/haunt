@@ -182,12 +182,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }()
     private let root = RootView()
     var tabs: [Tab] { store.tabs }
-    private var refreshQueued = false
     private var observers: [NSObjectProtocol] = []
     private var ticker: Timer?
     /// Applied in showWindow, once the window has its launch position to restore to.
     private var agentsViewAtLaunch = false
-    private lazy var listener = MainQueueListener { [weak self] in self?.coalescedRefresh() }
+    /// The core fires once per burst of changes and re-arms on the next snapshot, so each call is one redraw.
+    private lazy var listener = MainQueueListener { [weak self] in
+        self?.refresh()
+        self?.bridge.drain()
+    }
 
     init(core: CoreAPI, ghostty: Ghostty.App, fixture: Fixture?, config: HauntConfig) {
         self.core = core
@@ -416,17 +419,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     // MARK: Core
-
-    /// A burst of hook events becomes one redraw.
-    private func coalescedRefresh() {
-        guard !refreshQueued else { return }
-        refreshQueued = true
-        DispatchQueue.main.async { [weak self] in
-            self?.refreshQueued = false
-            self?.refresh()
-            self?.bridge.drain()
-        }
-    }
 
     /// Subagent elapsed times are computed in snapshot(), so poll once a second to keep them ticking,
     /// but only while the window can be seen; becoming visible again catches up at once.
