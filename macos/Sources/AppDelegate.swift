@@ -9,7 +9,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     let config: HauntConfig
     let ghostty: Ghostty.App
     private let core: CoreAPI
-    private var plugins: PluginsAPI?
     private var controller: MainWindowController?
     private lazy var setup = SetupSheets(config: config, fixture: fixture != nil)
     private var settings: SettingsWindowController?
@@ -53,10 +52,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         ghostty.delegate = self
         buildMenu()
-        if fixture == nil { plugins = Self.startPlugins(dir: config.dir) }
 
         // The listener goes in before start() so no change is missed.
-        let c = MainWindowController(core: core, ghostty: ghostty, fixture: fixture, config: config, plugins: plugins)
+        let c = MainWindowController(core: core, ghostty: ghostty, fixture: fixture, config: config)
         controller = c
         c.onSidebarToggle = { [weak self] in self?.updateSidebarItem() }
         updateSidebarItem()
@@ -78,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             startError = error
             Self.logger.error("core start failed: \(String(describing: error), privacy: .public)")
         }
+        c.plugins = Self.startPlugins(fixture: fixture, core: core, dir: config.dir)
         Ghostty.App.desktopNotificationHook = { [weak c, weak self] view, title, body in
             guard let self, let tab = c?.tab(for: view) else { return false }
             self.core.onOscNotification(surfaceId: tab.env.surfaceId, title: title, body: body)
@@ -137,10 +136,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
     }
 
-    /// Load errors are logged, and listed in the palette, rather than put in front of the user.
-    private static func startPlugins(dir: URL) -> PluginsAPI? {
+    /// Load errors are logged, and listed in the palette, rather than put in front of the user. Fixtures
+    /// get their own plugins; only the log palettes have any.
+    private static func startPlugins(fixture: Fixture?, core: CoreAPI, dir: URL) -> PluginsAPI? {
         do {
-            let p = try loadPlugins(hauntDir: dir.path)
+            let bundled = Bundle.main.resourceURL?.appendingPathComponent("plugins").path
+            guard let p = try fixture.map({ try fixturePlugins($0, bundledDir: bundled) })
+                ?? loadPlugins(hauntDir: dir.path, core: core, bundledDir: bundled) else { return nil }
             for e in p.loadErrors() { logger.error("plugin not loaded: \(e, privacy: .public)") }
             return p
         } catch {

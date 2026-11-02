@@ -25,15 +25,18 @@ Haunt shows the capabilities from `haunt-plugin.toml` and asks before installing
 
 ## Capabilities
 
-Every plugin can add palette commands and modes, keep up to 10 MB of its own data (`kv`), and write to its log. Each call runs under a 50 ms CPU budget and 64 MB of memory. Ask only for what you need in `[capabilities]`:
+Every plugin can add palette commands and modes, add entries to a tab's context menu (`row-menu`; a chosen entry calls `on-action(id, <surface>)`), keep up to 10 MB of its own data (`kv`), and write to its log. Each call runs under a 50 ms CPU budget and 64 MB of memory. Ask only for what you need in `[capabilities]`:
 
 | key | grants |
 |---|---|
-| `events = [...]` | agent events delivered to `on-event`: `agent.session-start`, `agent.prompt`, `agent.task`, `agent.subagent`, `agent.tool`, `agent.permission-request`, `agent.notification`, `agent.plan-exit`, `agent.question`, `agent.todos`, `agent.file-edited`, `agent.stop`, `agent.unknown`, or `agent.*` for all. Events carry commands, paths and prompts, which can contain secrets. `terminal.*` names are accepted but not delivered yet. |
+| `events = [...]` | agent events delivered to `on-event`: `agent.session-start`, `agent.prompt`, `agent.task`, `agent.subagent`, `agent.tool`, `agent.permission-request`, `agent.notification`, `agent.plan-exit`, `agent.question`, `agent.todos`, `agent.file-edited`, `agent.stop`, `agent.unknown`, or `agent.*` for all. Events carry commands, paths and prompts, which can contain secrets. `terminal.*` names are accepted but not delivered yet. `verified` is false for an event anything in the terminal could have forged; plugins with `pty_write`, `decisions_read` or `allowlist_suggest` get verified events only. |
 | `notifications = true` | `notify.notify`, notifications with action buttons; replies arrive at `on-action` |
 | `pty_write = true` | `pty.answer`: Allow or Deny for the surface's pending permission request, nothing else. No event carries the request key yet, so this can't be used today. |
 | `fs_read = ["glob", ...]` | `fs.read` and `fs.list` on matching paths |
 | `fs_write = ["glob", ...]` | `fs.write` on matching paths |
+| `decisions_read = true` | `decisions.query`: the verified permission decisions, newest first. Read only. |
+| `allowlist_suggest = true` | `allowlist.approvals` (each exact Bash command approved in haunt at least twice, per project, with its folder) and `allowlist.propose`, which only offers a rule; Haunt writes it when the user accepts. |
+| `sidebar = true` | `sidebar.rows` (tab names, kinds and state groups, no task text) and `sidebar.arrange`: pins, named sections, manual order and colours over Haunt's grouping. Rows needing you always stay first. Drags arrive at `on-row-moved`. |
 
 An fs glob is absolute or starts with `${cwd}/` (the agent's folder, from verified events only, never `$HOME` or the haunt dir). It may use `*` within a path segment, but not `**`, `.` or `..`. Nothing inside the haunt dir is ever reachable.
 
@@ -41,7 +44,7 @@ An fs glob is absolute or starts with `${cwd}/` (the agent's folder, from verifi
 
 ## Updating the WIT pin
 
-`wit/haunt-plugin.wit` is a copy of Haunt's `wit/haunt-plugin.wit`, pinned at `haunt:plugin@0.1.0` (the `package` line). The manifest's `api = "0.1"` must match the major.minor Haunt supports. To move to a newer API:
+`wit/haunt-plugin.wit` is a copy of Haunt's `wit/haunt-plugin.wit`, pinned at `haunt:plugin@0.3.0` (the `package` line). The manifest's `api = "0.3"` must match the major.minor Haunt supports. To move to a newer API:
 
 1. Copy `wit/haunt-plugin.wit` from the Haunt version you target over `wit/haunt-plugin.wit`.
 2. Set `api` in `haunt-plugin.toml` to the new major.minor.

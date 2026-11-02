@@ -6,7 +6,7 @@ use crate::event::EventKind;
 
 pub const MANIFEST: &str = "haunt-plugin.toml";
 /// The `haunt:plugin` minor this host implements.
-pub const API: (u64, u64) = (0, 1);
+pub const API: (u64, u64) = (0, 3);
 pub const KV_CAP: usize = 10 << 20;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -43,6 +43,9 @@ pub struct Capabilities {
     pub events: Vec<String>,
     pub pty_write: bool,
     pub notifications: bool,
+    pub decisions_read: bool,
+    pub allowlist_suggest: bool,
+    pub sidebar: bool,
     pub fs_read: Vec<String>,
     pub fs_write: Vec<String>,
     pub net: Vec<String>,
@@ -96,9 +99,15 @@ pub fn event_topic(kind: &EventKind) -> &'static str {
 }
 
 impl Capabilities {
-    pub fn wants_event(&self, kind: &EventKind) -> bool {
+    /// Whether an event goes to this plugin. Anything in the terminal can forge an unverified one,
+    /// so a plugin that can answer prompts or sees approved commands only gets verified events.
+    pub fn wants_event(&self, kind: &EventKind, verified: bool) -> bool {
         let topic = event_topic(kind);
-        self.events.iter().any(|e| e == topic || e == "agent.*")
+        (verified || !self.verified_only()) && self.events.iter().any(|e| e == topic || e == "agent.*")
+    }
+
+    pub fn verified_only(&self) -> bool {
+        self.pty_write || self.allowlist_suggest || self.decisions_read
     }
 
     pub fn fs_read_granted(&self) -> bool {
@@ -148,6 +157,15 @@ impl Capabilities {
         if self.notifications {
             out.push(("can show notifications with action buttons".into(), false));
         }
+        if self.decisions_read {
+            out.push(("can read your whole permission decision log: every command and file path an agent asked to use, its folder, tab and your answer; these can contain secrets".into(), false));
+        }
+        if self.allowlist_suggest {
+            out.push(("can read the commands you approved in Haunt more than once and the folders they ran in; these can contain secrets. Can suggest allow rules for them (nothing is written until you accept)".into(), false));
+        }
+        if self.sidebar {
+            out.push(("can see your tabs' names and states, and reorder, pin, group and colour them (rows needing you stay on top)".into(), false));
+        }
         if self.pty_write {
             out.push(("can answer permission prompts in your terminal (Allow or Deny, nothing else)".into(), true));
         }
@@ -166,6 +184,9 @@ impl Capabilities {
             events: self.events.iter().filter(|e| !old.events.contains(e)).cloned().collect(),
             pty_write: self.pty_write && !old.pty_write,
             notifications: self.notifications && !old.notifications,
+            decisions_read: self.decisions_read && !old.decisions_read,
+            allowlist_suggest: self.allowlist_suggest && !old.allowlist_suggest,
+            sidebar: self.sidebar && !old.sidebar,
             fs_read: self.fs_read.iter().filter(|g| !old.fs_read.contains(g)).cloned().collect(),
             fs_write: self.fs_write.iter().filter(|g| !old.fs_write.contains(g)).cloned().collect(),
             ..Default::default()
@@ -175,7 +196,7 @@ impl Capabilities {
 }
 
 /// The capabilities every plugin gets, for the install prompt.
-pub const ALWAYS: &str = "can add commands and modes to the palette, keep up to 10 MB of its own data, and write to its log";
+pub const ALWAYS: &str = "can add commands and modes to the palette and entries to tab menus, keep up to 10 MB of its own data, and write to its log";
 
 fn plain_glob(g: &str) -> String {
     g.replace("${cwd}", "<agent folder>")
@@ -230,7 +251,7 @@ mod tests {
 
     fn manifest(caps: &str) -> String {
         format!(
-            "[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.1\"\nentry = \"plugin.wasm\"\n\n[capabilities]\n{caps}\n"
+            "[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.3\"\nentry = \"plugin.wasm\"\n\n[capabilities]\n{caps}\n"
         )
     }
 
@@ -244,6 +265,35 @@ mod tests {
         .unwrap();
         assert!(m.capabilities.notifications);
         assert!(m.capabilities.describe().iter().any(|(l, _)| l.contains("<agent folder>/.claude/settings.json")));
+    }
+
+    #[test]
+    fn plugins_that_act_or_see_approvals_get_verified_events_only() {
+        let kind = EventKind::SubagentStart;
+        for (caps, unverified) in [
+            ("", true),
+            ("notifications = true\nsidebar = true", true),
+            ("pty_write = true", false),
+            ("allowlist_suggest = true", false),
+            ("decisions_read = true", false),
+        ] {
+            let m = Manifest::parse(&manifest(&format!("events = [\"agent.*\"]\n{caps}"))).unwrap();
+            assert!(m.capabilities.wants_event(&kind, true), "{caps}");
+            assert_eq!(m.capabilities.wants_event(&kind, false), unverified, "{caps}");
+        }
+    }
+
+    #[test]
+    fn the_consent_text_says_what_the_log_imports_expose() {
+        let m = Manifest::parse(&manifest("decisions_read = true\nallowlist_suggest = true")).unwrap();
+        let lines: Vec<_> = m.capabilities.describe().into_iter().map(|(l, _)| l).collect();
+        let [log, allow] = &lines[..] else { panic!("{lines:?}") };
+        for want in ["every command and file path", "folder", "secrets"] {
+            assert!(log.contains(want), "{log}");
+        }
+        for want in ["commands you approved", "folders they ran in", "secrets", "nothing is written until you accept"] {
+            assert!(allow.contains(want), "{allow}");
+        }
     }
 
     #[test]
@@ -266,10 +316,10 @@ mod tests {
         let m = manifest("");
         assert!(Manifest::parse(&m.replace("dev.haunt.t", "../evil")).is_err());
         assert!(Manifest::parse(&m.replace("dev.haunt.t", "Dev.Haunt")).is_err());
-        assert!(Manifest::parse(&m.replace("api = \"0.1\"", "api = \"1.0\"")).is_err());
+        assert!(Manifest::parse(&m.replace("api = \"0.3\"", "api = \"1.0\"")).is_err());
         assert!(Manifest::parse(&m.replace("plugin.wasm", "../x.wasm")).is_err());
         assert!(Manifest::parse(&m.replace("plugin.wasm", "/tmp/x.wasm")).is_err());
-        assert!(Manifest::parse(&m.replace("api = \"0.1\"", "api = \"0.1.3\"")).is_ok());
+        assert!(Manifest::parse(&m.replace("api = \"0.3\"", "api = \"0.3.3\"")).is_ok());
     }
 
     #[test]

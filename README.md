@@ -28,7 +28,7 @@ Claude Code ──hooks──▶ ~/.haunt/sock ──▶ haunt-core (Rust) ─�
   - Events without the right nonce only update status. They can never create a permission request.
 - **`core/`** holds the agent model, sidebar layout, decision log, allowlist suggestions and plugin host. It has no UI code, so future Windows and Linux front ends can share it.
 - **`macos/`** is the native app: title bar, sidebar, tabs and libghostty surfaces.
-- **`wit/`** defines the plugin API (`haunt:plugin@0.1`).
+- **`wit/`** defines the plugin API (`haunt:plugin@0.3`).
   - Plugins are sandboxed WASM components. Each capability is granted when you install the plugin and pinned in a lockfile.
   - A plugin gets no filesystem, network or environment it wasn't granted.
 
@@ -43,7 +43,7 @@ macos/build.sh && macos/make-app.sh     # builds core, bindings and build/haunt.
 open build/haunt.app
 ```
 
-`make-app.sh` needs the Claude adapter checked out (see below). It also bundles the Codex adapter if `../haunt-plugins/haunt-codex` is there (or `HAUNT_CODEX_ADAPTER`), and the `haunt` CLI as `haunt.app/Contents/Helpers/haunt`.
+`make-app.sh` needs the Claude adapter checked out (see below). It also bundles the Codex adapter if `../haunt-plugins/haunt-codex` is there (or `HAUNT_CODEX_ADAPTER`), the `haunt` CLI as `haunt.app/Contents/Helpers/haunt`, and the first-party decision-log and allowlist plugins from `../haunt-plugins/` (built for `wasm32-wasip2`; Haunt installs them on launch, see `docs/core-api.md`).
 
 Signing: set `HAUNT_SIGN_ID`, or put your identity in a `.sign-id` file (gitignored). Without either, the app is signed ad hoc.
 

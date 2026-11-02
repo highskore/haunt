@@ -53,6 +53,9 @@ enum Fixture: String {
     /// The palette mockup's input: the `log` chip and "push".
     var paletteQuery: String? { self == .palette ? "log push" : self == .codexLog ? "log " : nil }
 
+    /// The screens whose palette shows the decision log.
+    var hasLog: Bool { paletteQuery != nil }
+
     private struct Tab {
         var kind: RowKind, name: String, meta: String, status: String, needs: Bool
         var progress: Progress?, subs: [Subrow]
@@ -94,18 +97,19 @@ enum Fixture: String {
             let pending = self == .suspicious && t.needs
                 ? PendingRequest(key: 1, tool: "Bash", preview: "ls #⏎rm -rf ~/x", suspicious: true) : nil
             return Row(surfaceId: id, kind: kind, name: t.name, meta: t.meta, statusText: t.status,
-                       needsYou: t.needs, progress: t.progress, subagents: t.subs, selected: id == selected, pending: pending)
+                       needsYou: t.needs, progress: t.progress, subagents: t.subs, selected: id == selected, pending: pending,
+                       color: nil)
         }
-        guard rows.count == tabs.count else { return SidebarSnapshot(groups: []) }
+        guard rows.count == tabs.count else { return SidebarSnapshot(groups: [], colorStyle: .dot) }
         switch self {
         case .iconOnly, .zen, .pasteConfirm, .pasteRisky, .narrowList, .setupPicker, .setupChange, .settings:
-            return SidebarSnapshot(groups: [SidebarGroup(label: "", rows: rows)])
+            return SidebarSnapshot(groups: [SidebarGroup(id: "tabs", label: "", rows: rows)], colorStyle: .dot)
         case .groupedFlat, .palette, .suspicious, .codex, .codexLog:
             return SidebarSnapshot(groups: [
-                SidebarGroup(label: "NEEDS YOU", rows: [rows[1]]),
-                SidebarGroup(label: "RUNNING", rows: [rows[0]]),
-                SidebarGroup(label: "IDLE", rows: [rows[2], rows[3]]),
-            ])
+                SidebarGroup(id: "needs-you", label: "NEEDS YOU", rows: [rows[1]]),
+                SidebarGroup(id: "running", label: "RUNNING", rows: [rows[0]]),
+                SidebarGroup(id: "idle", label: "IDLE", rows: [rows[2], rows[3]]),
+            ], colorStyle: .dot)
         }
     }
 
@@ -126,7 +130,8 @@ enum Fixture: String {
 
         """
 
-    /// The palette mockup's four entries, on the fixture's tabs. Like the mockup, they ignore the query.
+    /// The palette mockup's four entries, on the fixture's tabs. Each cwd is named after its tab, under a `push`
+    /// folder so that the real core matches all four for the mockup's query, as the mockup shows them.
     func decisions() -> [Decision] {
         let cal = Calendar.current
         let now = Date()
@@ -135,7 +140,8 @@ enum Fixture: String {
             return UInt64(cal.date(bySettingHour: h, minute: m, second: 0, of: day)!.timeIntervalSince1970 * 1000)
         }
         func d(_ ms: UInt64, _ surface: String, _ cmd: String, _ o: Outcome) -> Decision {
-            Decision(atMs: ms, surfaceId: surface, tool: "Bash", preview: cmd, command: cmd, cwd: nil, outcome: o,
+            let tab = tabs[Int(surface.dropFirst())! - 1].name
+            return Decision(atMs: ms, surfaceId: surface, tool: "Bash", preview: cmd, command: cmd, cwd: "/fixture/push/\(tab)", outcome: o,
                      agent: self == .codexLog && surface == "s4" ? .codex : .claude)
         }
         return [

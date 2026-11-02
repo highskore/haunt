@@ -33,6 +33,19 @@ if [ -f "$CODEX_ADAPTER/bin/haunt-codex-hook" ]; then
 else
   echo "Codex adapter not found at $CODEX_ADAPTER; building without it (set HAUNT_CODEX_ADAPTER to bundle it)" >&2
 fi
+# First-party plugins, installed on launch without a prompt (they are sealed by the signature below).
+for repo in ${HAUNT_FIRST_PARTY_PLUGINS:-$ROOT/../haunt-plugins/haunt-decision-log $ROOT/../haunt-plugins/haunt-allowlist}; do
+  if [ ! -f "$repo/haunt-plugin.toml" ]; then
+    echo "plugin not found at $repo; building without it" >&2
+    continue
+  fi
+  (cd "$repo" && cargo build -q --release --target wasm32-wasip2)
+  id=$(sed -n 's/^id = "\(.*\)"$/\1/p' "$repo/haunt-plugin.toml" | head -1)
+  entry=$(sed -n 's/^entry = "\(.*\)"$/\1/p' "$repo/haunt-plugin.toml" | head -1)
+  mkdir -p "$APP/Contents/Resources/plugins/$id"
+  sed 's/^entry = .*/entry = "plugin.wasm"/' "$repo/haunt-plugin.toml" >"$APP/Contents/Resources/plugins/$id/haunt-plugin.toml"
+  cp "$repo/$entry" "$APP/Contents/Resources/plugins/$id/plugin.wasm"
+done
 
 # HAUNT_SIGN_ID or a gitignored .sign-id picks the identity; otherwise ad hoc.
 ID="${HAUNT_SIGN_ID:-$(cat "$ROOT/.sign-id" 2>/dev/null || echo -)}"
