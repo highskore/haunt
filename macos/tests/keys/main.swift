@@ -1,0 +1,89 @@
+import AppKit
+
+var failures = 0
+func check(_ ok: Bool, _ what: String, line: Int = #line) {
+    if !ok {
+        failures += 1
+        print("FAIL line \(line): \(what)")
+    }
+}
+
+// Parsing.
+let b = Shortcut.parse("cmd+shift+b")
+check(b == Shortcut(mods: [.command, .shift], key: "b"), "cmd+shift+b parses")
+check(b?.display == "⇧⌘B", "display \(b?.display ?? "nil")")
+check(b?.keyEquivalent == "b", "key equivalent")
+check(b?.ghosttyTriggers == ["shift+super+b"], "ghostty \(b?.ghosttyTriggers ?? [])")
+check(Shortcut.parse(" Cmd + K ") == Shortcut(mods: .command, key: "k"), "case and spaces")
+check(Shortcut.parse("cmd+comma")?.display == "⌘,", "comma display")
+check(Shortcut.parse("cmd+,")?.ghosttyTriggers == ["super+comma"], "comma by character")
+check(Shortcut.parse("cmd+1")?.ghosttyTriggers == ["super+digit_1", "super+1"], "digit triggers")
+check(Shortcut.parse("ctrl+opt+enter")?.ghosttyTriggers == ["ctrl+alt+enter"], "named key")
+check(Shortcut.parse("f5") != nil, "a bare function key")
+for bad in ["", "b", "shift+b", "cmd+", "+b", "cmd+cmd+b", "hyper+b", "cmd+ü", "cmd+shift", "escape", "cmd+b+c"] {
+    check(Shortcut.parse(bad) == nil, "\(bad.debugDescription) must not parse")
+}
+
+// The [keys] table.
+var logs: [String] = []
+let toml = TOML.parse("""
+[keys]
+toggle_sidebar = "cmd+k"
+palette = "cmd+p"
+new_tab = "nonsense"
+close_tab = 5
+launch_rockets = "cmd+r"
+select_tab_1 = "cmd+p"
+""")
+let keys = KeyMap(table: toml["keys"] ?? [:]) { logs.append($0) }
+check(keys[.toggleSidebar] == Shortcut.parse("cmd+k"), "configured toggle_sidebar")
+check(keys[.palette] == Shortcut.parse("cmd+p"), "configured palette")
+check(keys[.newTab] == Shortcut.parse("cmd+t"), "invalid new_tab keeps its default")
+check(keys[.closeTab] == Shortcut.parse("cmd+w"), "non-string close_tab keeps its default")
+check(keys[.selectTab1] == Shortcut.parse("cmd+1"), "select_tab_1 clashing with palette keeps its default")
+check(logs.contains { $0.contains("launch_rockets") }, "unknown action logged")
+check(logs.contains { $0.contains("new_tab") }, "invalid entry logged")
+check(logs.contains { $0.contains("select_tab_1") }, "clash logged")
+
+let defaults = KeyMap.defaults
+check(defaults[.palette] == Shortcut.parse("cmd+k"), "palette defaults to cmd+k")
+check(defaults[.toggleSidebar] == Shortcut.parse("cmd+shift+b"), "toggle_sidebar defaults to cmd+shift+b")
+let unbound: Set<KeyMap.Action> = [.renameTab]
+check(KeyMap.Action.allCases.allSatisfy { (defaults[$0] == nil) == unbound.contains($0) }, "every action but rename_tab has a default")
+check(Set(KeyMap.Action.allCases.compactMap { defaults[$0] }).count == KeyMap.Action.allCases.count - unbound.count, "defaults are distinct")
+check(defaults[.nextTab]?.keyEquivalent == "}" && defaults[.nextTab]?.display == "⇧⌘]", "next_tab is ⇧⌘], matched as }")
+check(defaults[.previousTab]?.keyEquivalent == "{" && defaults[.previousTab]?.display == "⇧⌘[", "previous_tab is ⇧⌘[")
+check(Shortcut.parse("cmd+,")?.keyEquivalent == ",", "unshifted punctuation unchanged")
+let renamed = KeyMap(table: TOML.parse("[keys]\nrename_tab = \"cmd+shift+r\"\n")["keys"] ?? [:], log: { _ in })
+check(renamed[.renameTab] == Shortcut.parse("cmd+shift+r"), "rename_tab can be bound")
+
+// Ghostty loses every chord haunt uses.
+let conf = HauntConfig.ghosttyConfig([:], defaultSize: 11, keys: defaults)
+for line in ["keybind = shift+super+bracket_right=unbind", "keybind = super+k=unbind", "keybind = shift+super+b=unbind", "keybind = super+comma=unbind", "keybind = super+t=unbind"] {
+    check(conf.contains(line + "\n"), "ghostty config has \(line)")
+}
+check(conf.components(separatedBy: "keybind = super+t=unbind").count == 2, "unbinds are not repeated")
+let custom = HauntConfig.ghosttyConfig([:], defaultSize: 11, keys: keys)
+check(custom.contains("keybind = super+p=unbind\n"), "configured chord unbound")
+
+// Agents-only view: its shortcut, [layout] agents_view, and the persisted state.
+check(defaults[.agentsView] == Shortcut.parse("cmd+shift+a"), "agents_view defaults to cmd+shift+a")
+check(conf.contains("keybind = shift+super+a=unbind\n"), "ghostty loses cmd+shift+a")
+check(KeyMap(table: TOML.parse("[keys]\nagents_view = \"cmd+opt+a\"")["keys"]!) { _ in }[.agentsView] == Shortcut.parse("cmd+opt+a"),
+      "agents_view is configurable")
+var layoutLogs: [String] = []
+check(AgentsViewStyle.parse(nil) { layoutLogs.append($0) } == .narrowList && layoutLogs.isEmpty, "agents_view defaults to narrow-list")
+check(AgentsViewStyle.parse(TOML.parse("[layout]\nagents_view = \"narrow-list\"")["layout"]?["agents_view"]) { layoutLogs.append($0) } == .narrowList
+      && layoutLogs.isEmpty, "narrow-list parses")
+check(AgentsViewStyle.parse(.scalar("dashboard")) { layoutLogs.append($0) } == .narrowList, "unknown view falls back")
+check(layoutLogs.count == 1 && layoutLogs[0].contains("dashboard"), "unknown view logged")
+let old = try! JSONDecoder().decode(HauntConfig.State.self, from: Data(#"{"sidebar_hidden":true}"#.utf8))
+check(old.sidebarHidden && !old.agentsView, "older state.json keeps sidebar_hidden")
+var st = HauntConfig.State()
+st.agentsView = true
+let round = try! JSONDecoder().decode(HauntConfig.State.self, from: JSONEncoder().encode(st))
+check(round.agentsView && !round.sidebarHidden, "agents_view round-trips")
+check(String(data: try! JSONEncoder().encode(st), encoding: .utf8)!.contains("\"agents_view\":true"), "stored as agents_view")
+
+print(failures == 0 ? "keys: all passed" : "keys: \(failures) failed")
+exit(failures == 0 ? 0 : 1)

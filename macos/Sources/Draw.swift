@@ -70,4 +70,15 @@ enum Draw {
         Tok.Color.claude.setFill()
         path.fill()
     }
+
+    private static let codexLogo = Bundle.main.image(forResource: "codex-logo")
+
+    /// The official Codex logo (see macos/Resources/README.md), drawn whole into `rect`.
+    static func codexMark(in rect: NSRect, ctx: CGContext) {
+        guard let img = codexLogo else { return }
+        ctx.saveGState()
+        ctx.interpolationQuality = .high
+        img.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        ctx.restoreGState()
+    }
 }

@@ -12,7 +12,7 @@ from PIL import Image, ImageCms
 sys.path.insert(0, str(Path(__file__).parent))
 from check import run  # noqa: E402
 from fid import DESIGN, hex_rgb  # noqa: E402
-from tokens import MOCKUPS  # noqa: E402
+from tokens import FILES, MOCKUPS  # noqa: E402
 
 TOOLS = Path(__file__).parent
 P3 = "/System/Library/ColorSync/Profiles/Display P3.icc"
@@ -55,8 +55,8 @@ def main():
         if r.returncode:
             fails.append("tokens clean")
         alt = tmp / "mockups"
-        shutil.copytree(MOCKUPS / "pawr-ui", alt / "pawr-ui")
-        shutil.copytree(MOCKUPS / "pawr-agents-view", alt / "pawr-agents-view")
+        for src in {f.parent for f in FILES.values()}:
+            shutil.copytree(src, alt / src.name)
         f = alt / "pawr-ui/index.html"
         f.write_text(f.read_text().replace("background: #0e0e0e", "background: #0f0f0f", 1))
         r = subprocess.run([sys.executable, TOOLS / "tokens.py", "--check"], capture_output=True, text=True,
