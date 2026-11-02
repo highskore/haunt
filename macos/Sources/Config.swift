@@ -29,6 +29,7 @@ final class HauntConfig {
         let toml = useUserConfig ? ((try? String(contentsOf: tomlURL, encoding: .utf8)).map(TOML.parse) ?? [:]) : [:]
         var problems: [String] = []
         let newKeys = KeyMap(table: toml["keys"] ?? [:]) { problems.append($0) }
+        problems += Self.refusedGhostty(toml["ghostty"] ?? [:]).map { "[ghostty] \($0.key) = \($0.value): not allowed, ignored" }
         // One save can fire several events; each problem is logged once per edit.
         if problems != lastKeyProblems {
             for p in problems { Self.logger.error("\(p, privacy: .public)") }
@@ -73,8 +74,17 @@ final class HauntConfig {
         for a in KeyMap.Action.allCases { unbind += keys[a]?.ghosttyTriggers ?? [] }
         var seen = Set<String>()
         lines += unbind.filter { seen.insert($0).inserted }.map { "keybind = \($0)=unbind" }
-        let raw = (toml["ghostty"] ?? [:]).sorted { $0.key < $1.key }.flatMap { k, v in v.strings.map { "\(k) = \($0)" } }
+        let refused = Set(refusedGhostty(toml["ghostty"] ?? [:]).map { "\($0.key) = \($0.value)" })
+        let raw = (toml["ghostty"] ?? [:]).sorted { $0.key < $1.key }
+            .flatMap { k, v in v.strings.map { "\(k) = \($0)" } }.filter { !refused.contains($0) }
         return (lines + raw).joined(separator: "\n") + "\n"
+    }
+
+    /// Passthrough values Haunt can't allow: a right-click paste writes the clipboard to the pty
+    /// inside libghostty, past the checks on Haunt's own paste paths.
+    static func refusedGhostty(_ table: [String: TOML.Value]) -> [(key: String, value: String)] {
+        (table["right-click-action"]?.strings ?? []).filter { ["paste", "copy-or-paste"].contains($0) }
+            .map { ("right-click-action", $0) }
     }
 
     /// Berkeley Mono Variable's (ascent + descent + lineGap) / unitsPerEm from hhea: (956 + 244 + 0) / 1000.

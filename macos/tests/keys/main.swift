@@ -66,5 +66,12 @@ check(conf.components(separatedBy: "keybind = super+t=unbind").count == 2, "unbi
 let custom = HauntConfig.ghosttyConfig([:], defaultSize: 11, keys: keys)
 check(custom.contains("keybind = super+p=unbind\n"), "configured chord unbound")
 
+// A right-click paste would bypass Haunt's paste checks.
+let rc = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\nright-click-action = copy-or-paste\ncursor-style = bar\n"), defaultSize: 11, keys: defaults)
+check(!rc.contains("right-click-action"), "right-click paste refused")
+check(rc.contains("cursor-style = bar\n"), "other passthrough kept")
+let rcOK = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\nright-click-action = copy\n"), defaultSize: 11, keys: defaults)
+check(rcOK.contains("right-click-action = copy\n"), "right-click copy allowed")
+
 print(failures == 0 ? "keys: all passed" : "keys: \(failures) failed")
 exit(failures == 0 ? 0 : 1)
