@@ -29,23 +29,26 @@ final class PluginBridge {
         }
     }
 
-    /// A palette item: errors are logged with a beep, and whatever it asked for is carried out at once.
+    /// A palette item.
     func invoke(pluginId: String, itemId: String) {
-        do {
-            try plugins?.invokePaletteItem(pluginId: pluginId, itemId: itemId)
-        } catch {
-            AppDelegate.logger.error("plugin \(pluginId, privacy: .public) item \(itemId, privacy: .public): \(String(describing: error), privacy: .public)")
-            NSSound.beep()
-        }
-        drain()
+        run("plugin \(pluginId) item \(itemId)") { try $0.invokePaletteItem(pluginId: pluginId, itemId: itemId) }
     }
 
     /// A plugin's entry in a row's context menu.
     func invokeRowMenu(_ item: RowMenuItem, surfaceId: String) {
+        run("plugin \(item.pluginId) row item \(item.id)") {
+            try $0.invokeRowMenuItem(pluginId: item.pluginId, itemId: item.id, surfaceId: surfaceId)
+        }
+    }
+
+    /// Errors are logged with a beep, and whatever the plugin asked for is carried out at once.
+    private func run(_ what: @autoclosure () -> String, _ call: (PluginsAPI) throws -> Void) {
+        guard let plugins else { return }
         do {
-            try plugins?.invokeRowMenuItem(pluginId: item.pluginId, itemId: item.id, surfaceId: surfaceId)
+            try call(plugins)
         } catch {
-            AppDelegate.logger.error("plugin \(item.pluginId, privacy: .public) row item \(item.id, privacy: .public): \(String(describing: error), privacy: .public)")
+            let what = what()
+            AppDelegate.logger.error("\(what, privacy: .public): \(String(describing: error), privacy: .public)")
             NSSound.beep()
         }
         drain()
