@@ -44,10 +44,10 @@ final class HauntConfig {
         agentsView = AgentsViewStyle.parse(toml["layout"]?["agents_view"]) { layoutProblem = $0 }
         if let p = layoutProblem, p != lastLayoutProblem { Self.logger.warning("\(p, privacy: .public)") }
         lastLayoutProblem = layoutProblem
-        let text = Self.ghosttyConfig(toml, defaultSize: useUserConfig ? Self.defaultFontSize : Tok.Size.paneFont, keys: keys)
-        guard text != lastWritten else { return (false, keysChanged) }
-        try? text.write(to: ghosttyURL, atomically: true, encoding: .utf8)
-        lastWritten = text
+        let generated = Self.ghosttyConfig(toml, defaultSize: useUserConfig ? Self.defaultFontSize : Tok.Size.paneFont, keys: keys)
+        guard generated != lastWritten else { return (false, keysChanged) }
+        try? generated.write(to: ghosttyURL, atomically: true, encoding: .utf8)
+        lastWritten = generated
         return (true, keysChanged)
     }
 
