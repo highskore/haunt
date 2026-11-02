@@ -1,4 +1,4 @@
-//! wasmtime host for `haunt:plugin@0.2` components (plan sections 3.3 and 3.8).
+//! wasmtime host for `haunt:plugin@0.3` components (plan sections 3.3 and 3.8).
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -13,6 +13,8 @@ use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxView, Was
 use crate::event::{AgentEvent, EventKind};
 use crate::plugin_cache::{CacheError, CwasmCache, cache_name};
 use crate::plugin_fs::FsScope;
+use crate::arrange::{Arrangement, ColorStyle, Section, StateGroup, TabColor};
+use crate::layout::RowKind;
 use crate::model::CoreHandle;
 use crate::plugin_manifest::{Capabilities, KV_CAP};
 use crate::session::Outcome;
@@ -23,7 +25,8 @@ mod bindings {
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
-    allowlist as wallow, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, types as wit,
+    allowlist as wallow, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, sidebar as wside,
+    types as wit,
 };
 
 pub const MEMORY_CAP: usize = 64 << 20;
@@ -76,6 +79,17 @@ pub enum Mark {
     Open,
     Filled,
     Round,
+}
+
+/// A row context-menu entry; one with a `parent` goes in that entry's submenu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
+pub struct RowMenuItem {
+    pub plugin_id: String,
+    pub id: String,
+    pub title: String,
+    pub checked: bool,
+    pub parent: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -364,6 +378,63 @@ impl wallow::Host for HostState {
     }
 }
 
+impl wside::Host for HostState {
+    fn rows(&mut self) -> Vec<wside::RowInfo> {
+        let Some(core) = &self.core else { return Vec::new() };
+        core.sidebar_rows()
+            .into_iter()
+            .map(|r| wside::RowInfo {
+                surface: r.surface,
+                name: r.name,
+                kind: match r.kind {
+                    RowKind::Shell => "shell",
+                    RowKind::Claude => "claude",
+                    RowKind::Codex => "codex",
+                }
+                .to_owned(),
+                group: match r.group {
+                    StateGroup::NeedsYou => wside::StateGroup::NeedsYou,
+                    StateGroup::Running => wside::StateGroup::Running,
+                    StateGroup::Idle => wside::StateGroup::Idle,
+                },
+                selected: r.selected,
+            })
+            .collect()
+    }
+
+    fn arrange(&mut self, a: wside::Arrangement) -> Result<(), String> {
+        let core = self.core.as_ref().ok_or("no haunt core attached")?;
+        let color = |c: wside::TabColor| match c {
+            wside::TabColor::Red => TabColor::Red,
+            wside::TabColor::Orange => TabColor::Orange,
+            wside::TabColor::Yellow => TabColor::Yellow,
+            wside::TabColor::Green => TabColor::Green,
+            wside::TabColor::Blue => TabColor::Blue,
+            wside::TabColor::Purple => TabColor::Purple,
+            wside::TabColor::Gray => TabColor::Gray,
+        };
+        let a = Arrangement {
+            pinned: a.pinned,
+            sections: a.sections.into_iter().map(|s| Section { id: s.id, title: s.title, surfaces: s.surfaces }).collect(),
+            sections_after_state: a.placement == wside::Placement::AfterState,
+            order: a.order,
+            flat: a.flat,
+            colors: a.colors.into_iter().map(|(s, c)| (s, color(c))).collect(),
+            color_style: match a.color_style {
+                wside::ColorStyle::Dot => ColorStyle::Dot,
+                wside::ColorStyle::Tint => ColorStyle::Tint,
+            },
+        };
+        core.set_arrangement(&self.id, a).map_err(|e| e.to_string())
+    }
+
+    fn clear(&mut self) {
+        if let Some(core) = &self.core {
+            core.clear_arrangement(&self.id);
+        }
+    }
+}
+
 /// Wall time to the second and monotonic time to 10 ms, so plugins get no fine-grained timer.
 struct CoarseWall;
 impl HostWallClock for CoarseWall {
@@ -555,6 +626,20 @@ impl LoadedPlugin {
         self.call(|b, s| b.call_on_action(s, action_id, payload))
     }
 
+    pub fn row_menu(&mut self, surface: &str) -> Result<Vec<RowMenuItem>, PluginError> {
+        let items = self.call(|b, s| b.call_row_menu(s, surface))?;
+        let id = self.id().to_owned();
+        Ok(items
+            .into_iter()
+            .take(MAX_PALETTE)
+            .map(|i| RowMenuItem { plugin_id: id.clone(), id: clip(i.id), title: clip(i.title), checked: i.checked, parent: i.parent.map(clip) })
+            .collect())
+    }
+
+    pub fn on_row_moved(&mut self, surface: &str, group: &str, before: Option<&str>) -> Result<(), PluginError> {
+        self.call(|b, s| b.call_on_row_moved(s, surface, group, before))
+    }
+
     pub fn take_logs(&mut self) -> Vec<String> {
         std::mem::take(&mut self.store.data_mut().logs)
     }
@@ -614,8 +699,11 @@ impl PluginHost {
         if caps.allowlist_suggest {
             wallow::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
+        if caps.sidebar {
+            wside::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
         if caps.fs_read_granted() || caps.fs_write_granted() {
-            let mut fs = l.instance("haunt:plugin/fs@0.2.0")?;
+            let mut fs = l.instance("haunt:plugin/fs@0.3.0")?;
             if caps.fs_read_granted() {
                 fs.func_wrap("read", |s: StoreContextMut<'_, HostState>, (path,): (String,)| Ok((s.data().fs.read(&path),)))?;
                 fs.func_wrap("list", |s: StoreContextMut<'_, HostState>, (path,): (String,)| Ok((s.data().fs.list(&path),)))?;
@@ -701,7 +789,7 @@ mod tests {
     }
 
     const FS_WRITE_IMPORT: &str = r#"(component
-        (import "haunt:plugin/fs@0.2.0" (instance
+        (import "haunt:plugin/fs@0.3.0" (instance
             (export "write" (func (param "path" string) (param "data" (list u8)) (result (result (error string))))))))"#;
 
     #[test]
@@ -724,7 +812,7 @@ mod tests {
         let host = PluginHost::new().unwrap();
         let pty = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/pty@0.2.0" (instance
+            r#"(component (import "haunt:plugin/pty@0.3.0" (instance
                 (export "answer" (func (param "surface" string) (param "allow" bool) (param "request-id" u64) (result (result (error string))))))))"#,
         )
         .unwrap();
@@ -733,7 +821,7 @@ mod tests {
 
         let text = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/pty@0.2.0" (instance
+            r#"(component (import "haunt:plugin/pty@0.3.0" (instance
                 (export "text" (func (param "surface" string) (param "text" string) (result (result (error string))))))))"#,
         )
         .unwrap();
@@ -742,7 +830,7 @@ mod tests {
 
         let notify = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/notify@0.2.0" (instance
+            r#"(component (import "haunt:plugin/notify@0.3.0" (instance
                 (type $r (record (field "id" string) (field "title" string)))
                 (export "action" (type $a (eq $r)))
                 (export "notify" (func (param "title" string) (param "body" string) (param "actions" (list $a))
@@ -753,7 +841,7 @@ mod tests {
         host.check_links(&notify, &Capabilities { notifications: true, ..Default::default() }).unwrap();
     }
 
-    const DECISIONS_IMPORT: &str = r#"(component (import "haunt:plugin/decisions@0.2.0" (instance
+    const DECISIONS_IMPORT: &str = r#"(component (import "haunt:plugin/decisions@0.3.0" (instance
         (type $o (variant (case "allowed-in-haunt") (case "denied-in-haunt") (case "allowed-by-plugin" string)
             (case "denied-by-plugin" string) (case "answered-in-terminal") (case "superseded")))
         (export "outcome" (type $oe (eq $o)))
@@ -762,7 +850,7 @@ mod tests {
         (export "decision" (type $de (eq $d)))
         (export "query" (func (param "text" string) (param "limit" u32) (result (list $de)))))))"#;
 
-    const PROPOSE_IMPORT: &str = r#"(component (import "haunt:plugin/allowlist@0.2.0" (instance
+    const PROPOSE_IMPORT: &str = r#"(component (import "haunt:plugin/allowlist@0.3.0" (instance
         (export "propose" (func (param "project" string) (param "command" string) (result (result (error string))))))))"#;
 
     #[test]
@@ -792,12 +880,62 @@ mod tests {
         for (iface, func) in [("decisions", "record"), ("decisions", "write"), ("allowlist", "add-rule"), ("allowlist", "accept"), ("allowlist", "write")] {
             let c = Component::new(
                 &host.engine,
-                format!(r#"(component (import "haunt:plugin/{iface}@0.2.0" (instance (export "{func}" (func (param "x" string))))))"#),
+                format!(r#"(component (import "haunt:plugin/{iface}@0.3.0" (instance (export "{func}" (func (param "x" string))))))"#),
             )
             .unwrap();
             let e = host.check_links(&c, &both).unwrap_err().0;
             assert!(e.contains(func), "{iface}.{func}: {e}");
         }
+    }
+
+    #[test]
+    fn the_sidebar_import_needs_its_capability() {
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/sidebar@0.3.0" (instance (export "clear" (func)))))"#).unwrap();
+        let everything_else = Capabilities { decisions_read: true, allowlist_suggest: true, notifications: true, pty_write: true, ..Default::default() };
+        let e = host.check_links(&c, &everything_else).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/sidebar"), "{e}");
+        host.check_links(&c, &Capabilities { sidebar: true, ..Default::default() }).unwrap();
+    }
+
+    #[test]
+    fn a_plugin_arrangement_keeps_needs_you_first() {
+        use wside::Host as _;
+        let core = crate::Core::new(tempdir("arrange-core"));
+        let a = core.register_surface("/a").unwrap();
+        let b = core.register_surface("/b").unwrap();
+        let line = |env: &crate::SurfaceEnv, body: &str| {
+            format!(r#"{{"v":1,"surface_id":"{}","nonce":"{}",{body}}}"#, env.surface_id, env.nonce)
+        };
+        core.with_state(|st| {
+            st.handle_line(&line(&a, r#""event":"prompt_submit","query":"x""#), Instant::now());
+            st.handle_line(&line(&b, r#""event":"permission_seen","tool_name":"Bash","tool_input":{"command":"ls"}"#), Instant::now());
+        });
+        let mut st = HostState::new("dev.haunt.tabs", &Capabilities::default(), None, None, Some(core.handle()));
+        let rows = st.rows();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|r| r.surface == b.surface_id && r.group == wside::StateGroup::NeedsYou));
+        let arrangement = wside::Arrangement {
+            pinned: vec![b.surface_id.clone(), a.surface_id.clone()],
+            sections: vec![],
+            placement: wside::Placement::BeforeState,
+            order: vec![],
+            flat: false,
+            colors: vec![(a.surface_id.clone(), wside::TabColor::Blue)],
+            color_style: wside::ColorStyle::Tint,
+        };
+        st.arrange(arrangement.clone()).unwrap();
+        let snap = core.snapshot();
+        let ids: Vec<_> = snap.groups.iter().map(|g| (g.id.as_str(), g.rows.iter().map(|r| r.surface_id.clone()).collect::<Vec<_>>())).collect();
+        assert_eq!(ids, [("needs-you", vec![b.surface_id.clone()]), ("pinned", vec![a.surface_id.clone()])]);
+        assert_eq!((snap.groups[1].rows[0].color, snap.color_style), (Some(TabColor::Blue), ColorStyle::Tint));
+
+        let mut other = HostState::new("dev.x.other", &Capabilities::default(), None, None, Some(core.handle()));
+        assert!(other.arrange(arrangement).unwrap_err().contains("dev.haunt.tabs"), "one arranger at a time");
+        other.clear();
+        assert_eq!(core.snapshot().groups[1].id, "pinned", "only the owner clears");
+        st.clear();
+        assert_eq!(core.snapshot().groups[1].id, "running");
     }
 
     #[test]

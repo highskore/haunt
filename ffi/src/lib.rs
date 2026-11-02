@@ -18,7 +18,8 @@ pub fn event_name(event: AgentEvent) -> String {
 }
 
 pub use haunt_core::{
-    Agent, AllowSuggestion, CoreError, Decision, Outcome, PendingRequest, Progress, Row, RowKind, SidebarGroup, SidebarSnapshot, Subrow,
+    Agent, AllowSuggestion, ColorStyle, CoreError, Decision, Outcome, PendingRequest, Progress, Row, RowKind, SidebarGroup, SidebarSnapshot, Subrow,
+    TabColor,
     SurfaceEnv,
 };
 
@@ -114,7 +115,7 @@ impl From<haunt_core::plugins::PluginError> for HostError {
 }
 
 #[cfg(feature = "plugins")]
-pub use haunt_core::plugins::{HostRequest, Mark, NotifyAction, PaletteItem};
+pub use haunt_core::plugins::{HostRequest, Mark, NotifyAction, PaletteItem, RowMenuItem};
 #[cfg(feature = "plugins")]
 pub use haunt_core::ptygate::PtyWrite;
 
@@ -165,5 +166,19 @@ impl HauntPlugins {
     /// Notifications and pty writes plugins asked for since the last call.
     pub fn take_requests(&self) -> Vec<HostRequest> {
         self.set.lock().unwrap().take_requests()
+    }
+
+    /// Plugin entries for a row's context menu, built when the menu opens.
+    pub fn row_menu_items(&self, surface_id: String) -> Vec<RowMenuItem> {
+        self.set.lock().unwrap().row_menu(&surface_id)
+    }
+
+    pub fn invoke_row_menu_item(&self, plugin_id: String, item_id: String, surface_id: String) -> Result<(), HostError> {
+        Ok(self.set.lock().unwrap().invoke_row_item(&plugin_id, &item_id, &surface_id)?)
+    }
+
+    /// A drag dropped `surface_id` into `SidebarGroup.id` `group_id`, above `before_surface_id` (nil: at the end).
+    pub fn row_moved(&self, surface_id: String, group_id: String, before_surface_id: Option<String>) {
+        self.set.lock().unwrap().row_moved(&surface_id, &group_id, before_surface_id.as_deref());
     }
 }

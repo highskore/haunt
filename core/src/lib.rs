@@ -1,6 +1,7 @@
 //! haunt-core: the UI-free model shared by every platform shell.
 
 pub mod allowlist;
+pub mod arrange;
 pub mod ctl;
 pub mod decisions;
 pub mod event;
@@ -24,6 +25,7 @@ pub mod ptygate;
 pub mod session;
 
 pub use allowlist::{AllowSuggestion, Approval};
+pub use arrange::{Arrangement, ColorStyle, TabColor};
 pub use decisions::Decision;
 pub use event::{Agent, AgentEvent, EventKind, ParseError, ToolCall, parse_body, parse_osc};
 pub use layout::{PendingRequest, Progress, Row, RowKind, SidebarGroup, SidebarSnapshot, Subrow};

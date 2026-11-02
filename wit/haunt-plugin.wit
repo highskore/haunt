@@ -1,6 +1,7 @@
 // haunt plugin API, plan section 3.3. Gated imports are linked only when the capability is granted.
 // 0.2: `decisions` and `allowlist` imports; palette items carry a time, a mark and a surface.
-package haunt:plugin@0.2.0;
+// 0.3: `sidebar` import; `row-menu` and `on-row-moved` exports.
+package haunt:plugin@0.3.0;
 
 interface types {
   record agent-event {
@@ -34,6 +35,15 @@ interface types {
   }
 
   enum log-level { debug, info, warn, error }
+
+  // A row context-menu entry. An entry whose `parent` is another entry's id sits in its submenu
+  // (one level). Choosing one calls `on-action(id, <surface>)`.
+  record menu-item {
+    id: string,
+    title: string,
+    checked: bool,
+    parent: option<string>,
+  }
 }
 
 // Always linked.
@@ -118,8 +128,56 @@ interface allowlist {
   propose: func(project: string, command: string) -> result<_, string>;
 }
 
+// Capability `sidebar`. Arranges the core's rows: order, pins, named sections and colours.
+// The core keeps NEEDS YOU first and complete, and shows every row exactly once.
+interface sidebar {
+  enum state-group { needs-you, running, idle }
+
+  record row-info {
+    surface: string,
+    name: string,
+    // "shell", "claude" or "codex".
+    kind: string,
+    group: state-group,
+    selected: bool,
+  }
+
+  // Rows in the core's own order, before any arrangement.
+  rows: func() -> list<row-info>;
+
+  // Muted colours; the app picks the shades.
+  enum tab-color { red, orange, yellow, green, blue, purple, gray }
+  enum color-style { dot, tint }
+  enum placement { before-state, after-state }
+
+  record section {
+    // Lowercase letters, digits and '-'; the group id in the snapshot is `section:<id>`.
+    id: string,
+    title: string,
+    surfaces: list<string>,
+  }
+
+  record arrangement {
+    // Shown as PINNED right after NEEDS YOU, in this order.
+    pinned: list<string>,
+    sections: list<section>,
+    // Where sections sit relative to RUNNING and IDLE.
+    placement: placement,
+    // Rank of rows left in the state groups; unlisted rows follow in the core's order.
+    order: list<string>,
+    // One TABS group instead of RUNNING and IDLE.
+    flat: bool,
+    colors: list<tuple<string, tab-color>>,
+    color-style: color-style,
+  }
+
+  // The first plugin to arrange owns the sidebar until it calls `clear`.
+  arrange: func(arrangement: arrangement) -> result<_, string>;
+  clear: func();
+}
+
 world plugin {
-  use types.{agent-event, decoration, palette-item};
+  use types.{agent-event, decoration, palette-item, menu-item};
   import log;
   import kv;
   import palette;
@@ -128,10 +186,16 @@ world plugin {
   import fs;
   import decisions;
   import allowlist;
+  import sidebar;
 
   export init: func(settings: string);
   export on-settings-changed: func(settings: string);
   export on-event: func(event: agent-event) -> option<decoration>;
   export palette-items: func(mode: string, query: string) -> list<palette-item>;
   export on-action: func(action-id: string, payload: string);
+  // Entries for a row's context menu.
+  export row-menu: func(surface: string) -> list<menu-item>;
+  // The user dragged `surface` into snapshot group `group`, above `before` (none: at the end).
+  // Only plugins granted `sidebar` get it.
+  export on-row-moved: func(surface: string, group: string, before: option<string>);
 }

@@ -10,6 +10,7 @@ use std::time::Instant;
 use serde_json::{Value, json};
 
 use crate::allowlist::{self, AllowError, AllowSuggestion, Approval};
+use crate::arrange::{self, Arrangement, RowInfo};
 use crate::ctl::{self, Ctl};
 use crate::decisions::{Decision, DecisionLog};
 use crate::event::{AgentEvent, parse_osc};
@@ -89,6 +90,8 @@ pub(crate) struct State {
     /// Rules plugins proposed, newest first, as (plugin id, project, command).
     allow_proposals: Vec<(String, String, String)>,
     event_tap: Option<EventTap>,
+    /// The arranging plugin's id and its arrangement.
+    arrangement: Option<(String, Arrangement)>,
 }
 
 impl State {
@@ -194,6 +197,15 @@ impl State {
     }
 
     pub(crate) fn snapshot(&self, now: Instant) -> SidebarSnapshot {
+        let snap = self.core_snapshot(now);
+        match &self.arrangement {
+            Some((_, a)) => arrange::arrange(snap, a),
+            None => snap,
+        }
+    }
+
+    /// Before any plugin arrangement.
+    fn core_snapshot(&self, now: Instant) -> SidebarSnapshot {
         let views: Vec<SurfaceView> = self
             .surfaces
             .iter()
@@ -537,6 +549,39 @@ impl CoreHandle {
             *res.as_ref().unwrap_or(&false)
         });
         res.map(|_| ())
+    }
+
+    /// The rows in the core's own order, without meta or task text.
+    pub fn sidebar_rows(&self) -> Vec<RowInfo> {
+        arrange::row_infos(&lock(&self.state).core_snapshot(Instant::now()))
+    }
+
+    /// The first plugin to arrange owns the sidebar until it clears.
+    pub fn set_arrangement(&self, plugin_id: &str, a: Arrangement) -> Result<(), CoreError> {
+        a.validate().map_err(|reason| CoreError::Invalid { reason })?;
+        let mut res = Ok(());
+        update_state(&self.state, |st, _| match &st.arrangement {
+            Some((owner, _)) if owner != plugin_id => {
+                res = Err(CoreError::Invalid { reason: format!("the sidebar is arranged by {owner}") });
+                false
+            }
+            Some((_, old)) if *old == a => false,
+            _ => {
+                st.arrangement = Some((plugin_id.to_owned(), a));
+                true
+            }
+        });
+        res
+    }
+
+    pub fn clear_arrangement(&self, plugin_id: &str) {
+        update_state(&self.state, |st, _| {
+            let owned = st.arrangement.as_ref().is_some_and(|(owner, _)| owner == plugin_id);
+            if owned {
+                st.arrangement = None;
+            }
+            owned
+        });
     }
 }
 

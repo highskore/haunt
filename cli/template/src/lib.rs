@@ -37,6 +37,12 @@ impl Guest for Plugin {
     fn on_action(action_id: String, _payload: String) {
         log(LogLevel::Info, &format!("hello: {action_id}"));
     }
+
+    fn row_menu(_surface: String) -> Vec<MenuItem> {
+        Vec::new()
+    }
+
+    fn on_row_moved(_surface: String, _group: String, _before: Option<String>) {}
 }
 
 export!(Plugin);

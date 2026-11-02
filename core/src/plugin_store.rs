@@ -12,7 +12,7 @@ use crate::event::AgentEvent;
 use crate::model::CoreHandle;
 use crate::plugin_cache::{CwasmCache, check_dir, hex, write_atomic};
 use crate::plugin_manifest::{ALWAYS, Capabilities, MANIFEST, Manifest, valid_id};
-use crate::plugins::{Decoration, HostRequest, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost};
+use crate::plugins::{Decoration, HostRequest, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost, RowMenuItem};
 
 pub const LOCKFILE: &str = "plugins.lock";
 pub const WASM: &str = "plugin.wasm";
@@ -398,12 +398,38 @@ impl PluginSet {
     }
 
     pub fn invoke(&mut self, plugin_id: &str, item_id: &str) -> Result<(), PluginError> {
-        let (_, p) = self
-            .plugins
+        self.plugin(plugin_id)?.on_action(item_id, "")
+    }
+
+    fn plugin(&mut self, plugin_id: &str) -> Result<&mut LoadedPlugin, PluginError> {
+        self.plugins
             .iter_mut()
-            .find(|(_, p)| p.id() == plugin_id)
-            .ok_or_else(|| PluginError(format!("no loaded plugin {plugin_id}")))?;
-        p.on_action(item_id, "")
+            .map(|(_, p)| p)
+            .find(|p| p.id() == plugin_id)
+            .ok_or_else(|| PluginError(format!("no loaded plugin {plugin_id}")))
+    }
+
+    /// Every loaded plugin's context-menu entries for the row of `surface`.
+    pub fn row_menu(&mut self, surface: &str) -> Vec<RowMenuItem> {
+        self.plugins
+            .iter_mut()
+            .filter(|(_, p)| p.disabled().is_none())
+            .flat_map(|(_, p)| p.row_menu(surface).unwrap_or_default())
+            .collect()
+    }
+
+    /// A chosen context-menu entry: `on-action(item_id, surface)`.
+    pub fn invoke_row_item(&mut self, plugin_id: &str, item_id: &str, surface: &str) -> Result<(), PluginError> {
+        self.plugin(plugin_id)?.on_action(item_id, surface)
+    }
+
+    /// A row dropped into snapshot group `group` above `before`; only `sidebar` plugins hear it.
+    pub fn row_moved(&mut self, surface: &str, group: &str, before: Option<&str>) {
+        for (caps, p) in &mut self.plugins {
+            if caps.sidebar {
+                let _ = p.on_row_moved(surface, group, before);
+            }
+        }
     }
 
     /// Delivers `event` to plugins whose `events` grant covers it; `verified` as the core decided it.
@@ -466,7 +492,7 @@ mod tests {
         fs::create_dir_all(&s).unwrap();
         fs::write(
             s.join(MANIFEST),
-            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.2\"\nentry = \"p.wasm\"\n[capabilities]\n{caps}\n"),
+            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.3\"\nentry = \"p.wasm\"\n[capabilities]\n{caps}\n"),
         )
         .unwrap();
         fs::write(s.join("p.wasm"), "(component)").unwrap();

@@ -6,7 +6,7 @@ use crate::event::EventKind;
 
 pub const MANIFEST: &str = "haunt-plugin.toml";
 /// The `haunt:plugin` minor this host implements.
-pub const API: (u64, u64) = (0, 2);
+pub const API: (u64, u64) = (0, 3);
 pub const KV_CAP: usize = 10 << 20;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -45,6 +45,7 @@ pub struct Capabilities {
     pub notifications: bool,
     pub decisions_read: bool,
     pub allowlist_suggest: bool,
+    pub sidebar: bool,
     pub fs_read: Vec<String>,
     pub fs_write: Vec<String>,
     pub net: Vec<String>,
@@ -156,6 +157,9 @@ impl Capabilities {
         if self.allowlist_suggest {
             out.push(("can read how often you approved commands, and suggest allow rules (nothing is written until you accept)".into(), false));
         }
+        if self.sidebar {
+            out.push(("can see your tabs' names and states, and reorder, pin, group and colour them (rows needing you stay on top)".into(), false));
+        }
         if self.pty_write {
             out.push(("can answer permission prompts in your terminal (Allow or Deny, nothing else)".into(), true));
         }
@@ -176,6 +180,7 @@ impl Capabilities {
             notifications: self.notifications && !old.notifications,
             decisions_read: self.decisions_read && !old.decisions_read,
             allowlist_suggest: self.allowlist_suggest && !old.allowlist_suggest,
+            sidebar: self.sidebar && !old.sidebar,
             fs_read: self.fs_read.iter().filter(|g| !old.fs_read.contains(g)).cloned().collect(),
             fs_write: self.fs_write.iter().filter(|g| !old.fs_write.contains(g)).cloned().collect(),
             ..Default::default()
@@ -185,7 +190,7 @@ impl Capabilities {
 }
 
 /// The capabilities every plugin gets, for the install prompt.
-pub const ALWAYS: &str = "can add commands and modes to the palette, keep up to 10 MB of its own data, and write to its log";
+pub const ALWAYS: &str = "can add commands and modes to the palette and entries to tab menus, keep up to 10 MB of its own data, and write to its log";
 
 fn plain_glob(g: &str) -> String {
     g.replace("${cwd}", "<agent folder>")
@@ -240,7 +245,7 @@ mod tests {
 
     fn manifest(caps: &str) -> String {
         format!(
-            "[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.2\"\nentry = \"plugin.wasm\"\n\n[capabilities]\n{caps}\n"
+            "[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.3\"\nentry = \"plugin.wasm\"\n\n[capabilities]\n{caps}\n"
         )
     }
 
@@ -276,10 +281,10 @@ mod tests {
         let m = manifest("");
         assert!(Manifest::parse(&m.replace("dev.haunt.t", "../evil")).is_err());
         assert!(Manifest::parse(&m.replace("dev.haunt.t", "Dev.Haunt")).is_err());
-        assert!(Manifest::parse(&m.replace("api = \"0.2\"", "api = \"1.0\"")).is_err());
+        assert!(Manifest::parse(&m.replace("api = \"0.3\"", "api = \"1.0\"")).is_err());
         assert!(Manifest::parse(&m.replace("plugin.wasm", "../x.wasm")).is_err());
         assert!(Manifest::parse(&m.replace("plugin.wasm", "/tmp/x.wasm")).is_err());
-        assert!(Manifest::parse(&m.replace("api = \"0.2\"", "api = \"0.2.3\"")).is_ok());
+        assert!(Manifest::parse(&m.replace("api = \"0.3\"", "api = \"0.3.3\"")).is_ok());
     }
 
     #[test]

@@ -28,13 +28,15 @@ callback interface CoreListener { fn changed() }
 record SurfaceEnv { surface_id: string, nonce: string, socket_path: string }
 error  CoreError { Insecure { reason }, Io { reason }, Invalid { reason } }
 
-record SidebarSnapshot { groups: sequence<SidebarGroup> }
-record SidebarGroup { label: string, rows: sequence<Row> }
+record SidebarSnapshot { groups: sequence<SidebarGroup>, color_style: ColorStyle }
+record SidebarGroup { id: string, label: string, rows: sequence<Row> }   // id: needs-you, running, idle, pinned, tabs, section:<id>
 record Row {
   surface_id: string, kind: RowKind, name: string, meta: string, status_text: string,
   needs_you: bool, progress: Option<Progress>, subagents: sequence<Subrow>, selected: bool,
-  pending: Option<PendingRequest>
+  pending: Option<PendingRequest>, color: Option<TabColor>
 }
+enum   TabColor { Red, Orange, Yellow, Green, Blue, Purple, Gray }
+enum   ColorStyle { Dot, Tint }
 record PendingRequest { key: u64, tool: string, preview: string, suspicious: bool }
 enum   RowKind { Shell, Claude, Codex }     // an agent without a kind of its own is Claude
 record Progress { done: u64, total: u64 }
@@ -127,6 +129,31 @@ The task part of `meta`:
 
 A surface becomes an agent row with its first agent event and stays one until it is unregistered. Its kind follows the `agent` of the latest verified event (`Claude` until one arrives). Phase 1 hooks send no session-end event.
 
+### Arrangement (`core/src/arrange.rs`)
+
+A plugin granted `sidebar` (the first-party one is `dev.haunt.tabs`) can push an arrangement: pinned tabs, named sections, a manual order, a flat list, and colours. The core merges it over its own grouping on every `snapshot()`:
+
+1. `NEEDS YOU` (`needs-you`) first: every row that needs you, in the core's order, whatever the arrangement says. When a pinned or sectioned row stops needing you, it goes back to its place.
+2. `PINNED` (`pinned`): the pinned rows, in the plugin's order.
+3. The plugin's sections (`section:<id>`), before or after step 4 as the arrangement's `placement` says. A row listed in more than one place goes to the first: pinned, then sections in order.
+4. `RUNNING` (`running`) and `IDLE` (`idle`) with the rest, or one `TABS` group (`tabs`) when `flat` is set. Rows the plugin ranked in `order` come first, in that order, and the rest follow in the core's order. One global order means a tab that leaves RUNNING and comes back keeps its place. A group of shells only still has no label.
+
+Every row shows exactly once. Unknown and repeated surface ids are ignored, and empty groups are left out. A section title is cleaned of control and format characters, single-spaced and uppercased like the core's labels. It must be 1 to 32 characters and may not read as `NEEDS YOU`, `RUNNING`, `IDLE`, `PINNED` or `TABS`. Section ids are lowercase letters, digits and `-`. At most 32 sections and 1024 ids per list; `sidebar.arrange` refuses anything else.
+
+The first plugin to arrange owns the sidebar until it calls `clear`; others get an error. `Row.color` is set only for rows the plugin coloured. `SidebarSnapshot.color_style` says how to draw it: `Dot`, a small dot beside the name, or `Tint`, a faint background. Without an arrangement every row has no colour and the style is `Dot`.
+
+The colours are names, so the app picks shades that sit in the black-and-white design. `design/tokens.json` is generated from the mockups, so they belong in Swift (or a hand-kept token file), not there. A starting point: dot at full value, tint at about 12% over `color.sidebar.bg`.
+
+| colour | dot |
+|---|---|
+| Red | `#b07a7a` |
+| Orange | `#b08f72` |
+| Yellow | `#ada27a` |
+| Green | `#84a083` |
+| Blue | `#7f93ad` |
+| Purple | `#9a87ad` |
+| Gray | `#8a8a8a` |
+
 ## Transport and security
 
 **Socket** (`core/src/intake.rs`, owned by `HauntCore`): `<config_dir>/sock`. The debug/CLI socket `<config_dir>/ctl` follows the same directory, socket and peer-uid rules (below).
@@ -168,16 +195,25 @@ Installed with `haunt plugin install <path>` (cli/), which shows the capabilitie
 | `paletteItems(mode: "word", query:)` | the items that mode's plugin returns for `query`, each with optional `atMs` (time column), `mark` (`open`, `filled`, `round`) and `surfaceId` (Enter jumps to that tab, if it is open, instead of invoking the item) |
 | `invokePaletteItem(pluginId:itemId:)` | calls the plugin's `on-action(itemId, "")` |
 | `takeRequests()` | `HostRequest.notify` / `.ptyAnswer` queued by plugins |
+| `rowMenuItems(surfaceId:)` | every plugin's entries for that row's context menu, built when it opens: `RowMenuItem { pluginId, id, title, checked, parent }`. An entry whose `parent` is another entry's id goes in that entry's submenu (one level). |
+| `invokeRowMenuItem(pluginId:itemId:surfaceId:)` | calls the plugin's `on-action(itemId, surfaceId)` |
+| `rowMoved(surfaceId:groupId:beforeSurfaceId:)` | a sidebar drag ended: the row was dropped into the `SidebarGroup.id` `groupId`, above `beforeSurfaceId` (`nil`: at the end). It goes to plugins granted `sidebar`, whose new arrangement then fires `changed()`. Don't offer drops into `needs-you`; they are ignored. |
 | `HauntCore.gatePluginRequest(request:)` | the only way to turn a `.ptyAnswer` into bytes (`core/src/ptygate.rs`); returns `PtyWrite { surfaceId, bytes }` or `nil` |
 
 Each call runs under a 50 ms CPU budget and 64 MB of memory; a trap or timeout disables that plugin until the next load.
 
-Events reach plugins on the thread that delivered them (usually the socket thread), after the core has released its lock. A plugin call holds the plugins' lock and may then take the core's, through `decisions` or `allowlist`; the core never calls a plugin while holding its own. A `propose` fires `changed()` from inside a plugin call, so the listener must hop to the main actor and not call `HauntPlugins` synchronously. Row decorations from `on-event` are dropped for now: the snapshot has no field for them yet.
+Events reach plugins on the thread that delivered them (usually the socket thread), after the core has released its lock. A plugin call holds the plugins' lock and may then take the core's, through `decisions` or `allowlist`; the core never calls a plugin while holding its own. `propose` and `arrange` fire `changed()` from inside a plugin call, so the listener must hop to the main actor and not call `HauntPlugins` synchronously. Row decorations from `on-event` are dropped for now: the snapshot has no field for them yet.
 
-**API version**: `haunt:plugin@0.2.0`; manifests say `api = "0.2"`. A 0.1 plugin no longer installs or loads; rebuild it against the 0.2 WIT. 0.2 added:
+**API version**: `haunt:plugin@0.3.0`; manifests say `api = "0.3"`. Older plugins no longer install or load; rebuild them against the 0.3 WIT.
 
-- the `decisions` and `allowlist` imports (below)
-- `at-ms`, `mark` and `surface` on `palette-item`, plus the `mark` enum
+- 0.2 added the `decisions` and `allowlist` imports (below), and `at-ms`, `mark` and `surface` on `palette-item`, plus the `mark` enum.
+- 0.3 added the `sidebar` import (below), and two exports every plugin implements. `row-menu(surface) -> list<menu-item>` builds context-menu entries; a chosen entry calls `on-action(id, surface)`. `on-row-moved(surface, group, before)` is called only for plugins granted `sidebar`.
+
+**sidebar** (`sidebar`):
+
+- `rows()` returns the rows in the core's order with surface id, name, kind (`shell`, `claude`, `codex`), state group and selection. It includes no meta, task, prompt or command text.
+- `arrange(arrangement)` sets this plugin's arrangement, merged as described under Arrangement, and `clear()` gives the sidebar back.
+- Surface ids last as long as their tab and are new after a restart, so per-tab state keyed by them starts over with every launch.
 
 **decisions** (`decisions_read`): `query(text, limit)` returns the same records as `HauntCore.decisions`, at most 1000, without the raw `command` (the preview shows it with nothing hidden). It is read only: nothing a plugin can call adds, changes or removes a decision.
 

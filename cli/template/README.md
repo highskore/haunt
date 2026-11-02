@@ -25,7 +25,7 @@ Haunt shows the capabilities from `haunt-plugin.toml` and asks before installing
 
 ## Capabilities
 
-Every plugin can add palette commands and modes, keep up to 10 MB of its own data (`kv`), and write to its log. Each call runs under a 50 ms CPU budget and 64 MB of memory. Ask only for what you need in `[capabilities]`:
+Every plugin can add palette commands and modes, add entries to a tab's context menu (`row-menu`; a chosen entry calls `on-action(id, <surface>)`), keep up to 10 MB of its own data (`kv`), and write to its log. Each call runs under a 50 ms CPU budget and 64 MB of memory. Ask only for what you need in `[capabilities]`:
 
 | key | grants |
 |---|---|
@@ -36,6 +36,7 @@ Every plugin can add palette commands and modes, keep up to 10 MB of its own dat
 | `fs_write = ["glob", ...]` | `fs.write` on matching paths |
 | `decisions_read = true` | `decisions.query`: the verified permission decisions, newest first. Read only. |
 | `allowlist_suggest = true` | `allowlist.approvals` (how often each exact Bash command was approved in haunt, per project) and `allowlist.propose`, which only offers a rule; Haunt writes it when the user accepts. |
+| `sidebar = true` | `sidebar.rows` (tab names, kinds and state groups, no task text) and `sidebar.arrange`: pins, named sections, manual order and colours over Haunt's grouping. Rows needing you always stay first. Drags arrive at `on-row-moved`. |
 
 An fs glob is absolute or starts with `${cwd}/` (the agent's folder, from verified events only, never `$HOME` or the haunt dir). It may use `*` within a path segment, but not `**`, `.` or `..`. Nothing inside the haunt dir is ever reachable.
 
@@ -43,7 +44,7 @@ An fs glob is absolute or starts with `${cwd}/` (the agent's folder, from verifi
 
 ## Updating the WIT pin
 
-`wit/haunt-plugin.wit` is a copy of Haunt's `wit/haunt-plugin.wit`, pinned at `haunt:plugin@0.2.0` (the `package` line). The manifest's `api = "0.2"` must match the major.minor Haunt supports. To move to a newer API:
+`wit/haunt-plugin.wit` is a copy of Haunt's `wit/haunt-plugin.wit`, pinned at `haunt:plugin@0.3.0` (the `package` line). The manifest's `api = "0.3"` must match the major.minor Haunt supports. To move to a newer API:
 
 1. Copy `wit/haunt-plugin.wit` from the Haunt version you target over `wit/haunt-plugin.wit`.
 2. Set `api` in `haunt-plugin.toml` to the new major.minor.
