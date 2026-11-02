@@ -635,6 +635,19 @@ mod tests {
     }
 
     #[test]
+    fn a_default_ignorable_character_keeps_a_request_terminal_only() {
+        for c in ['\u{3164}', '\u{115F}', '\u{FE0F}', '\u{E0100}', '\u{2028}'] {
+            let (mut s, now) = running();
+            let cmd = format!("rm -rf ./build{c} ~");
+            s.apply(&ev(&serde_json::json!({"event": "permission_seen", "tool_name": "Bash", "tool_input": {"command": cmd}}).to_string()), true, now);
+            let p = s.live_permission().cloned().unwrap();
+            assert!(p.suspicious(), "{:x}", c as u32);
+            assert!(p.preview().contains(&format!("\\u{{{:x}}}", c as u32)));
+            assert!(!s.answer(p.key(), true, now));
+        }
+    }
+
+    #[test]
     fn a_hidden_newline_is_shown_and_never_answerable() {
         let (mut s, now) = running();
         s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"ls #\nrm -rf ~/x"}}"#), true, now);
