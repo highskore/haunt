@@ -75,7 +75,7 @@ final class ReviewCoordinator {
     private func openInbox(selecting id: String?) {
         view = nil
         fromInbox = false
-        let fixture = host.reviewFixture
+        let fixture: Fixture? = host.reviewFixture
         let entries: [InboxEntry] = host.reviewRows.filter { $0.kind != .shell }.compactMap { row in
             guard let t = turn(for: row), t.cwd != nil else { return nil }
             let e = InboxEntry(surfaceId: row.surfaceId, row: row, state: state(for: row.surfaceId, turn: t))
@@ -109,7 +109,7 @@ final class ReviewCoordinator {
         }
         inbox = nil
         fromInbox = came
-        let fixture = host.reviewFixture
+        let fixture: Fixture? = host.reviewFixture
         let st = state(for: id, turn: row.flatMap { turn(for: $0) })
         if let mode { st.mode = mode }
         let v = ReviewView(state: st)
@@ -192,7 +192,7 @@ final class ReviewCoordinator {
     }
 
     private func updateTitle() {
-        let fixture = host.reviewFixture
+        let fixture: Fixture? = host.reviewFixture
         if inbox != nil {
             return host.setReviewTitle(crumb: ["Review"], accessory: fixture == nil ? nil : .kbd)
         }
