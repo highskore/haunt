@@ -44,7 +44,7 @@ An fs glob is absolute or starts with `${cwd}/` (the agent's folder, from verifi
 
 ## Updating the WIT pin
 
-`wit/haunt-plugin.wit` is a copy of Haunt's `wit/haunt-plugin.wit`, pinned at `haunt:plugin@0.3.0` (the `package` line). The manifest's `api = "0.3"` must match the major.minor Haunt supports. To move to a newer API:
+`wit/haunt-plugin.wit` is a copy of Haunt's `wit/haunt-plugin.wit`, pinned at `haunt:plugin@0.4.0` (the `package` line). The manifest's `api = "0.4"` must match the major.minor Haunt supports. To move to a newer API:
 
 1. Copy `wit/haunt-plugin.wit` from the Haunt version you target over `wit/haunt-plugin.wit`.
 2. Set `api` in `haunt-plugin.toml` to the new major.minor.

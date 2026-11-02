@@ -6,7 +6,7 @@ use crate::event::EventKind;
 
 pub const MANIFEST: &str = "haunt-plugin.toml";
 /// The `haunt:plugin` minor this host implements.
-pub const API: (u64, u64) = (0, 3);
+pub const API: (u64, u64) = (0, 4);
 pub const KV_CAP: usize = 10 << 20;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -251,7 +251,7 @@ mod tests {
 
     fn manifest(caps: &str) -> String {
         format!(
-            "[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.3\"\nentry = \"plugin.wasm\"\n\n[capabilities]\n{caps}\n"
+            "[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.4\"\nentry = \"plugin.wasm\"\n\n[capabilities]\n{caps}\n"
         )
     }
 
@@ -316,10 +316,10 @@ mod tests {
         let m = manifest("");
         assert!(Manifest::parse(&m.replace("dev.haunt.t", "../evil")).is_err());
         assert!(Manifest::parse(&m.replace("dev.haunt.t", "Dev.Haunt")).is_err());
-        assert!(Manifest::parse(&m.replace("api = \"0.3\"", "api = \"1.0\"")).is_err());
+        assert!(Manifest::parse(&m.replace("api = \"0.4\"", "api = \"1.0\"")).is_err());
         assert!(Manifest::parse(&m.replace("plugin.wasm", "../x.wasm")).is_err());
         assert!(Manifest::parse(&m.replace("plugin.wasm", "/tmp/x.wasm")).is_err());
-        assert!(Manifest::parse(&m.replace("api = \"0.3\"", "api = \"0.3.3\"")).is_ok());
+        assert!(Manifest::parse(&m.replace("api = \"0.4\"", "api = \"0.4.3\"")).is_ok());
     }
 
     #[test]

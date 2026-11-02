@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 use haunt_core::plugin_store::Store;
+use haunt_core::plugin_theme::ThemeToken;
 use haunt_core::plugins::PluginHost;
 
 const WASM: &str = "target/wasm32-wasip2/release/haunt_plugin.wasm";
@@ -146,6 +147,9 @@ fn install_hello_prompts_then_core_reports_its_palette_item() {
 
     set.invoke("dev.haunt.hello", "say-hello").unwrap();
     assert!(set.take_logs().iter().any(|(id, l)| id == "dev.haunt.hello" && l == "info hello: say-hello"));
+    set.set_theme("glass", vec![ThemeToken { name: "color.hairline".into(), value: "#ffffff40".into() }]).unwrap();
+    assert!(set.take_logs().iter().any(|(id, l)| id == "dev.haunt.hello" && l == "info theme: glass"));
+    assert!(set.set_theme("Glass!", Vec::new()).is_err());
 
     assert!(haunt(&home, &["plugin", "remove", "dev.haunt.hello"], "").status.success());
     assert!(text(&haunt(&home, &["plugin", "list"], "")).contains("no plugins installed"));

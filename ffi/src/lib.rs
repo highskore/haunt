@@ -138,6 +138,8 @@ impl From<haunt_core::plugins::PluginError> for HostError {
 #[cfg(feature = "plugins")]
 pub use haunt_core::plugins::{HostRequest, Mark, NotifyAction, PaletteItem, RowMenuItem};
 #[cfg(feature = "plugins")]
+pub use haunt_core::plugin_theme::ThemeToken;
+#[cfg(feature = "plugins")]
 pub use haunt_core::ptygate::PtyWrite;
 
 #[cfg(feature = "plugins")]
@@ -208,5 +210,10 @@ impl HauntPlugins {
     /// A drag dropped `surface_id` into `SidebarGroup.id` `group_id`, above `before_surface_id` (nil: at the end).
     pub fn row_moved(&self, surface_id: String, group_id: String, before_surface_id: Option<String>) {
         haunt_core::sync::lock(&self.set).row_moved(&surface_id, &group_id, before_surface_id.as_deref());
+    }
+
+    /// The app switched theme. Until the first call plugins see "default", the colours in design/tokens.json.
+    pub fn set_theme(&self, name: String, tokens: Vec<ThemeToken>) -> Result<(), HostError> {
+        haunt_core::sync::lock(&self.set).set_theme(&name, tokens).map_err(|reason| HostError::Failed { reason })
     }
 }

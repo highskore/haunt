@@ -1,7 +1,8 @@
 // haunt plugin API, plan section 3.3. Gated imports are linked only when the capability is granted.
 // 0.2: `decisions` and `allowlist` imports; palette items carry a time, a mark and a surface.
 // 0.3: `verified` on agent-event; `sidebar` import; `row-menu` and `on-row-moved` exports.
-package haunt:plugin@0.3.0;
+// 0.4: `theme` import; `on-theme-changed` export.
+package haunt:plugin@0.4.0;
 
 interface types {
   record agent-event {
@@ -67,6 +68,20 @@ interface kv {
 interface palette {
   mode: func(word: string, title: string);
   command: func(id: string, title: string, default-key: option<string>);
+}
+
+// Always linked. The app's colour tokens, read only; `on-theme-changed` follows a switch.
+interface theme {
+  record token {
+    // Dotted and lowercase, like "color.hairline".
+    name: string,
+    // "#rrggbb" or "#rrggbbaa".
+    value: string,
+  }
+
+  // "default" is black and white.
+  name: func() -> string;
+  tokens: func() -> list<token>;
 }
 
 // Capability `notifications`. Replies arrive at `on-action`.
@@ -186,6 +201,7 @@ world plugin {
   import log;
   import kv;
   import palette;
+  import theme;
   import notify;
   import pty;
   import fs;
@@ -203,4 +219,6 @@ world plugin {
   // The user dragged `surface` into snapshot group `group`, above `before` (none: at the end).
   // Only plugins granted `sidebar` get it.
   export on-row-moved: func(surface: string, group: string, before: option<string>);
+  // The app switched theme; read the new one with `theme`.
+  export on-theme-changed: func();
 }

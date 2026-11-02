@@ -216,6 +216,7 @@ Installed with `haunt plugin install <path>` (cli/), which shows the capabilitie
 | `rowMenuItems(surfaceId:)` | every plugin's entries for that row's context menu, built when it opens: `RowMenuItem { pluginId, id, title, checked, parent }`. An entry whose `parent` is another entry's id goes in that entry's submenu (one level). |
 | `invokeRowMenuItem(pluginId:itemId:surfaceId:)` | calls the plugin's `on-action(itemId, surfaceId)` |
 | `rowMoved(surfaceId:groupId:beforeSurfaceId:)` | a sidebar drag ended: the row was dropped into the `SidebarGroup.id` `groupId`, above `beforeSurfaceId` (`nil`: at the end). It goes to plugins granted `sidebar`, whose new arrangement then fires `changed()`. Don't offer drops into `needs-you`; they are ignored. |
+| `setTheme(name:tokens:)` | the app switched theme: plugins read `name` and the `ThemeToken`s through `theme`, then get `on-theme-changed()`. A name that isn't lowercase letters, digits, `.` and `-` errors; tokens with a bad name or value are dropped. |
 | `HauntCore.gatePluginRequest(request:)` | the only way to turn a `.ptyAnswer` into bytes (`core/src/ptygate.rs`); returns `PtyWrite { surfaceId, bytes }` or `nil` |
 
 Each call runs under a 50 ms CPU budget and 64 MB of memory; a trap or timeout disables that plugin until the next load.
@@ -224,10 +225,13 @@ Events reach plugins on the thread that delivered them (usually the socket threa
 
 **Verified events**: `agent-event.verified` is true when the event came over the socket with the surface's nonce (see Nonce gating). An unverified one (OSC 777, wrong or no nonce) can be forged by anything that prints into the terminal, so treat its fields as untrusted. A plugin granted `pty_write`, `allowlist_suggest` or `decisions_read` gets verified events only. Only a verified event's `cwd` widens a `${cwd}` grant.
 
-**API version**: `haunt:plugin@0.3.0`; manifests say `api = "0.3"`. Older plugins no longer install or load; rebuild them against the 0.3 WIT.
+**API version**: `haunt:plugin@0.4.0`; manifests say `api = "0.4"`. Older plugins no longer install or load; rebuild them against the 0.4 WIT.
 
 - 0.2 added the `decisions` and `allowlist` imports (below), and `at-ms`, `mark` and `surface` on `palette-item`, plus the `mark` enum.
 - 0.3 added `verified` on `agent-event`, the `sidebar` import (below), and two exports every plugin implements. `row-menu(surface) -> list<menu-item>` builds context-menu entries; a chosen entry calls `on-action(id, surface)`. `on-row-moved(surface, group, before)` is called only for plugins granted `sidebar`.
+- 0.4 added the `theme` import (below) and the `on-theme-changed()` export every plugin implements.
+
+**theme** (always linked): `name()` and `tokens()` return the app's current theme: a name ("default" is black and white) and its colour tokens, each a dotted lowercase name such as `color.hairline` and a `#rrggbb` or `#rrggbbaa` value. They are read only and need no capability, since colours tell a plugin nothing about your work. Until the app calls `setTheme` they are the colours in `design/tokens.json`; after a switch every plugin gets `on-theme-changed()`.
 
 **sidebar** (`sidebar`):
 

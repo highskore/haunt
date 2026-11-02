@@ -28,7 +28,7 @@ Claude Code ──hooks──▶ ~/.haunt/sock ──▶ haunt-core (Rust) ─�
   - Events without the right nonce only update status. They can never create a permission request.
 - **`core/`** holds the agent model, sidebar layout, decision log, allowlist suggestions and plugin host. It has no UI code, so future Windows and Linux front ends can share it.
 - **`macos/`** is the native app: title bar, sidebar, tabs and libghostty surfaces.
-- **`wit/`** defines the plugin API (`haunt:plugin@0.3`).
+- **`wit/`** defines the plugin API (`haunt:plugin@0.4`).
   - Plugins are sandboxed WASM components. Each capability is granted when you install the plugin and pinned in a lockfile.
   - A plugin gets no filesystem, network or environment it wasn't granted.
 

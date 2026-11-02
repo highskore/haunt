@@ -1,4 +1,4 @@
-//! wasmtime host for `haunt:plugin@0.3` components (plan sections 3.3 and 3.8).
+//! wasmtime host for `haunt:plugin@0.4` components (plan sections 3.3 and 3.8).
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -18,6 +18,7 @@ use crate::arrange::{Arrangement, ColorStyle, Section, StateGroup, TabColor};
 use crate::layout::RowKind;
 use crate::model::{CoreHandle, SidebarToken};
 use crate::plugin_manifest::{Capabilities, KV_CAP};
+use crate::plugin_theme::Theme;
 use crate::session::Outcome;
 
 mod bindings {
@@ -26,7 +27,7 @@ mod bindings {
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
-    allowlist as wallow, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, sidebar as wside,
+    allowlist as wallow, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, sidebar as wside, theme as wtheme,
     types as wit,
 };
 
@@ -212,6 +213,7 @@ pub struct HostState {
     core: Option<CoreHandle>,
     /// Set while this instance may arrange the sidebar.
     sidebar: Option<SidebarToken>,
+    theme: Arc<Theme>,
 }
 
 impl Drop for HostState {
@@ -242,6 +244,7 @@ impl HostState {
                 None => None,
             },
             core,
+            theme: Theme::default_shared(),
         }
     }
 
@@ -348,6 +351,15 @@ impl wpal::Host for HostState {
     }
     fn command(&mut self, id: String, title: String, default_key: Option<String>) {
         self.register(id, title, default_key, false);
+    }
+}
+
+impl wtheme::Host for HostState {
+    fn name(&mut self) -> String {
+        self.theme.name.clone()
+    }
+    fn tokens(&mut self) -> Vec<wtheme::Token> {
+        self.theme.tokens.iter().map(|t| wtheme::Token { name: t.name.clone(), value: t.value.clone() }).collect()
     }
 }
 
@@ -682,6 +694,12 @@ impl LoadedPlugin {
         self.call(|b, s| b.call_on_row_moved(s, surface, group, before))
     }
 
+    /// Swaps in `theme` and tells the plugin, which reads it back through the `theme` import.
+    pub fn set_theme(&mut self, theme: Arc<Theme>) -> Result<(), PluginError> {
+        self.store.data_mut().theme = theme;
+        self.call(|b, s| b.call_on_theme_changed(s))
+    }
+
     pub fn take_logs(&mut self) -> Vec<String> {
         std::mem::take(&mut self.store.data_mut().logs)
     }
@@ -735,6 +753,7 @@ impl PluginHost {
         wlog::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         wkv::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         wpal::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        wtheme::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         if caps.notifications {
             wnotify::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
@@ -751,7 +770,7 @@ impl PluginHost {
             wside::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.fs_read_granted() || caps.fs_write_granted() {
-            let mut fs = l.instance("haunt:plugin/fs@0.3.0")?;
+            let mut fs = l.instance("haunt:plugin/fs@0.4.0")?;
             if caps.fs_read_granted() {
                 fs.func_wrap("read", |s: StoreContextMut<'_, HostState>, (path,): (String,)| Ok((s.data().fs.read(&path),)))?;
                 fs.func_wrap("list", |s: StoreContextMut<'_, HostState>, (path,): (String,)| Ok((s.data().fs.list(&path),)))?;
@@ -840,7 +859,7 @@ mod tests {
     }
 
     const FS_WRITE_IMPORT: &str = r#"(component
-        (import "haunt:plugin/fs@0.3.0" (instance
+        (import "haunt:plugin/fs@0.4.0" (instance
             (export "write" (func (param "path" string) (param "data" (list u8)) (result (result (error string))))))))"#;
 
     #[test]
@@ -863,7 +882,7 @@ mod tests {
         let host = PluginHost::new().unwrap();
         let pty = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/pty@0.3.0" (instance
+            r#"(component (import "haunt:plugin/pty@0.4.0" (instance
                 (export "answer" (func (param "surface" string) (param "allow" bool) (param "request-id" u64) (result (result (error string))))))))"#,
         )
         .unwrap();
@@ -872,7 +891,7 @@ mod tests {
 
         let text = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/pty@0.3.0" (instance
+            r#"(component (import "haunt:plugin/pty@0.4.0" (instance
                 (export "text" (func (param "surface" string) (param "text" string) (result (result (error string))))))))"#,
         )
         .unwrap();
@@ -881,7 +900,7 @@ mod tests {
 
         let notify = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/notify@0.3.0" (instance
+            r#"(component (import "haunt:plugin/notify@0.4.0" (instance
                 (type $r (record (field "id" string) (field "title" string)))
                 (export "action" (type $a (eq $r)))
                 (export "notify" (func (param "title" string) (param "body" string) (param "actions" (list $a))
@@ -892,7 +911,7 @@ mod tests {
         host.check_links(&notify, &Capabilities { notifications: true, ..Default::default() }).unwrap();
     }
 
-    const DECISIONS_IMPORT: &str = r#"(component (import "haunt:plugin/decisions@0.3.0" (instance
+    const DECISIONS_IMPORT: &str = r#"(component (import "haunt:plugin/decisions@0.4.0" (instance
         (type $o (variant (case "allowed-in-haunt") (case "denied-in-haunt") (case "allowed-by-plugin" string)
             (case "denied-by-plugin" string) (case "answered-in-terminal") (case "superseded")))
         (export "outcome" (type $oe (eq $o)))
@@ -901,7 +920,7 @@ mod tests {
         (export "decision" (type $de (eq $d)))
         (export "query" (func (param "text" string) (param "limit" u32) (result (list $de)))))))"#;
 
-    const PROPOSE_IMPORT: &str = r#"(component (import "haunt:plugin/allowlist@0.3.0" (instance
+    const PROPOSE_IMPORT: &str = r#"(component (import "haunt:plugin/allowlist@0.4.0" (instance
         (export "propose" (func (param "project" string) (param "command" string) (result (result (error string))))))))"#;
 
     #[test]
@@ -931,7 +950,7 @@ mod tests {
         for (iface, func) in [("decisions", "record"), ("decisions", "write"), ("allowlist", "add-rule"), ("allowlist", "accept"), ("allowlist", "write")] {
             let c = Component::new(
                 &host.engine,
-                format!(r#"(component (import "haunt:plugin/{iface}@0.3.0" (instance (export "{func}" (func (param "x" string))))))"#),
+                format!(r#"(component (import "haunt:plugin/{iface}@0.4.0" (instance (export "{func}" (func (param "x" string))))))"#),
             )
             .unwrap();
             let e = host.check_links(&c, &both).unwrap_err().0;
@@ -940,9 +959,22 @@ mod tests {
     }
 
     #[test]
+    fn the_theme_import_needs_no_capability_and_reads_the_current_theme() {
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/theme@0.4.0" (instance (export "name" (func (result string))))))"#).unwrap();
+        host.check_links(&c, &Capabilities::default()).unwrap();
+        let mut st = HostState::new("dev.haunt.t", &Capabilities::default(), None, None, None);
+        assert_eq!(wtheme::Host::name(&mut st), "default");
+        assert!(wtheme::Host::tokens(&mut st).iter().any(|t| t.name == "color.hairline"));
+        let glass = crate::plugin_theme::ThemeToken { name: "color.hairline".into(), value: "#ffffff40".into() };
+        st.theme = Arc::new(Theme::new("glass", vec![glass]).unwrap());
+        assert_eq!((wtheme::Host::name(&mut st), wtheme::Host::tokens(&mut st).len()), ("glass".to_owned(), 1));
+    }
+
+    #[test]
     fn the_sidebar_import_needs_its_capability() {
         let host = PluginHost::new().unwrap();
-        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/sidebar@0.3.0" (instance (export "clear" (func)))))"#).unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/sidebar@0.4.0" (instance (export "clear" (func)))))"#).unwrap();
         let everything_else = Capabilities { decisions_read: true, allowlist_suggest: true, notifications: true, pty_write: true, ..Default::default() };
         let e = host.check_links(&c, &everything_else).unwrap_err().0;
         assert!(e.contains("haunt:plugin/sidebar"), "{e}");

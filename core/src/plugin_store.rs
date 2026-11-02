@@ -14,6 +14,7 @@ use crate::ids::hex;
 use crate::model::CoreHandle;
 use crate::plugin_cache::{CwasmCache, check_dir, write_atomic};
 use crate::plugin_manifest::{ALWAYS, Capabilities, MANIFEST, Manifest, valid_id};
+use crate::plugin_theme::{Theme, ThemeToken};
 use crate::plugins::{Decoration, HostRequest, HostState, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost, RowMenuItem};
 
 pub const LOCKFILE: &str = "plugins.lock";
@@ -564,6 +565,15 @@ impl PluginSet {
         out
     }
 
+    /// Gives every plugin the app's new theme and calls its `on-theme-changed`; a bad name is refused.
+    pub fn set_theme(&mut self, name: &str, tokens: Vec<ThemeToken>) -> Result<(), String> {
+        let theme = Arc::new(Theme::new(name, tokens)?);
+        for (_, p) in self.plugins.iter_mut().filter(|(_, p)| p.disabled().is_none()) {
+            let _ = p.set_theme(theme.clone());
+        }
+        Ok(())
+    }
+
     fn pending_requests(&self) -> usize {
         self.plugins.iter().map(|(_, p)| p.pending_requests()).sum()
     }
@@ -636,7 +646,7 @@ mod tests {
         fs::create_dir_all(&s).unwrap();
         fs::write(
             s.join(MANIFEST),
-            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.3\"\nentry = \"p.wasm\"\n[capabilities]\n{caps}\n"),
+            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.4\"\nentry = \"p.wasm\"\n[capabilities]\n{caps}\n"),
         )
         .unwrap();
         fs::write(s.join("p.wasm"), "(component)").unwrap();
@@ -775,7 +785,7 @@ mod tests {
         fs::create_dir_all(b.join(id)).unwrap();
         fs::write(
             b.join(id).join(MANIFEST),
-            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"{version}\"\napi = \"0.3\"\nentry = \"plugin.wasm\"\n[capabilities]\n{caps}\n"),
+            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"{version}\"\napi = \"0.4\"\nentry = \"plugin.wasm\"\n[capabilities]\n{caps}\n"),
         )
         .unwrap();
         fs::write(b.join(id).join(WASM), "(component)").unwrap();

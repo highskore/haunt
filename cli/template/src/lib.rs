@@ -6,6 +6,7 @@ wit_bindgen::generate!({ path: "wit/haunt-plugin.wit", world: "plugin" });
 
 use haunt::plugin::log::log;
 use haunt::plugin::palette;
+use haunt::plugin::theme;
 use haunt::plugin::types::{LogLevel, Style};
 
 struct Plugin;
@@ -43,6 +44,10 @@ impl Guest for Plugin {
     }
 
     fn on_row_moved(_surface: String, _group: String, _before: Option<String>) {}
+
+    fn on_theme_changed() {
+        log(LogLevel::Info, &format!("theme: {}", theme::name()));
+    }
 }
 
 export!(Plugin);
