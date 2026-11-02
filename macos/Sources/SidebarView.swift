@@ -65,7 +65,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     private let lh = Tok.Font.baseLine
     private var rowLine1: CGFloat { max(Tok.Size.iconSize, Tok.Size.rowName * lh, Tok.Size.rowRight * lh) }
     private var labelHeight: CGFloat { Tok.Size.labelPad[0] + Tok.Size.labelFont * lh + Tok.Size.labelPad[2] }
-    private var contentWidth: CGFloat { panel ? bounds.width : bounds.width - 1 }
+    private var contentWidth: CGFloat { panel ? bounds.width : bounds.width - Tok.App.hairline }
 
     private func rowHeight(_ r: Row) -> CGFloat {
         let gap = Tok.Size.rowGap[0]
@@ -253,10 +253,10 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         guard case let .row(row, top, _, _)? = items.first(where: {
             if case let .row(r, _, _, _) = $0 { return r.surfaceId == id } else { return false }
         }) else { return endRename(save: false) }
-        // The field's cell insets its text 2 pt and sizes its own line; centre that on the drawn name.
+        // The field's cell sizes its own line; centre that on the drawn name.
         let r = nameRect(top: top)
         let h = field.cell?.cellSize.height ?? r.height
-        field.frame = NSRect(x: r.minX - 2, y: (r.midY - h / 2).rounded(), width: r.width + 2, height: h)
+        field.frame = NSRect(x: r.minX - Tok.App.fieldInset, y: (r.midY - h / 2).rounded(), width: r.width + Tok.App.fieldInset, height: h)
         field.backgroundColor = row.selected ? Tok.Color.rowSelected : Tok.Color.sidebarBg
     }
 
@@ -289,7 +289,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         Draw.fill(bounds, panel ? Tok.Color.windowBg : Tok.Color.sidebarBg)
-        if !panel { Draw.fill(NSRect(x: bounds.width - 1, y: 0, width: 1, height: bounds.height), Tok.Color.hairline) }
+        if !panel { Draw.fill(NSRect(x: bounds.width - Tok.App.hairline, y: 0, width: Tok.App.hairline, height: bounds.height), Tok.Color.hairline) }
         for item in items {
             switch item {
             case let .label(text, top, _):
@@ -301,7 +301,8 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             }
         }
         if let d = drop {
-            Draw.fill(NSRect(x: Tok.Size.rowPad[1], y: d.y - 1, width: contentWidth - 2 * Tok.Size.rowPad[1], height: 2), Tok.Color.textPrimary)
+            Draw.fill(NSRect(x: Tok.Size.rowPad[1], y: d.y - Tok.App.dropLine / 2,
+                             width: contentWidth - 2 * Tok.Size.rowPad[1], height: Tok.App.dropLine), Tok.Color.textPrimary)
         }
     }
 
@@ -495,7 +496,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     override func mouseDragged(with event: NSEvent) {
         guard let press else { return }
         let p = convert(event.locationInWindow, from: nil)
-        if !dragging, hypot(p.x - press.at.x, p.y - press.at.y) < 4 { return }
+        if !dragging, hypot(p.x - press.at.x, p.y - press.at.y) < Tok.App.dragSlop { return }
         dragging = true
         drop = target(at: p)
     }

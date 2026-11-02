@@ -137,7 +137,7 @@ private final class RootView: NSView {
         pane.wantsLayer = true
         pane.layer?.backgroundColor = Tok.Color.windowBg.cgColor
         scrim.wantsLayer = true
-        scrim.layer?.backgroundColor = NSColor(white: 0, alpha: Tok.Size.paletteScrimAlpha).cgColor
+        scrim.layer?.backgroundColor = Tok.App.scrim.withAlphaComponent(Tok.Size.paletteScrimAlpha).cgColor
         scrim.isHidden = true
         agents.isHidden = true
         for v in [titleBar, sidebar, pane, scrim, agents] { addSubview(v) }
@@ -162,7 +162,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let ghostty: Ghostty.App
     private let fixture: Fixture?
     /// The mockups' window size in points.
-    private static let defaultSize = NSSize(width: 900, height: Tok.Size.windowH)
+    private static let defaultSize = NSSize(width: Tok.App.windowW, height: Tok.Size.windowH)
     private let config: HauntConfig
     private let store = TabStore()
     private let bridge: PluginBridge
@@ -214,7 +214,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         win.colorSpace = .sRGB
         win.appearance = NSAppearance(named: .darkAqua)
         win.backgroundColor = Tok.Color.windowBg
-        win.minSize = NSSize(width: Tok.Size.sidebarW + 300, height: 240)
+        win.minSize = NSSize(width: Tok.Size.sidebarW + Tok.App.minPaneW, height: Tok.App.minWindowH)
         win.tabbingMode = .disallowed
         for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             win.standardWindowButton(b)?.isHidden = true
@@ -567,7 +567,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             // The strip neither zooms nor goes full screen (windowShouldZoom), whatever asks.
             window.collectionBehavior.insert(.fullScreenNone)
             refresh()
-            window.minSize = NSSize(width: Tok.Size.narrowW - 2, height: 200)
+            window.minSize = NSSize(width: Tok.Size.narrowW - 2 * Tok.App.hairline, height: Tok.App.narrowMinH)
             let frame = AgentsView.dockedFrame(on: window.screen ?? NSScreen.main, height: fixture == nil ? nil : Fixture.narrowHeight)
             window.setFrame(frame, display: true, animate: animate)
             window.makeFirstResponder(root.agents)
