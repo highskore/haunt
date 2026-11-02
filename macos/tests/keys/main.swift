@@ -66,6 +66,12 @@ check(conf.components(separatedBy: "keybind = super+t=unbind").count == 2, "unbi
 let custom = HauntConfig.ghosttyConfig([:], defaultSize: 11, keys: keys)
 check(custom.contains("keybind = super+p=unbind\n"), "configured chord unbound")
 
+// CRLF files parse like LF ones.
+let crlf = TOML.parse("font_size = 13\r\n[keys]\r\npalette = \"cmd+p\"\r\n")
+check(crlf[""]?["font_size"] == .scalar("13"), "CRLF top-level value")
+check(crlf["keys"]?["palette"] == .scalar("cmd+p"), "CRLF table value")
+check(TOML.parse("a = 1\rb = 2")[""]?["b"] == .scalar("2"), "lone CR line break")
+
 // A right-click paste would bypass Haunt's paste checks.
 let rc = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\nright-click-action = copy-or-paste\ncursor-style = bar\n"), defaultSize: 11, keys: defaults)
 check(!rc.contains("right-click-action"), "right-click paste refused")

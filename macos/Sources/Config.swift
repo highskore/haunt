@@ -161,7 +161,8 @@ enum TOML {
     static func parse(_ text: String) -> [String: [String: Value]] {
         var out: [String: [String: Value]] = [:]
         var table = ""
-        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        // By Character, "\r\n" is one newline, which splitting on "\n" alone would never find.
+        for raw in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             let line = stripComment(String(raw)).trimmingCharacters(in: .whitespaces)
             if line.isEmpty { continue }
             if line.hasPrefix("[") && line.hasSuffix("]") {
