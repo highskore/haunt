@@ -257,13 +257,14 @@ final class PaletteController: NSObject, NSWindowDelegate {
     private func logRows() -> [PaletteRow] {
         guard let host else { return [] }
         let names = Dictionary(host.paletteTabs.map { ($0.surfaceId, $0.name) }, uniquingKeysWith: { a, _ in a })
+        let today = Calendar.current.startOfDay(for: Date())
         return host.paletteDecisions(query: query)
             .filter { tabFilter == nil || $0.surfaceId == tabFilter }
             .map { d in
                 let tab = names[d.surfaceId] ?? d.cwd.map { ($0 as NSString).lastPathComponent } ?? d.surfaceId
                 let place = [tab, Self.agentName(d.agent)].compactMap { $0 }.joined(separator: " · ")
                 let what = d.tool == "Bash" ? d.preview : "\(d.tool) \(d.preview)"
-                return PaletteRow(left: Self.time(d.atMs), mark: Self.mark(d.outcome),
+                return PaletteRow(left: Self.time(d.atMs, today: today), mark: Self.mark(d.outcome),
                                   title: "\(Self.phrase(d.outcome)) \(what)", sub: place,
                                   right: names[d.surfaceId] == nil ? .none : .jump,
                                   action: names[d.surfaceId] == nil ? .none : .tab(d.surfaceId))
@@ -299,21 +300,21 @@ final class PaletteController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// "14:02" today, "Sat" this week, "10/3" before that.
-    static func time(_ ms: UInt64, now: Date = Date()) -> String {
-        let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
-        let cal = Calendar.current
+    private static func formatter(_ format: String) -> DateFormatter {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        if cal.isDate(date, inSameDayAs: now) {
-            f.dateFormat = "HH:mm"
-        } else if let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: now)).day,
-                  days < 7 {
-            f.dateFormat = "EEE"
-        } else {
-            f.dateFormat = "M/d"
-        }
-        return f.string(from: date)
+        f.dateFormat = format
+        return f
+    }
+
+    private static let clock = formatter("HH:mm"), weekday = formatter("EEE"), monthDay = formatter("M/d")
+
+    /// "14:02" today, "Sat" this week, "10/3" before that. `today` is the start of the current day.
+    static func time(_ ms: UInt64, today: Date) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
+        let cal = Calendar.current
+        let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: today).day ?? .max
+        return (days == 0 ? clock : days < 7 ? weekday : monthDay).string(from: date)
     }
 }
 
