@@ -289,7 +289,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private func syncFocus() {
         let key = window?.isKeyWindow ?? false
         let display = window?.screen?.displayID
-        let paneShown = (window?.occlusionState.contains(.visible) ?? false) && !root.agentsOn
+        // A fixture is captured even while other windows cover it, so it always renders.
+        let paneShown = (fixture != nil || window?.occlusionState.contains(.visible) == true) && !root.agentsOn
         for t in store.tabs {
             let selected = t.env.surfaceId == store.selectedId
             t.view.focusDidChange(key && selected && t.view.isFirstResponder)
