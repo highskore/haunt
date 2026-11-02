@@ -1,6 +1,6 @@
 # Haunt
 
-A quiet macOS terminal for running many Claude Code agents side by side.
+A quiet macOS terminal for running many coding agents side by side: Claude Code, Codex and more.
 
 ![Haunt](docs/img/haunt.png)
 
