@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["cli", "core", "ffi"]
+members = ["cli", "core", "ffi", "tools/uniffi-bindgen"]
 
 [workspace.package]
 edition = "2024"

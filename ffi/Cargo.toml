@@ -8,15 +8,11 @@ version.workspace = true
 crate-type = ["staticlib", "lib"]
 name = "haunt_ffi"
 
-[[bin]]
-name = "uniffi-bindgen"
-path = "uniffi-bindgen.rs"
-
 [features]
 default = ["plugins"]
 plugins = ["haunt-core/plugins"]
 
 [dependencies]
 haunt-core = { path = "../core", default-features = false, features = ["ffi"] }
-uniffi = { workspace = true, features = ["cli"] }
+uniffi.workspace = true
 thiserror.workspace = true
