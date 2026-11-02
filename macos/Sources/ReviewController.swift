@@ -65,7 +65,7 @@ final class ReviewCoordinator {
             return old
         }
         let s = ReviewState(surfaceId: id)
-        s.turn = turn
+        s.turn = turn.map(Visible.turn)
         reviews[id] = s
         return s
     }

@@ -493,14 +493,17 @@ private final class InboxFiles: NSView {
         for (i, f) in s.files.enumerated() {
             let sel = i == s.selectedFile
             if sel { Draw.fill(NSRect(x: 0, y: y, width: w, height: rowH), Tok.Color.rowSelected) }
-            let right = f.binary ? RV.width("binary", Draw.mono(TS.inboxStatFont)) : IB.statWidth(f.additions, f.deletions)
+            let sf = Draw.mono(TS.inboxStatFont), sl = TS.inboxStatFont * IB.lh
+            let flag = f.hiddenChars ? "hidden " : ""
+            let word = f.special ? "special" : f.binary ? "binary" : nil
+            let right = RV.width(flag, sf) + (word.map { RV.width($0, sf) } ?? IB.statWidth(f.additions, f.deletions))
             row(IB.statusLetter(f), IB.shortPath(f.path), ink: sel ? Tok.Color.inboxFileSel : Tok.Color.inboxFileInk, top: y, width: w,
                 rightW: right, ctx: ctx) { x, mid in
-                if f.binary {
-                    let sf = Draw.mono(TS.inboxStatFont)
-                    RV.text("binary", sf, Tok.Color.textMeta, x: x, top: mid - TS.inboxStatFont * IB.lh / 2, lineHeight: TS.inboxStatFont * IB.lh, in: ctx)
+                let fx = x + (flag.isEmpty ? 0 : RV.text(flag, sf, Tok.Color.textPrimary, x: x, top: mid - sl / 2, lineHeight: sl, in: ctx))
+                if let word {
+                    RV.text(word, sf, Tok.Color.textMeta, x: fx, top: mid - sl / 2, lineHeight: sl, in: ctx)
                 } else {
-                    IB.stat(f.additions, f.deletions, x: x, mid: mid, in: ctx)
+                    IB.stat(f.additions, f.deletions, x: fx, mid: mid, in: ctx)
                 }
             }
             y += rowH
@@ -597,8 +600,9 @@ private final class InboxDiffView: NSView {
             for n in s.diff?.notes ?? [] { add(.note(n), hunkH) }
             for (fi, f) in s.files.enumerated() {
                 add(.header(fi), fhH)
-                if f.binary || (f.hunks.isEmpty && f.droppedLines == 0) {
-                    add(.note(f.binary ? "Binary file, not shown" : "No changes to show"), hunkH)
+                if f.binary || f.special || (f.hunks.isEmpty && f.droppedLines == 0) {
+                    add(.note(f.special ? "Special file (not a regular file or link), not shown"
+                              : f.binary ? "Binary file, not shown" : "No changes to show"), hunkH)
                     continue
                 }
                 for (hi, h) in f.hunks.enumerated() {
@@ -648,7 +652,8 @@ private final class InboxDiffView: NSView {
             RV.text("Viewed", rf, Tok.Color.textMeta, x: vr.minX + TS.inboxCkSize + TS.inboxFhGap, top: mid - rl / 2, lineHeight: rl, in: ctx)
             right = vr.minX - TS.inboxFhGap
         }
-        let tag = f.status == .added ? "new file" : f.status == .deleted ? "deleted" : fi == s.selectedFile ? "\(fi + 1) of \(s.files.count)" : nil
+        var tag = f.status == .added ? "new file" : f.status == .deleted ? "deleted" : fi == s.selectedFile ? "\(fi + 1) of \(s.files.count)" : nil
+        if f.hiddenChars { tag = "hidden chars" + (tag.map { " · " + $0 } ?? "") }
         if let tag {
             let tw = RV.width(tag, rf)
             RV.text(tag, rf, Tok.Color.textMeta, x: right - tw, top: mid - rl / 2, lineHeight: rl, in: ctx)
@@ -656,12 +661,12 @@ private final class InboxDiffView: NSView {
         }
         let pf = Draw.mono(TS.inboxFhPathFont), pl = TS.inboxFhPathFont * IB.lh
         var x = r.minX + TS.inboxFhPad[1]
-        let tailW = (f.binary ? 0 : TS.inboxFhGap + IB.statWidth(f.additions, f.deletions) + TS.inboxFhGap + IB.blocksWidth)
+        let tailW = (f.binary || f.special ? 0 : TS.inboxFhGap + IB.statWidth(f.additions, f.deletions) + TS.inboxFhGap + IB.blocksWidth)
         let room = max(right - x - tailW, 40)
         let dirW = min(RV.width(f.dir, pf), max(room - RV.width(f.name, pf), 0))
         if dirW > 0 { x += RV.text(f.dir, pf, Tok.Color.textMeta, x: x, top: mid - pl / 2, lineHeight: pl, maxWidth: dirW, in: ctx) }
         x += RV.text(f.name, pf, Tok.Color.textPrimary, x: x, top: mid - pl / 2, lineHeight: pl, maxWidth: room - dirW, in: ctx)
-        guard !f.binary else { return }
+        guard !f.binary, !f.special else { return }
         x += TS.inboxFhGap
         x += IB.stat(f.additions, f.deletions, x: x, mid: mid, in: ctx) + TS.inboxFhGap
         IB.blocks(f.additions, f.deletions, x: x, mid: mid)

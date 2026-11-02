@@ -84,8 +84,9 @@ enum Checks {
             case .running: state = .running
             case .unknown: state = .unknown
             }
-            out.removeAll { $0.command == c.command }
-            out.append(Check(command: c.command, state: state))
+            let cmd = Visible.text(c.command)
+            out.removeAll { $0.command == cmd }
+            out.append(Check(command: cmd, state: state))
         }
         return out
     }
@@ -429,5 +430,30 @@ enum Highlight {
         }
         flush(u.count)
         return out
+    }
+}
+
+/// Repo- and agent-derived text with control and format characters (bidi overrides, zero-width, C0/C1)
+/// spelled out as ⟨U+202E⟩, so a change can't disguise what it does when drawn.
+enum Visible {
+    static func text(_ s: String, keepNewlines: Bool = false) -> String {
+        func hide(_ c: Unicode.Scalar) -> Bool { PastePreview.hidden(c) && !(keepNewlines && c == "\n") }
+        guard s.unicodeScalars.contains(where: hide) else { return s }
+        var out = ""
+        for c in s.unicodeScalars {
+            if hide(c) { out += String(format: "⟨U+%04X⟩", c.value) } else { out.unicodeScalars.append(c) }
+        }
+        return out
+    }
+
+    /// The turn as the review shows it: prompt, commands, tasks, files and subagents spelled out.
+    static func turn(_ t: ReviewTurn) -> ReviewTurn {
+        var t = t
+        t.prompt = t.prompt.map { text($0, keepNewlines: true) }
+        t.commands = t.commands.map { TurnCommand(command: text($0.command), outcome: $0.outcome) }
+        t.tasks = t.tasks.map { TurnTask(subject: text($0.subject), status: $0.status) }
+        t.files = t.files.map { text($0) }
+        t.subagents = t.subagents.map { TurnSubagent(label: text($0.label), toolCount: $0.toolCount, durationMs: $0.durationMs) }
+        return t
     }
 }

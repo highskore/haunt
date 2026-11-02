@@ -59,7 +59,7 @@ struct PastePreview: Equatable {
     }
 
     /// C0/C1 controls and DEL, plus format characters (bidi overrides, zero-width) that can disguise text.
-    private static func hidden(_ c: Unicode.Scalar) -> Bool {
+    static func hidden(_ c: Unicode.Scalar) -> Bool {
         c.value < 0x20 || (0x7F...0x9F).contains(c.value) || c.properties.generalCategory == .format
     }
 }

@@ -68,6 +68,15 @@ let cut = DiffParser.parse(long, maxLines: 4)[0]
 check(cut.hunks[0].lines.count == 4 && cut.droppedLines == 6 && cut.additions == 10, "per-file cut counts the rest")
 check(DiffParser.hunkStarts("@@ -5 +7,2 @@") ?? (0, 0) == (5, 7), "hunk without counts")
 
+let crlf = DiffParser.parse("diff --git a/w b/w\r\n--- a/w\r\n+++ b/w\r\n@@ -1 +1 @@\r\n-a\r\n+b\r\n")
+check(crlf.first?.hunks.first?.lines.map(\.text) == ["a", "b"] && crlf.first?.hiddenChars == false, "CRLF lines split cleanly")
+let trojan = DiffParser.parse("diff --git a/t\u{200B}.rs b/t\u{200B}.rs\n--- a/t\u{200B}.rs\n+++ b/t\u{200B}.rs\n@@ -1 +1 @@ fn \u{202E}x\n-a\n+if ok {\u{202E} }\u{1B}[2J\n")[0]
+check(trojan.path == "t⟨U+200B⟩.rs" && trojan.hiddenChars, "hidden characters in a path are spelled out and flagged")
+check(trojan.hunks[0].header.contains("⟨U+202E⟩"), "and in a hunk header")
+check(trojan.hunks[0].lines.map { "\($0.hidden)" } == ["false", "true"], "only the line with them is flagged")
+check(trojan.hunks[0].lines[1].text == "if ok {⟨U+202E⟩ }⟨U+001B⟩[2J", "bidi and escape spelled out")
+check(Visible.text("a\u{2067}b\u{00AD}c\u{FEFF}") == "a⟨U+2067⟩b⟨U+00AD⟩c⟨U+FEFF⟩", "isolates, soft hyphen, BOM")
+
 // MARK: Tree
 
 let tree = FileTree(paths: ["Sources/Haunt/Notify/FocusTracker.swift", "Sources/Haunt/Notify/HauntNotifier.swift",
@@ -224,37 +233,120 @@ check(!FileManager.default.fileExists(atPath: repo + "/PWNED"), "no external dif
 check(ReviewLoader.load(cwd: "/", headAtStart: nil) == .failure(.notARepo("/")), "not a repo")
 try? FileManager.default.removeItem(atPath: repo)
 
-// Hostile filter drivers named by .gitattributes: a working-tree diff would run `clean` or `process`.
-try! FileManager.default.createDirectory(atPath: repo, withIntermediateDirectories: true)
-write("a.txt", "one\n")
-write("b.md", "one\n")
-write("c.cfg", "one\n")
-write(".gitattributes", "*.txt filter=evil\n*.md filter=Ev.il\n*.cfg filter=proc\n")
+func fresh() {
+    try? FileManager.default.removeItem(atPath: repo)
+    try! FileManager.default.createDirectory(atPath: repo, withIntermediateDirectories: true)
+}
+func exists(_ name: String) -> Bool { FileManager.default.fileExists(atPath: repo + "/" + name) }
+func elapsed(_ f: () -> Void) -> TimeInterval { let t = Date(); f(); return Date().timeIntervalSince(t) }
+
+// Hostile filter drivers named by .gitattributes, including names a `-c filter.<name>...` string would misparse.
+fresh()
+for f in ["a.txt", "b.md", "c.cfg", "d.ini"] { write(f, "one\n") }
+write(".gitattributes", "*.txt filter=evil\n*.md filter=Ev.il\n*.cfg filter=proc\n*.ini filter=x=y.z\n")
 sh(["git", "init", "-q", "-b", "main"], repo)
 sh(["git", "add", "-A"], repo)
 sh(["git", "commit", "-q", "-m", "one"], repo)
+let filterStart = GitRunner.run(["rev-parse", "HEAD"], cwd: repo)!.text.trimmingCharacters(in: .newlines)
+write("a.txt", "one\ncommitted\n")
+sh(["git", "commit", "-q", "-am", "two"], repo)
 write("evil.sh", "#!/bin/sh\ntouch \(repo)/FILTERED\ncat\n")
 sh(["chmod", "+x", "evil.sh"], repo)
-for (k, v) in [("filter.evil.clean", repo + "/evil.sh"), ("filter.Ev.il.clean", repo + "/evil.sh"),
-               ("filter.proc.process", repo + "/evil.sh"), ("filter.proc.required", "true")] {
-    sh(["git", "config", k, v], repo)
-}
+let cfg = try! String(contentsOfFile: repo + "/.git/config", encoding: .utf8)
+try! (cfg + """
+[filter "evil"]
+\tclean = \(repo)/evil.sh
+[filter "Ev.il"]
+\tclean = \(repo)/evil.sh
+[filter "proc"]
+\tprocess = \(repo)/evil.sh
+\trequired = true
+[filter "x=y.z"]
+\tclean = \(repo)/evil.sh
+
+""").write(toFile: repo + "/.git/config", atomically: true, encoding: .utf8)
 sleep(1)
-for f in ["a.txt", "b.md", "c.cfg"] { write(f, "one\ntwo\n") }
+for f in ["a.txt", "b.md", "c.cfg", "d.ini"] { write(f, "one\ntwo\n") }
 // The fixture really is hostile: plain git runs the filter.
 sh(["git", "diff"], repo)
-check(FileManager.default.fileExists(atPath: repo + "/FILTERED"), "plain git diff runs the hostile filter (test is live)")
+check(exists("FILTERED"), "plain git diff runs the hostile filter (test is live)")
 try? FileManager.default.removeItem(atPath: repo + "/FILTERED")
-sh(["touch", "a.txt", "b.md", "c.cfg"], repo)
-switch ReviewLoader.load(cwd: repo, headAtStart: nil) {
+sh(["touch", "a.txt", "b.md", "c.cfg", "d.ini"], repo)
+check(GitRunner.hasFilters(cwd: repo) == true, "filters are seen")
+switch ReviewLoader.load(cwd: repo, headAtStart: filterStart) {
 case let .success(d):
-    check(Set(d.files.map(\.path)).isSuperset(of: ["a.txt", "b.md", "c.cfg"]), "filtered files still diffed \(d.files.map(\.path))")
+    check(d.files.map(\.path) == ["a.txt"], "only the committed range \(d.files.map(\.path))")
+    check(d.files.first.map { ($0.additions, $0.deletions) } ?? (0, 0) == (1, 0), "committed lines only")
+    check(d.notes.contains { $0.contains("defines git filters") }, "and says why")
 case let .failure(e):
     check(false, "load with filters failed: \(e)")
 }
-check(!FileManager.default.fileExists(atPath: repo + "/FILTERED"), "no filter driver ran")
-check(GitRunner.filterOverrides(cwd: repo).map(Set.init) == Set(["evil", "Ev.il", "proc"].flatMap { n in
-    ["filter.\(n).clean=", "filter.\(n).smudge=", "filter.\(n).process=", "filter.\(n).required=false"] }), "overrides every driver")
+check(!exists("FILTERED"), "no filter driver ran")
+// A filter that appears after the check: the attributes come from the empty tree, so the worktree's don't apply.
+if GitRunner.supportsAttrSource {
+    _ = GitRunner.run(["diff", "--no-ext-diff", "--no-textconv"], cwd: repo)
+    _ = GitRunner.run(["diff", "--quiet", "--no-ext-diff", "--no-textconv", "HEAD", "--"], cwd: repo)
+    check(!exists("FILTERED"), "GIT_ATTR_SOURCE keeps the worktree's .gitattributes out")
+} else {
+    print("review: git < 2.40, skipping the GIT_ATTR_SOURCE check")
+}
+
+// A partial clone missing a blob, with a promisor remote that would run a command.
+fresh()
+write("a.txt", "one\n")
+sh(["git", "init", "-q", "-b", "main"], repo)
+sh(["git", "add", "-A"], repo)
+sh(["git", "commit", "-q", "-m", "one"], repo)
+let pcStart = GitRunner.run(["rev-parse", "HEAD"], cwd: repo)!.text.trimmingCharacters(in: .newlines)
+let blob = GitRunner.run(["rev-parse", "HEAD:a.txt"], cwd: repo)!.text.trimmingCharacters(in: .newlines)
+write("a.txt", "two\n")
+sh(["git", "commit", "-q", "-am", "two"], repo)
+try! FileManager.default.removeItem(atPath: repo + "/.git/objects/" + blob.prefix(2) + "/" + blob.dropFirst(2))
+for (k, v) in [("core.repositoryformatversion", "1"), ("extensions.partialClone", "origin"),
+               ("remote.origin.promisor", "true"), ("remote.origin.url", "ext::sh -c touch% \(repo)/FETCHED")] {
+    sh(["git", "config", k, v], repo)
+}
+sh(["git", "-c", "protocol.ext.allow=always", "diff", pcStart, "HEAD"], repo)
+check(exists("FETCHED"), "plain git fetches the missing blob through the promisor (test is live)")
+try? FileManager.default.removeItem(atPath: repo + "/FETCHED")
+let pcTime = elapsed { _ = ReviewLoader.load(cwd: repo, headAtStart: pcStart) }
+check(!exists("FETCHED") && pcTime < 10, "no lazy fetch ran (\(pcTime)s)")
+
+// A FIFO in the untracked files: git diff --no-index would block reading it.
+fresh()
+write("a.txt", "one\n")
+sh(["git", "init", "-q", "-b", "main"], repo)
+sh(["git", "add", "-A"], repo)
+sh(["git", "commit", "-q", "-m", "one"], repo)
+check(mkfifo(repo + "/pipe", 0o600) == 0, "mkfifo")
+write("link", "")
+try! FileManager.default.removeItem(atPath: repo + "/link")
+try! FileManager.default.createSymbolicLink(atPath: repo + "/link", withDestinationPath: "a.txt")
+// Trojan Source: a bidi override in a line, a zero-width space in a name.
+write("trojan.txt", "ok\nif (admin) {\u{202E} } \u{2066}// check\n")
+write("zero\u{200B}width.txt", "x\n")
+if GitRunner.supportsAttrSource {
+    var loaded: Result<ReviewDiff, ReviewLoader.LoadError>?
+    let fifoTime = elapsed { loaded = ReviewLoader.load(cwd: repo, headAtStart: nil) }
+    check(fifoTime < 5, "a FIFO doesn't stall the review (\(fifoTime)s)")
+    if case let .success(d)? = loaded {
+        let byPath = Dictionary(uniqueKeysWithValues: d.files.map { ($0.path, $0) })
+        // git's own listing skips FIFOs; the lstat check catches one that replaces a file after the listing.
+        check(byPath["pipe"].map { $0.special && $0.hunks.isEmpty } ?? true, "a FIFO is never diffed")
+        check(byPath["link"]?.hunks.first?.lines.map(\.text) == ["a.txt"], "a symlink shows its target")
+        let t = byPath["trojan.txt"]
+        check(t?.hiddenChars == true, "the file with a bidi override is flagged")
+        let bad = t?.hunks.flatMap(\.lines).filter(\.hidden).map(\.text)
+        check(bad == ["if (admin) {⟨U+202E⟩ } ⟨U+2066⟩// check"], "bidi spelled out \(bad ?? [])")
+        check(t?.hunks.flatMap(\.lines).filter { !$0.hidden }.map(\.text) == ["ok"], "clean lines aren't flagged")
+        let z = byPath["zero⟨U+200B⟩width.txt"]
+        check(z?.hiddenChars == true && z?.hunks.first?.lines.map(\.text) == ["x"], "zero-width name spelled out \(byPath.keys.sorted())")
+    } else {
+        check(false, "load with a FIFO failed")
+    }
+} else {
+    print("review: git < 2.40, skipping the untracked-file checks")
+}
 try? FileManager.default.removeItem(atPath: repo)
 
 if failures > 0 { print("review: \(failures) failed"); exit(1) }

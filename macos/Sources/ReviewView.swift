@@ -526,7 +526,7 @@ final class TreeView: NSView {
             }
             let s = TS.reviewChkSize
             RV.checkbox(NSRect(x: x0, y: RV.px(mid - s / 2), width: s, height: s), on: state.viewed.contains(f.path), in: ctx)
-            let st = RV.stat(f.additions, f.deletions)
+            let st = (f.hiddenChars ? "hidden · " : "") + (f.special ? "special" : RV.stat(f.additions, f.deletions))
             let stW = RV.width(st, stFont)
             RV.text(st, stFont, Tok.Color.textSub, x: w - TS.reviewRowPad[1] - stW, top: mid - TS.reviewStFont * RV.lh / 2, in: ctx)
             let nx = x0 + s + TS.reviewRowGap
@@ -616,25 +616,26 @@ final class FileHeaderView: NSView {
             RV.text(t, small, Tok.Color.textLabel, x: r.maxX - TS.reviewFhPadx - w, top: mid - sl / 2, lineHeight: sl, in: ctx)
             right = r.maxX - TS.reviewFhPadx - w - TS.reviewFhGap
         }
-        let tagW: CGFloat = f.status == .added ? RV.width("new", Draw.ui(TS.reviewTagFont), kern: TS.reviewTagFont * TS.reviewTagTrackingEm) + TS.reviewTagPad[1] * 2 + 2 + TS.reviewFhGap : 0
-        let st = f.binary ? "binary" : RV.stat(f.additions, f.deletions)
+        let tags = (f.status == .added ? ["new"] : []) + (f.hiddenChars ? ["hidden chars"] : [])
+        let tagW: CGFloat = tags.reduce(0) { $0 + RV.width($1, Draw.ui(TS.reviewTagFont), kern: TS.reviewTagFont * TS.reviewTagTrackingEm) + TS.reviewTagPad[1] * 2 + 2 + TS.reviewFhGap }
+        let st = f.special ? "special" : f.binary ? "binary" : RV.stat(f.additions, f.deletions)
         let stF = Draw.mono(TS.reviewStFont)
-        let tail = tagW + RV.width(st, stF) + TS.reviewFhGap + (f.binary ? 0 : RV.squaresWidth + TS.reviewFhGap)
+        let tail = tagW + RV.width(st, stF) + TS.reviewFhGap + (f.binary || f.special ? 0 : RV.squaresWidth + TS.reviewFhGap)
         let room = max(right - x - tail, 40)
         let dirW = min(RV.width(f.dir, pf), max(room - RV.width(f.name, pf), 0))
         if dirW > 0 { x += RV.text(f.dir, pf, Tok.Color.textLabel, x: x, top: mid - pl / 2, lineHeight: pl, maxWidth: dirW, in: ctx) }
         x += RV.text(f.name, pf, Tok.Color.textPrimary, x: x, top: mid - pl / 2, lineHeight: pl, maxWidth: room - dirW, in: ctx)
         x += TS.reviewFhGap
-        if f.status == .added {
+        for tag in tags {
             let tf = Draw.ui(TS.reviewTagFont), kern = TS.reviewTagFont * TS.reviewTagTrackingEm
-            let tw = RV.width("new", tf, kern: kern) + TS.reviewTagPad[1] * 2 + 2
+            let tw = RV.width(tag, tf, kern: kern) + TS.reviewTagPad[1] * 2 + 2
             let tr = NSRect(x: x, y: RV.px(mid - (TS.reviewTagLine + 2) / 2), width: tw, height: TS.reviewTagLine + 2)
             RV.rounded(tr, radius: TS.reviewTagRadius, fill: nil, stroke: Tok.Color.kbdBorder)
-            RV.text("new", tf, Tok.Color.textSub, x: x + 1 + TS.reviewTagPad[1], top: tr.minY + 1, lineHeight: TS.reviewTagLine, kern: kern, in: ctx)
+            RV.text(tag, tf, Tok.Color.textSub, x: x + 1 + TS.reviewTagPad[1], top: tr.minY + 1, lineHeight: TS.reviewTagLine, kern: kern, in: ctx)
             x += tw + TS.reviewFhGap
         }
         x += RV.text(st, stF, Tok.Color.textSub, x: x, top: mid - TS.reviewStFont * RV.lh / 2, in: ctx) + TS.reviewFhGap
-        if !f.binary { RV.squares(f.additions, f.deletions, x: x, midY: mid) }
+        if !f.binary, !f.special { RV.squares(f.additions, f.deletions, x: x, midY: mid) }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -733,8 +734,8 @@ final class DiffDocView: NSView {
                 if n > 0 { y += TS.reviewFhMt }
                 add(.header(file: fi, top: n > 0), TS.reviewFhH)
             }
-            if f.binary || f.hunks.isEmpty, f.droppedLines == 0 {
-                add(.binary, hunkH)
+            if f.binary || f.special || f.hunks.isEmpty, f.droppedLines == 0 {
+                add(f.special ? .notice("Special file (not a regular file or link), not shown") : .binary, hunkH)
                 continue
             }
             for (hi, h) in f.hunks.enumerated() {
@@ -1399,8 +1400,8 @@ final class OverviewCenter: NSView {
             Draw.fill(NSRect(x: x, y: RV.px(y), width: width, height: 1), Tok.Color.diffRule)
             let mid = y + 1 + fc[1] + nl / 2
             let sqX = x + width - RV.squaresWidth
-            if !f.binary { RV.squares(f.additions, f.deletions, x: sqX, midY: mid) }
-            let st = f.binary ? "binary" : RV.stat(f.additions, f.deletions), stW = RV.width(st, stF)
+            if !f.binary, !f.special { RV.squares(f.additions, f.deletions, x: sqX, midY: mid) }
+            let st = f.special ? "special" : f.binary ? "binary" : RV.stat(f.additions, f.deletions), stW = RV.width(st, stF)
             let stX = sqX - fc[0] - stW
             RV.text(st, stF, Tok.Color.textSub, x: stX, top: mid - TS.reviewStFont * RV.lh / 2, in: ctx)
             RV.text(f.name, nf, Tok.Color.textPrimary, x: x, top: mid - nl / 2, lineHeight: nl, maxWidth: stX - fc[0] - x, in: ctx)

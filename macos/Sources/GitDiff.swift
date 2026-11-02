@@ -7,6 +7,8 @@ struct DiffLine: Equatable {
     var text: String
     var old: Int?
     var new: Int?
+    /// The text had control or format characters, now spelled out.
+    var hidden = false
 }
 
 struct Hunk: Equatable {
@@ -28,6 +30,10 @@ struct FileDiff: Equatable {
     var deletions = 0
     /// Diff lines past the per-file limit, counted but not kept.
     var droppedLines = 0
+    /// Some path or line had control or format characters (Trojan Source), now spelled out.
+    var hiddenChars = false
+    /// A FIFO, socket or device among the untracked files: listed, never read.
+    var special = false
 
     var name: String { (path as NSString).lastPathComponent }
     /// "Sources/Haunt/Notify/", or "" at the top level.
@@ -53,7 +59,8 @@ enum DiffParser {
             cur = nil
         }
 
-        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        // "\r\n" is one Character in Swift, so it has to be a separator of its own.
+        for raw in text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" }) {
             let line = String(raw)
             if line.hasPrefix("diff --git ") {
                 finish()
@@ -118,7 +125,31 @@ enum DiffParser {
             }
         }
         finish()
-        return files
+        return files.map(visible)
+    }
+
+    /// Paths, hunk headers and lines with control and format characters spelled out and flagged.
+    static func visible(_ f: FileDiff) -> FileDiff {
+        var f = f
+        let path = Visible.text(f.path)
+        if path != f.path { f.path = path; f.hiddenChars = true }
+        if case let .renamed(from) = f.status, Visible.text(from) != from {
+            f.status = .renamed(from: Visible.text(from))
+            f.hiddenChars = true
+        }
+        for h in f.hunks.indices {
+            let header = Visible.text(f.hunks[h].header)
+            if header != f.hunks[h].header { f.hunks[h].header = header; f.hiddenChars = true }
+            for l in f.hunks[h].lines.indices {
+                let t = Visible.text(f.hunks[h].lines[l].text)
+                if t != f.hunks[h].lines[l].text {
+                    f.hunks[h].lines[l].text = t
+                    f.hunks[h].lines[l].hidden = true
+                    f.hiddenChars = true
+                }
+            }
+        }
+        return f
     }
 
     /// `@@ -18,7 +18,16 @@ label` → (18, 18).
@@ -200,26 +231,30 @@ enum GitRunner {
         "core.fsmonitor=false", "core.untrackedCache=false", "core.pager=cat", "core.quotePath=false",
         "core.hooksPath=/dev/null", "core.attributesFile=/dev/null", "diff.external=", "diff.noprefix=false",
         "diff.mnemonicPrefix=false", "diff.relative=false", "color.ui=false", "submodule.recurse=false",
-        "protocol.allow=never", "core.sshCommand=", "core.askPass=", "credential.helper=", "gpg.program=",
+        "protocol.allow=never", "protocol.ext.allow=never", "protocol.file.allow=never", "protocol.ssh.allow=never",
+        "protocol.http.allow=never", "protocol.https.allow=never",
+        "core.sshCommand=", "core.askPass=", "credential.helper=", "gpg.program=",
         "gpg.openpgp.program=", "gpg.x509.program=", "gpg.ssh.program=", "core.editor=true", "sequence.editor=true",
     ]
 
-    /// `-c` values that turn off every filter driver the repo's config names (`.gitattributes` would run
-    /// `filter.<name>.clean` or `.process` on the working tree). Reading config runs nothing.
-    static func filterOverrides(cwd: String) -> [String]? {
-        guard let o = run(["config", "--name-only", "-z", "--get-regexp", #"^filter\."#], cwd: cwd) else { return nil }
-        // 1 is "no match": no filters.
-        if o.status == 1 { return [] }
-        guard o.status == 0, !o.truncated, !o.timedOut else { return nil }
-        var names: [String] = []
-        for key in o.data.split(separator: 0).map({ String(decoding: $0, as: UTF8.self) }) {
-            let k = key.trimmingCharacters(in: .newlines)
-            guard k.hasPrefix("filter."), let dot = k.lastIndex(of: "."), dot > k.index(k.startIndex, offsetBy: 6) else { continue }
-            let name = String(k[k.index(k.startIndex, offsetBy: 7)..<dot])
-            if !name.isEmpty, !names.contains(name) { names.append(name) }
+    /// Whether the repo's config defines any filter driver (a working-tree diff would run `clean` or
+    /// `process` for paths `.gitattributes` assigns to it); nil when that can't be told. Reading config runs nothing.
+    static func hasFilters(cwd: String) -> Bool? {
+        guard let o = run(["config", "--name-only", "-z", "--get-regexp", #"^filter\."#], cwd: cwd), !o.timedOut else { return nil }
+        switch o.status {
+        case 0: return true
+        case 1: return false
+        default: return nil
         }
-        return names.flatMap { n in ["clean", "smudge", "process"].map { "filter.\(n).\($0)=" } + ["filter.\(n).required=false"] }
     }
+
+    /// git 2.40 added `GIT_ATTR_SOURCE`; older versions ignore it, so working-tree attributes would still apply.
+    static let supportsAttrSource: Bool = {
+        guard let o = run(["version"], cwd: "/"), o.status == 0 else { return false }
+        let nums = o.text.split(separator: " ").dropFirst(2).first?.split(separator: ".").compactMap { Int($0) } ?? []
+        guard nums.count >= 2 else { return false }
+        return (nums[0], nums[1]) >= (2, 40)
+    }()
 
     static let gitPath: String? = {
         let fm = FileManager.default
@@ -233,18 +268,19 @@ enum GitRunner {
         let env = ProcessInfo.processInfo.environment
         var out = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C", "GIT_OPTIONAL_LOCKS": "0",
                    "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "PAGER": "cat", "GIT_CONFIG_NOSYSTEM": "1",
-                   "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_ATTR_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1"]
+                   "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_ATTR_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1",
+                   // Attributes come from the empty tree, so no .gitattributes written later can pick a filter.
+                   "GIT_ATTR_SOURCE": ReviewLoader.emptyTree, "GIT_NO_LAZY_FETCH": "1"]
         if let home = env["HOME"] { out["HOME"] = home }
         return out
     }
 
     /// Blocks the calling thread; call it off the main thread. Output past `maxBytes` is cut and the process killed.
-    static func run(_ args: [String], cwd: String, config: [String] = [], timeout: TimeInterval = 10,
-                    maxBytes: Int = 16 << 20) -> Output? {
+    static func run(_ args: [String], cwd: String, timeout: TimeInterval = 10, maxBytes: Int = 16 << 20) -> Output? {
         guard let git = gitPath else { return nil }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: git)
-        p.arguments = (safeConfig + config).flatMap { ["-c", $0] } + ["--no-pager"] + args
+        p.arguments = safeConfig.flatMap { ["-c", $0] } + ["--no-pager"] + args
         p.currentDirectoryURL = URL(fileURLWithPath: cwd)
         p.environment = environment()
         let pipe = Pipe()
@@ -318,11 +354,7 @@ enum ReviewLoader {
             return .failure(.notARepo(cwd))
         }
         let root = top.text.trimmingCharacters(in: .newlines)
-        // Without the list, a working-tree diff could run a filter driver, so there is no diff.
-        guard let filters = GitRunner.filterOverrides(cwd: root) else {
-            return .failure(.failed("Haunt couldn't read this repository's filter settings, so it doesn't diff the working tree."))
-        }
-        func git(_ args: [String]) -> GitRunner.Output? { GitRunner.run(args, cwd: root, config: filters) }
+        func git(_ args: [String]) -> GitRunner.Output? { GitRunner.run(args, cwd: root) }
         func line(_ args: [String]) -> String? {
             guard let o = git(args), o.status == 0 else { return nil }
             let s = o.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -345,18 +377,38 @@ enum ReviewLoader {
             notes.append("Haunt doesn't know where the turn started, so commits made during it aren't included.")
         }
 
-        let diffArgs = ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
-                        "--submodule=short", "-M", base, "--"]
-        guard let out = git(diffArgs) else { return .failure(.failed("git diff didn't start.")) }
-        guard out.status == 0 || out.truncated else { return .failure(.failed("git diff failed (exit \(out.status)).")) }
-        if out.timedOut { notes.append("git diff timed out; the list may be incomplete.") }
-        if out.truncated { notes.append("The diff is over 16 MB and was cut.") }
-        var files = DiffParser.parse(out.text)
+        // Reading the working tree can run a filter driver; comparing two commits never does.
+        let readTree: Bool
+        switch (GitRunner.hasFilters(cwd: root), GitRunner.supportsAttrSource) {
+        case (false?, true):
+            readTree = true
+        case (true?, _):
+            readTree = false
+            notes.append("This repository defines git filters. Haunt won't run them, so only committed changes are shown.")
+        case (nil, _):
+            readTree = false
+            notes.append("Haunt couldn't read this repository's filter settings, so only committed changes are shown.")
+        case (false?, false):
+            readTree = false
+            notes.append("Uncommitted changes need git 2.40 or newer, which can ignore the working tree's .gitattributes; "
+                         + "only committed changes are shown.")
+        }
+        let range: [String]? = readTree ? [base] : (head.map { base == $0 ? nil : [base, $0] } ?? nil)
+        var files: [FileDiff] = []
+        if let range {
+            let diffArgs = ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
+                            "--submodule=short", "-M"] + range + ["--"]
+            guard let out = git(diffArgs) else { return .failure(.failed("git diff didn't start.")) }
+            guard out.status == 0 || out.truncated else { return .failure(.failed("git diff failed (exit \(out.status)).")) }
+            if out.timedOut { notes.append("git diff timed out; the list may be incomplete.") }
+            if out.truncated { notes.append("The diff is over 16 MB and was cut.") }
+            files = DiffParser.parse(out.text)
+        }
         let tracked = Set(files.map(\.path))
-        let dirty = head.map { git(["diff", "--quiet", "--no-ext-diff", "--no-textconv", $0, "--"])?.status == 1 } ?? !files.isEmpty
+        let dirty = readTree ? (head.map { git(["diff", "--quiet", "--no-ext-diff", "--no-textconv", $0, "--"])?.status == 1 } ?? !files.isEmpty) : false
 
-        if let u = git(["ls-files", "--others", "--exclude-standard", "-z"]), u.status == 0 {
-            let paths = u.data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }.filter { !tracked.contains($0) }
+        if readTree, let u = git(["ls-files", "--others", "--exclude-standard", "-z"]), u.status == 0 {
+            let paths = u.data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }.filter { !tracked.contains(Visible.text($0)) }
             for (i, p) in paths.enumerated() {
                 if i >= maxUntracked {
                     notes.append("\(paths.count - maxUntracked) more untracked files aren't shown.")
@@ -364,23 +416,41 @@ enum ReviewLoader {
                 }
                 var st = stat()
                 let full = (root as NSString).appendingPathComponent(p)
-                if lstat(full, &st) == 0, st.st_mode & S_IFMT == S_IFREG, Int(st.st_size) > maxUntrackedBytes {
-                    files.append(FileDiff(path: p, status: .added, binary: true))
-                    notes.append("\(p) is over 1 MB and isn't shown.")
+                let shown = Visible.text(p)
+                guard lstat(full, &st) == 0 else { continue }
+                let type = st.st_mode & S_IFMT
+                // git would read (and block on) a FIFO or device; a symlink's target is shown without following it.
+                if type == S_IFLNK {
+                    let target = (try? FileManager.default.destinationOfSymbolicLink(atPath: full)) ?? ""
+                    let line = DiffLine(kind: .add, text: target, old: nil, new: 1)
+                    files.append(DiffParser.visible(FileDiff(path: p, status: .added, hunks: [Hunk(oldStart: 0, newStart: 1,
+                        header: "@@ -0,0 +1 @@ symbolic link", lines: [line])], additions: 1)))
+                    continue
+                }
+                if type != S_IFREG {
+                    var f = DiffParser.visible(FileDiff(path: p, status: .added))
+                    f.special = true
+                    files.append(f)
+                    notes.append("\(shown) is a special file (not a regular file or link) and isn't shown.")
+                    continue
+                }
+                if Int(st.st_size) > maxUntrackedBytes {
+                    files.append(DiffParser.visible(FileDiff(path: p, status: .added, binary: true)))
+                    notes.append("\(shown) is over 1 MB and isn't shown.")
                     continue
                 }
                 // Exit status 1 means "differs", the normal case here.
                 guard let d = git(["diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",
                                    "--dst-prefix=b/", "--", "/dev/null", p]), d.status <= 1 else { continue }
                 var parsed = DiffParser.parse(d.text)
-                for k in parsed.indices { parsed[k].status = .added; parsed[k].path = p }
-                files += parsed.isEmpty ? [FileDiff(path: p, status: .added)] : parsed
+                for k in parsed.indices { parsed[k].status = .added; parsed[k].path = shown; parsed[k].hiddenChars = parsed[k].hiddenChars || shown != p }
+                files += parsed.isEmpty ? [DiffParser.visible(FileDiff(path: p, status: .added))] : parsed
             }
         }
-        let branch = line(["rev-parse", "--abbrev-ref", "HEAD"]).flatMap { $0 == "HEAD" ? nil : $0 }
-        let upstream = line(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
+        let branch = line(["rev-parse", "--abbrev-ref", "HEAD"]).flatMap { $0 == "HEAD" ? nil : Visible.text($0) }
+        let upstream = line(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).map { Visible.text($0) }
         let dirs = line(["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"])?.split(separator: "\n").map(String.init)
-        let worktree = dirs.map { $0.count == 2 && $0[0] != $0[1] } ?? false
+        let linked = dirs.map { $0.count == 2 && $0[0] != $0[1] } ?? false
         let common = dirs?.count == 2 ? dirs![1] : nil
         let repo = common.map { c -> String in
             let n = c as NSString
@@ -388,8 +458,8 @@ enum ReviewLoader {
                 : (n.lastPathComponent as NSString).deletingPathExtension
         } ?? (root as NSString).lastPathComponent
         return .success(ReviewDiff(root: root, files: files, branch: branch, upstream: upstream, commits: commits,
-                                   baseNote: baseNote, uncommitted: dirty || files.count > tracked.count, isWorktree: worktree,
-                                   notes: notes, repo: repo, head: head, base: base))
+                                   baseNote: baseNote, uncommitted: dirty || files.count > tracked.count, isWorktree: linked,
+                                   notes: notes, repo: Visible.text(repo), head: head, base: base))
     }
 
     /// Git's well-known empty tree, for a repository without commits.

@@ -33,17 +33,35 @@ The detail pane shows the following:
 
 ## git safety (`GitRunner`)
 
-git runs as a `Process` without a shell, with a 10 s timeout (SIGTERM, then SIGKILL) and a 16 MB output cap. Its environment is minimal: `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_ATTR_NOSYSTEM=1`, `GIT_OPTIONAL_LOCKS=0`, `GIT_TERMINAL_PROMPT=0`, `GIT_NO_REPLACE_OBJECTS=1`, `LC_ALL=C`, and a pager of `cat`. Every call passes the following:
+git runs as a `Process` without a shell, with a 10 s timeout (SIGTERM, then SIGKILL) and a 16 MB output cap. Its environment is minimal: `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_ATTR_NOSYSTEM=1`, `GIT_ATTR_SOURCE=<empty tree>`, `GIT_OPTIONAL_LOCKS=0`, `GIT_TERMINAL_PROMPT=0`, `GIT_NO_REPLACE_OBJECTS=1`, `GIT_NO_LAZY_FETCH=1`, `LC_ALL=C`, and a pager of `cat`. Every call passes the following:
 
-- `-c core.fsmonitor=false`, `core.untrackedCache=false`, `core.hooksPath=/dev/null`, `core.attributesFile=/dev/null`, `diff.external=`, `color.ui=false`, `submodule.recurse=false`, `protocol.allow=never`;
+- `-c core.fsmonitor=false`, `core.untrackedCache=false`, `core.hooksPath=/dev/null`, `core.attributesFile=/dev/null`, `diff.external=`, `color.ui=false`, `submodule.recurse=false`;
+- `protocol.allow=never` plus `protocol.{ext,file,ssh,http,https}.allow=never`, so a partial clone's promisor remote is never fetched from;
 - every other configurable program pinned: `core.sshCommand=`, `core.askPass=`, `credential.helper=`, `gpg.program=` (and the openpgp, x509 and ssh variants), and `core.editor=true`/`sequence.editor=true`, since an empty editor would fall back to vi;
 - prefix and quoting options for stable parsing.
 
 Diffs also pass `--no-ext-diff --no-textconv --no-color`, so `diff.<driver>.command` and `textconv` don't run.
 
-**Filter drivers.** A working-tree diff runs `filter.<name>.clean` or `.process` for any path whose `.gitattributes` names that filter. Before diffing, Haunt reads `git config --name-only -z --get-regexp '^filter\.'`; reading config runs nothing. Every driver it lists is then overridden on all later calls with `filter.<name>.clean=`, `.smudge=`, `.process=` and `.required=false`, and git skips a filter whose command is empty. If that list can't be read, Haunt shows no diff and says why.
+**Filter drivers.** A working-tree diff runs `filter.<name>.clean` or `.process` for any path whose attributes name that filter. Haunt never builds `-c filter.<name>...` overrides from the repo's filter names: a name can hold `=` or `.` and be misparsed. Instead it reads `git config --name-only -z --get-regexp '^filter\.'` (reading config runs nothing):
 
-`/usr/bin/git` is used only when the developer tools are installed, so it never triggers the install prompt. `macos/tests/review.sh` checks that a repo's own `diff.external` and `core.fsmonitor` don't run, and that hostile clean and process filters named by `.gitattributes` don't run either. The test first checks that plain git does run them, so the test is live.
+- If any filter is configured, or the list can't be read, the working tree and untracked files aren't read. Only the committed range is diffed (`git diff <base> <head>`, which compares blobs and runs no filter), and the screen says why.
+- Otherwise, the working tree is read. `GIT_ATTR_SOURCE` points attributes at the empty tree, so a `.gitattributes` written after the check can't name a filter either.
+- `GIT_ATTR_SOURCE` needs git 2.40 or newer. With an older git (Apple's `/usr/bin/git` is 2.39), Haunt shows committed changes only and says so.
+- Residual: `$GIT_DIR/info/attributes` is still read under `GIT_ATTR_SOURCE`. It can only name a filter that is configured, and a configured filter turns the working tree off, so a filter set up between the check and the diff (milliseconds) is the remaining window.
+
+**Untracked files.** Each path from `git ls-files --others` is `lstat`ed first. Only regular files are diffed with `git diff --no-index`. A symlink shows its target, read without git and without following it. Anything else (a FIFO, socket or device) is listed as "special" with a note and never handed to git, which would block reading it. git's own listing already skips FIFOs; the check covers one that replaces a file after the listing.
+
+**Hidden characters (Trojan Source).** Every repo-derived string drawn on screen goes through `Visible.text`: paths, rename sources, hunk headers, diff lines, branch, upstream and repo names, and the turn's prompt, commands, tasks and files. It replaces C0/C1 controls, DEL and format characters (bidi overrides and isolates, zero-width characters, the BOM, soft hyphens) with a visible `⟨U+202E⟩`, using the same test as `PastePreview`. A file containing any is tagged "hidden chars" in its header and "hidden" in the file lists. Each line that holds one shows the placeholder in place.
+
+`/usr/bin/git` is used only when the developer tools are installed, so it never triggers the install prompt. `macos/tests/review.sh` covers the following. Each hostile fixture is first run through plain git to show it really fires, so the test is live.
+
+- A repo's own `diff.external` and `core.fsmonitor` don't run.
+- With clean and process filters configured, including ones named `Ev.il` and `x=y.z`, only the committed range is shown, and no filter runs.
+- With the filters still configured, a direct working-tree diff runs none of them, because `GIT_ATTR_SOURCE` is set. This simulates a filter that appears after the check.
+- A partial clone with a deleted blob and an `ext::` promisor remote fetches nothing, and loads promptly.
+- A FIFO among the untracked files doesn't stall loading. A symlink shows its target.
+- Bidi, zero-width and escape characters in lines, names and hunk headers are spelled out and flagged.
+- CRLF lines split cleanly.
 
 ## Sending a follow-up (06)
 
