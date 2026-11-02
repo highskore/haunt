@@ -90,9 +90,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
                 y += h
             }
         }
-        let ids = Set(orderedIds), labels = Set(snapshot.groups.map(\.label))
-        rowLines = rowLines.filter { ids.contains($0.key) }
-        labelLines = labelLines.filter { labels.contains($0.key) }
+        pruneLineCaches()
         positionEditor()
     }
 
@@ -341,6 +339,22 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     }
 
     private var rowLines: [String: RowLines] = [:]
+    /// The rows and labels the caches were last pruned to; most snapshots keep both.
+    private var cachedIds: [String] = [], cachedLabels: [String] = []
+
+    private func pruneLineCaches() {
+        let ids = orderedIds, labels = snapshot.groups.map(\.label)
+        if ids != cachedIds {
+            let live = Set(ids)
+            rowLines = rowLines.filter { live.contains($0.key) }
+            cachedIds = ids
+        }
+        if labels != cachedLabels {
+            let live = Set(labels)
+            labelLines = labelLines.filter { live.contains($0.key) }
+            cachedLabels = labels
+        }
+    }
 
     private func lines(for row: Row) -> RowLines {
         let hovered = row.surfaceId == hoverId
