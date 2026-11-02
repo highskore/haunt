@@ -5,7 +5,6 @@ use std::time::Instant;
 
 use crate::event::{Agent, AgentEvent, EventKind, ToolCall};
 use crate::progress::Progress;
-use crate::turn::TurnLog;
 
 const MAX_PROMPT_CHARS: usize = 120;
 const MAX_RECENT_STARTS: usize = 16;
@@ -154,8 +153,6 @@ pub struct Session {
     recent_starts: VecDeque<(Option<String>, ToolCall)>,
     /// Requests that ended since the last `take_ended`, for the decision log.
     ended: Vec<(Permission, Outcome)>,
-    /// The latest turn, from verified events, for the review screen.
-    pub turn: TurnLog,
     /// Requests that ended without their call being seen: the agent may still show their prompt
     /// (Codex queues parallel approvals; keys sent from haunt may not have landed), so no other
     /// request is answerable until their call ends, or the user types and then starts a new turn.
@@ -183,7 +180,6 @@ impl Session {
             status_changed: now,
             recent_starts: VecDeque::new(),
             ended: Vec::new(),
-            turn: TurnLog::default(),
             unresolved: Vec::new(),
             overflowed: false,
             overflow_typed: false,
@@ -209,9 +205,6 @@ impl Session {
         if verified && self.agent.id() != e.agent {
             self.agent = e.agent.as_str().into();
             changed = true;
-        }
-        if verified {
-            self.turn.apply(e, &self.agent);
         }
 
         match &e.kind {

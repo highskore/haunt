@@ -19,7 +19,7 @@ use crate::intake::{Delivery, Intake, IntakeError, Limits, Nonces, SOCKET_NAME};
 use crate::layout::{self, SidebarSnapshot, SurfaceView};
 use crate::session::{Outcome, Session};
 use crate::sync::{lock, write};
-use crate::turn::ReviewTurn;
+use crate::turn::{ReviewTurn, TurnLog};
 
 const MAX_SURFACES: usize = 512;
 const MAX_PROPOSALS: usize = 256;
@@ -80,6 +80,8 @@ struct Surface {
     /// Branch at `session.cwd`.
     agent_branch: Option<String>,
     session: Session,
+    /// The latest turn, from verified events, for the review screen.
+    turn: TurnLog,
 }
 
 #[derive(Default)]
@@ -140,7 +142,13 @@ impl State {
     /// One intake delivery; the intake already checked the nonce and the rate limit.
     fn deliver(&mut self, d: &Delivery, now: Instant) -> bool {
         let Some(event) = &d.event else { return false };
-        self.with_surface(&d.surface_id, |s| s.session.apply(event, d.verified, now)) == Some(true)
+        self.with_surface(&d.surface_id, |s| {
+            let changed = s.session.apply(event, d.verified, now);
+            if d.verified {
+                s.turn.apply(event, &s.session.agent);
+            }
+            changed
+        }) == Some(true)
     }
 
     /// None once the surface is gone.
@@ -156,13 +164,13 @@ impl State {
         if !starts_turn(d) {
             return None;
         }
-        self.surface(&d.surface_id).map(|s| s.session.turn.turn.number)
+        self.surface(&d.surface_id).map(|s| s.turn.turn.number)
     }
 
     /// Records where turn `number` started, unless a newer turn began meanwhile.
     fn set_turn_head(&mut self, surface_id: &str, number: u32, head: Option<String>) {
-        if let Some(s) = self.surface(surface_id).filter(|s| s.session.turn.turn.number == number) {
-            s.session.turn.turn.head_at_start = head;
+        if let Some(s) = self.surface(surface_id).filter(|s| s.turn.turn.number == number) {
+            s.turn.turn.head_at_start = head;
         }
     }
 
@@ -497,7 +505,7 @@ impl Core {
                 return false;
             }
             let (id, cwd) = (env.surface_id.clone(), cwd.to_owned());
-            st.surfaces.push(Surface { id, cwd, branch: None, agent_branch: None, session: Session::new(now) });
+            st.surfaces.push(Surface { id, cwd, branch: None, agent_branch: None, session: Session::new(now), turn: TurnLog::default() });
             write(&st.nonces).insert(env.surface_id.clone(), env.nonce.clone());
             true
         });
@@ -626,10 +634,10 @@ impl Core {
     pub fn review_turn(&self, surface_id: &str) -> Option<ReviewTurn> {
         let mut st = lock(&self.state);
         let s = st.surface(surface_id)?;
-        if !s.session.is_agent || s.session.turn.turn.number == 0 && s.session.turn.turn.cwd.is_none() {
+        if !s.session.is_agent || s.turn.turn.number == 0 && s.turn.turn.cwd.is_none() {
             return None;
         }
-        let mut t = s.session.turn.turn.clone();
+        let mut t = s.turn.turn.clone();
         t.cwd = t.cwd.or_else(|| s.session.cwd.clone());
         Some(t)
     }
