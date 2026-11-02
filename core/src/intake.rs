@@ -111,7 +111,7 @@ impl Intake {
         let handler = Box::new(move |input: Input<'_>, _: &mut Vec<u8>| {
             match input {
                 Input::Line(line) => handle_line(line, &s),
-                Input::TooLong(n) => (s.sink)(reject(String::new(), n, format!("line over {} bytes", s.limits.max_line))),
+                Input::TooLong(n) => reject_unsorted(&s, n, format!("line over {} bytes", s.limits.max_line)),
             }
             true
         });
@@ -215,13 +215,20 @@ fn reject(surface_id: String, bytes: usize, error: String) -> Delivery {
 
 fn handle_line(line: &[u8], s: &Shared) {
     let Ok(text) = std::str::from_utf8(line) else {
-        return (s.sink)(reject(String::new(), line.len(), "not utf-8".into()));
+        return reject_unsorted(s, line.len(), "not utf-8".into());
     };
     // Unknown ids get no bucket, so random ids cannot grow the map.
     let Some(mut d) = decode(text, &s.nonces) else { return };
     let Some(dropped_before) = take_token(s, &d.surface_id, d.verified) else { return };
     d.dropped_before = dropped_before;
     (s.sink)(d);
+}
+
+/// A line no surface can be read from; these share one unverified bucket, under an id no surface has.
+fn reject_unsorted(s: &Shared, bytes: usize, reason: String) {
+    if take_token(s, "", false).is_some() {
+        (s.sink)(reject(String::new(), bytes, reason));
+    }
 }
 
 /// Parses one line and checks its nonce; None when its surface isn't registered.
@@ -356,6 +363,22 @@ mod tests {
         let got: Vec<_> = (0..6).map(|_| recv(&rx)).collect();
         assert_eq!(got.iter().filter(|x| x.surface_id == "s1").count(), 5);
         assert_eq!(got.iter().filter(|x| x.surface_id == "s2").count(), 1, "other surfaces unaffected");
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+        drop(intake);
+    }
+
+    #[test]
+    fn unreadable_lines_are_rate_limited_too() {
+        let limits = Limits { per_sec: 0.001, burst: 5.0, max_line: 1024, ..Limits::default() };
+        let (intake, rx, _d) = start("rate-bad", limits);
+        intake.register_surface("s1", "n1");
+        let mut flood = format!("{}\n", "x".repeat(2000)).repeat(10).into_bytes();
+        flood.extend(b"\xff\xfe\n".repeat(10));
+        send(intake.path(), &flood);
+        send(intake.path(), format!("{{{EV},\"surface_id\":\"s1\"}}\n").as_bytes());
+        let got: Vec<_> = (0..6).map(|_| recv(&rx)).collect();
+        assert_eq!(got.iter().filter(|x| x.error.is_some()).count(), 5);
+        assert_eq!(got.iter().filter(|x| x.event.is_some()).count(), 1, "a surface's own budget is untouched");
         assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
         drop(intake);
     }

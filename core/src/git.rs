@@ -28,16 +28,27 @@ impl Stamp {
 
 /// Branch from the nearest `.git` above `path`, or the short hash when detached.
 pub fn branch(path: &str) -> Option<String> {
-    find(path).map(|(_, _, b)| b)
+    find(path).map(|h| h.branch)
 }
 
-fn find(path: &str) -> Option<(PathBuf, Stamp, String)> {
+/// What a lookup found, with what a cache hit has to recheck.
+struct Head {
+    /// The `.git` file or directory, and its stamp: a rewritten `gitdir:` file moves the repo.
+    git: PathBuf,
+    git_stamp: Stamp,
+    path: PathBuf,
+    stamp: Stamp,
+    branch: String,
+}
+
+fn find(path: &str) -> Option<Head> {
     let mut dir = Some(Path::new(path));
     while let Some(d) = dir {
         let git = d.join(".git");
         if let Ok(meta) = fs::metadata(&git) {
+            let git_stamp = Stamp::of(&meta);
             let git_dir = if meta.is_dir() {
-                git
+                git.clone()
             } else {
                 let (s, _) = read_small(&git)?;
                 d.join(s.strip_prefix("gitdir:")?.trim())
@@ -49,7 +60,7 @@ fn find(path: &str) -> Option<(PathBuf, Stamp, String)> {
                 Some(b) => b.to_owned(),
                 None => h.chars().take(7).collect(),
             };
-            return Some((head_path, stamp, b));
+            return Some(Head { git, git_stamp, path: head_path, stamp, branch: b });
         }
         dir = d.parent();
     }
@@ -68,25 +79,28 @@ fn read_small(path: &Path) -> Option<(String, Stamp)> {
     Some((String::from_utf8_lossy(&buf).into_owned(), Stamp::of(&meta)))
 }
 
-/// The last lookup for one cwd. A hit needs the same cwd and an unchanged HEAD; a cwd outside
-/// any repo is walked again each time, so a `git init` shows up.
+/// The last lookup for one cwd. A hit needs the same cwd, the same `.git` and an unchanged HEAD,
+/// and no `.git` in the cwd itself if the repo was found above it. A cwd outside any repo is walked
+/// again each time, so a `git init` shows up.
 #[derive(Default)]
 struct Cached {
     cwd: String,
-    head: Option<(PathBuf, Stamp, String)>,
+    head: Option<Head>,
 }
 
 impl Cached {
     fn branch(&mut self, cwd: &str) -> Option<String> {
         if self.cwd == cwd
-            && let Some((path, stamp, b)) = &self.head
-            && fs::symlink_metadata(path).is_ok_and(|m| Stamp::of(&m) == *stamp)
+            && let Some(h) = &self.head
+            && fs::symlink_metadata(&h.path).is_ok_and(|m| Stamp::of(&m) == h.stamp)
+            && fs::metadata(&h.git).is_ok_and(|m| Stamp::of(&m) == h.git_stamp)
+            && (h.git.parent() == Some(Path::new(cwd)) || fs::symlink_metadata(Path::new(cwd).join(".git")).is_err())
         {
-            return Some(b.clone());
+            return Some(h.branch.clone());
         }
         cwd.clone_into(&mut self.cwd);
         self.head = find(cwd);
-        self.head.as_ref().map(|(_, _, b)| b.clone())
+        self.head.as_ref().map(|h| h.branch.clone())
     }
 }
 
@@ -172,6 +186,20 @@ mod tests {
         assert_eq!(br.agent("s", None), Some(Some("next".into())));
         assert_eq!(br.agent("s", Some(&b)), Some(Some("other".into())));
         assert_eq!(br.shell("s", &a), Some("next".into()), "the shell cwd has its own cache");
+
+        fs::create_dir_all(root.join("a/sub")).unwrap();
+        let sub = root.join("a/sub").to_str().unwrap().to_owned();
+        assert_eq!(br.shell("s", &sub), Some("next".into()));
+        fs::create_dir_all(root.join("a/sub/.git")).unwrap();
+        fs::write(root.join("a/sub/.git/HEAD"), "ref: refs/heads/inner\n").unwrap();
+        assert_eq!(br.shell("s", &sub), Some("inner".into()), "a repo made in the cwd itself shows up");
+
+        fs::create_dir_all(root.join("wt")).unwrap();
+        let wt = root.join("wt").to_str().unwrap().to_owned();
+        fs::write(root.join("wt/.git"), format!("gitdir: {}\n", root.join("a/.git").display())).unwrap();
+        assert_eq!(br.shell("s", &wt), Some("next".into()));
+        fs::write(root.join("wt/.git"), format!("gitdir: {}\n", root.join("b/.git").display())).unwrap();
+        assert_eq!(br.shell("s", &wt), Some("other".into()), "a rewritten gitdir file moves the repo");
         br.forget("s");
         assert_eq!(br.agent("s", None), None);
     }

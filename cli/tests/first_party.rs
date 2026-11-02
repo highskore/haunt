@@ -86,19 +86,19 @@ fn log_mode_and_suggestions_come_from_the_plugins() {
     let env = core.register_surface(project.to_str().unwrap()).unwrap();
     let p = project.display();
     let perm = format!(r#""event":"permission_seen","cwd":"{p}","tool_name":"Bash","tool_input":{{"command":"cargo test"}}"#);
-    let ran = format!(r#""event":"tool_ran","cwd":"{p}","tool_name":"Bash","tool_input":{{"command":"cargo test"}}"#);
+    let call = |event: &str, i: usize| format!(r#""event":"{event}","cwd":"{p}","tool_name":"Bash","tool_use_id":"t{i}","tool_input":{{"command":"cargo test"}}"#);
     let pending = || core.snapshot().groups.iter().flat_map(|g| &g.rows).find_map(|r| r.pending.clone());
     let decided = |n| core.decisions("", 100).len() == n;
-    // One connection is served by one thread, line by line, so once a request shows up the
-    // plugins have seen every tool event before it.
+    // The plugins get the events in order, on their own thread, so the test waits for them.
     let mut sock = UnixStream::connect(&env.socket_path).unwrap();
     for i in 1..=3 {
+        send(&mut sock, &env, &call("tool_start", i));
         send(&mut sock, &env, &perm);
         until("the request", || pending().is_some());
         assert!(core.allow_suggestions().is_empty(), "no suggestion after {} approvals", i - 1);
         assert_eq!(core.answer_permission(&env.surface_id, pending().unwrap().key, true), Some(b"1".to_vec()));
         assert!(decided(i));
-        send(&mut sock, &env, &ran);
+        send(&mut sock, &env, &call("tool_ran", i));
     }
     until("the allowlist plugin to propose", || !core.allow_suggestions().is_empty());
     let s = core.allow_suggestions();
