@@ -304,13 +304,14 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         }
     }
 
+    /// Names for the row fonts; Draw keeps the only cache.
     private enum Fonts {
-        static let label = Draw.ui(Tok.Size.labelFont)
-        static let status = Draw.uiTabular(Tok.Size.rowRight)
-        static let name = Draw.ui(Tok.Size.rowName)
-        static let meta = Draw.ui(Tok.Size.rowMeta)
-        static let sub = Draw.ui(Tok.Size.subFont)
-        static let glyph = Draw.mono(Tok.Size.iconGlyph)
+        static var label: NSFont { Draw.ui(Tok.Size.labelFont) }
+        static var status: NSFont { Draw.uiTabular(Tok.Size.rowRight) }
+        static var name: NSFont { Draw.ui(Tok.Size.rowName) }
+        static var meta: NSFont { Draw.ui(Tok.Size.rowMeta) }
+        static var sub: NSFont { Draw.ui(Tok.Size.subFont) }
+        static var glyph: NSFont { Draw.mono(Tok.Size.iconGlyph) }
     }
 
     private static let shellGlyph = Draw.line(">_", Fonts.glyph, Tok.Color.iconFg)
