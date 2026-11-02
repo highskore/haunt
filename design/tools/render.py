@@ -18,21 +18,15 @@ VIEWPORT = (1500, 700)
 GUARD_PX = 1.5
 
 # Runs after the mockup's own script: isolates one section, pins its size, and reports DOM geometry.
+# __ISOLATE__ leaves `root`, the element the crop is found in.
 INJECT = r"""
-<style>:root { --mono: "Berkeley Mono Variable", "Berkeley Mono", "SF Mono", ui-monospace, Menlo, monospace; }</style>
+<style>:root { --mono: "Berkeley Mono Variable", "Berkeley Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  --display: "Berkeley Mono Variable", "Berkeley Mono", "SF Mono", ui-monospace, Menlo, monospace; }</style>
 <script>
 (() => {
   const S = __SPEC__;
-  document.querySelector('header.top').remove();
-  const secs = [...document.querySelectorAll('section.item')];
-  secs.forEach((s, i) => { if (i !== S.index - 1) s.remove(); });
-  const sec = secs[S.index - 1];
-  sec.querySelectorAll(':scope > .num, :scope > h2, :scope > p').forEach(e => e.remove());
-  const main = document.querySelector('main');
-  Object.assign(main.style, { padding: '0', margin: '0', maxWidth: 'none' });
-  const root = sec.lastElementChild;
-  Object.assign(root.style, { width: (S.width + 2) + 'px', boxShadow: 'none', borderRadius: '0' });
-  if (S.fill) root.style.height = '442px';
+  let root;
+  __ISOLATE__
   const crop = root.matches(S.crop) ? root : root.querySelector(S.crop);
   const cr = crop.getBoundingClientRect();
   const ox = cr.left + crop.clientLeft, oy = cr.top + crop.clientTop;
@@ -51,6 +45,33 @@ INJECT = r"""
 })();
 </script>
 """
+
+# pawr-ui and pawr-agents-view: numbered `section.item`s, each ending in the window.
+ISOLATE_ITEMS = r"""
+  document.querySelector('header.top').remove();
+  const secs = [...document.querySelectorAll('section.item')];
+  secs.forEach((s, i) => { if (i !== S.index - 1) s.remove(); });
+  const sec = secs[S.index - 1];
+  sec.querySelectorAll(':scope > .num, :scope > h2, :scope > p').forEach(e => e.remove());
+  const main = document.querySelector('main');
+  Object.assign(main.style, { padding: '0', margin: '0', maxWidth: 'none' });
+  root = sec.lastElementChild;
+  Object.assign(root.style, { width: (S.width + 2) + 'px', boxShadow: 'none', borderRadius: '0' });
+  if (S.fill) root.style.height = '442px';
+"""
+
+# pawr-declog: `section.v#vNN` placements, each a stage with the window and a spec below it.
+ISOLATE_PLACEMENTS = r"""
+  document.querySelector('header')?.remove();
+  const id = 'v' + String(S.index).padStart(2, '0');
+  document.querySelectorAll('section.v').forEach(s => { if (s.id !== id) s.remove(); });
+  root = document.getElementById(id);
+  root.querySelector('.spec')?.remove();
+  Object.assign(document.querySelector('main').style, { padding: '0', margin: '0', maxWidth: 'none' });
+  // The crop is what's compared, so it gets no shadow bleeding into its corners from outside.
+  root.querySelectorAll(S.crop).forEach(e => { e.style.boxShadow = 'none'; });
+"""
+ISOLATE = {"ui": ISOLATE_ITEMS, "av": ISOLATE_ITEMS, "dl": ISOLATE_PLACEMENTS}
 
 
 def expand(spec, groups):
@@ -102,7 +123,8 @@ def render(name, spec, groups, tokens):
     anchors, edges = expand(spec, groups)
     selectors = sorted({a["sel"] for a in anchors} | {e["sel"] for e in edges} | {e["expect_sel"] for e in edges if "expect_sel" in e})
     js = json.dumps({"index": spec["index"], "crop": spec["crop"], "fill": spec.get("fill", False), "width": spec.get("width", 900), "selectors": selectors})
-    html = FILES[spec["file"]].read_text().replace("</body>", INJECT.replace("__SPEC__", js) + "</body>")
+    inject = INJECT.replace("__ISOLATE__", ISOLATE[spec["file"]]).replace("__SPEC__", js)
+    html = FILES[spec["file"]].read_text().replace("</body>", inject + "</body>")
     with tempfile.TemporaryDirectory() as tmp:
         page = Path(tmp) / "page.html"
         page.write_text(html)

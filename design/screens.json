@@ -656,7 +656,7 @@
      "name": "zen.fill",
      "sel": ".win > div:first-child b",
      "at": [
-      "left+2",
+      "left+16",
       "cy"
      ],
      "token": "color.bar.fill"
@@ -665,7 +665,7 @@
      "name": "zen.track",
      "sel": ".win > div:first-child",
      "at": [
-      "right-2",
+      "right-16",
       "cy"
      ],
      "token": "color.zen.track"
@@ -718,7 +718,7 @@
      "name": "zen.bar.bottom",
      "sel": ".win > div:first-child",
      "from": [
-      "right-2",
+      "right-16",
       "cy"
      ],
      "dir": "down",
@@ -728,7 +728,7 @@
      "name": "zen.fill.end",
      "sel": ".win > div:first-child b",
      "from": [
-      "left+2",
+      "left+16",
       "cy"
      ],
      "dir": "right",
@@ -1272,6 +1272,200 @@
      "from": [
       "right-8",
       "top-4"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "dl-04-palette": {
+   "file": "dl",
+   "index": 4,
+   "crop": ".pal",
+   "anchors": [
+    {
+     "name": "palette.bg",
+     "sel": ".pin",
+     "at": [
+      "40%",
+      "top+4"
+     ],
+     "token": "color.palette.bg"
+    },
+    {
+     "name": "palette.input.rule",
+     "sel": ".pin",
+     "at": [
+      "40%",
+      "bottom-0.5"
+     ],
+     "token": "color.palette.rule"
+    },
+    {
+     "name": "palette.chip.bg",
+     "sel": ".pfx",
+     "at": [
+      "left+1",
+      "top+2"
+     ],
+     "token": "color.palette.ink"
+    },
+    {
+     "name": "palette.chip.text",
+     "sel": ".pfx",
+     "text": true,
+     "token": "color.palette.chip.fg"
+    },
+    {
+     "name": "palette.cursor",
+     "sel": ".cur",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.palette.ink"
+    },
+    {
+     "name": "palette.esc.text",
+     "sel": ".pin .kbd",
+     "text": true,
+     "token": "color.palette.mute"
+    },
+    {
+     "name": "palette.time.text",
+     "sel": ".pl > .e .tm",
+     "text": true,
+     "token": "color.palette.mute"
+    },
+    {
+     "name": "palette.code.text",
+     "sel": ".pl > .e code",
+     "text": true,
+     "token": "color.palette.ink"
+    },
+    {
+     "name": "palette.sub.text",
+     "sel": ".pl > .e .d",
+     "text": true,
+     "token": "color.palette.mute"
+    },
+    {
+     "name": "palette.mark",
+     "sel": ".pl > .e .mk",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.palette.ink"
+    },
+    {
+     "name": "palette.entry.rule",
+     "sel": ".pl > .e",
+     "at": [
+      "40%",
+      "bottom-0.5"
+     ],
+     "token": "color.palette.entry.rule"
+    },
+    {
+     "name": "palette.sel.bg",
+     "sel": ".pl .sel",
+     "at": [
+      "right-4",
+      "cy"
+     ],
+     "token": "color.palette.sel",
+     "tol": 1.0,
+     "_why": "A blue-tinted grey: the 8-bit round trip through the display profile moves it one step (#2a2a2f -> #2a2a30, dE 0.7)."
+    },
+    {
+     "name": "palette.sel.bar",
+     "sel": ".pl .sel",
+     "at": [
+      "left+1",
+      "cy"
+     ],
+     "token": "color.palette.ink"
+    },
+    {
+     "name": "palette.jump.text",
+     "sel": ".pl > .e .jmp",
+     "text": true,
+     "token": "color.palette.mute"
+    },
+    {
+     "name": "palette.foot.rule",
+     "sel": ".pf",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.palette.rule"
+    },
+    {
+     "name": "palette.foot.text",
+     "sel": ".pf span",
+     "text": true,
+     "token": "color.palette.mute"
+    }
+   ],
+   "edges": [
+    {
+     "name": "palette.input.bottom",
+     "sel": ".pin",
+     "from": [
+      "40%",
+      "bottom-5"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "palette.chip.left",
+     "sel": ".pfx",
+     "from": [
+      "left-3",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "palette.sel.top",
+     "sel": ".pl .sel",
+     "from": [
+      "right-4",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "palette.sel.bottom",
+     "sel": ".pl .sel",
+     "from": [
+      "right-4",
+      "cy"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    },
+    {
+     "name": "palette.sel.bar.right",
+     "sel": ".pl .sel",
+     "from": [
+      "left+0.5",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left+2"
+    },
+    {
+     "name": "palette.foot.top",
+     "sel": ".pf",
+     "from": [
+      "40%",
+      "top-3"
      ],
      "dir": "down",
      "expect": "top"
