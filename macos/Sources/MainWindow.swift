@@ -234,6 +234,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         root.sidebarHidden = fixture?.sidebarHidden ?? config.loadState().sidebarHidden
         agentsViewAtLaunch = fixture?.agentsView ?? config.loadState().agentsView
         updateKeys(config.keys)
+        root.titleBar.buttons = fixture?.titlebarButtons ?? config.titlebarButtons
         root.sidebar.onSelect = { [weak self] id in self?.select(id) }
         root.sidebar.onClose = { [weak self] id in self?.closeTab(id) }
         root.agents.list.onSelect = { [weak self] id in self?.expandAgentsView(to: id) }
@@ -586,7 +587,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             keys[a].map { "\($0.display) \(word)" } ?? word
         }
         root.titleBar.hints = [(.agents, hint(.toggleSidebar, "agents")), (.search, hint(.palette, "search"))]
+        root.titleBar.shortcuts = Dictionary(uniqueKeysWithValues: TitlebarButton.allCases.compactMap { b in keys[b.action].map { (b, $0.display) } })
         root.agents.shortcut = AgentsView.mockupDisplay(keys[.agentsView])
+    }
+
+    func updateTitlebarButtons(_ buttons: [TitlebarButton]) {
+        root.titleBar.buttons = buttons
     }
 
     func togglePalette() {

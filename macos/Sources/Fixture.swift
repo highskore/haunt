@@ -38,6 +38,9 @@ enum Fixture: String {
         self == .iconOnly || self == .zen || isSheet || self == .pasteRisky ? .icons : .kbd
     }
 
+    /// Mockup 03 shows ⌕ + ⚙; other fixtures keep the default.
+    var titlebarButtons: [TitlebarButton] { self == .iconOnly ? [.search, .newTab, .settings] : TitlebarButton.defaults }
+
     var sidebarHidden: Bool { self == .zen }
 
     var agentsView: Bool { self == .narrowList }

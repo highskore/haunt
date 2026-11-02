@@ -10,13 +10,14 @@ final class HauntConfig {
     var ghosttyURL: URL { dir.appendingPathComponent("ghostty.generated.conf") }
     private(set) var keys = KeyMap.defaults
     private(set) var agentsView = AgentsViewStyle.narrowList
+    private(set) var titlebarButtons = TitlebarButton.defaults
 
     private var source: DispatchSourceFileSystemObject?
     private var fileSource: DispatchSourceFileSystemObject?
-    private var onChange: ((_ ghostty: Bool, _ keys: Bool) -> Void)?
+    private var onChange: ((_ ghostty: Bool, _ keys: Bool, _ layout: Bool) -> Void)?
     private var lastWritten: String?
     private var lastKeyProblems: [String] = []
-    private var lastLayoutProblem: String?
+    private var lastLayoutProblems: [String] = []
 
     /// ~/.haunt unless HAUNT_CONFIG_DIR points elsewhere.
     init(dir: URL? = nil) {
@@ -24,9 +25,9 @@ final class HauntConfig {
         self.dir = dir ?? env ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".haunt")
     }
 
-    /// Re-reads config.toml into `keys` and rewrites the Ghostty file; says which of the two changed.
+    /// Re-reads config.toml into `keys` and `[layout]` and rewrites the Ghostty file; says which changed.
     @discardableResult
-    func reload(useUserConfig: Bool = true) -> (ghostty: Bool, keys: Bool) {
+    func reload(useUserConfig: Bool = true) -> (ghostty: Bool, keys: Bool, layout: Bool) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let text = useUserConfig ? (try? String(contentsOf: tomlURL, encoding: .utf8)) ?? "" : ""
         let toml = TOML.parse(text)
@@ -40,15 +41,20 @@ final class HauntConfig {
         }
         let keysChanged = newKeys != keys
         keys = newKeys
-        var layoutProblem: String?
-        agentsView = AgentsViewStyle.parse(toml["layout"]?["agents_view"]) { layoutProblem = $0 }
-        if let p = layoutProblem, p != lastLayoutProblem { Self.logger.warning("\(p, privacy: .public)") }
-        lastLayoutProblem = layoutProblem
+        var layoutProblems: [String] = []
+        agentsView = AgentsViewStyle.parse(toml["layout"]?["agents_view"]) { layoutProblems.append($0) }
+        let buttons = TitlebarButton.parse(toml["layout"]?["titlebar_buttons"]) { layoutProblems.append($0) }
+        let layoutChanged = buttons != titlebarButtons
+        titlebarButtons = buttons
+        if layoutProblems != lastLayoutProblems {
+            for p in layoutProblems { Self.logger.warning("\(p, privacy: .public)") }
+            lastLayoutProblems = layoutProblems
+        }
         let generated = Self.ghosttyConfig(toml, defaultSize: useUserConfig ? Self.defaultFontSize : Tok.Size.paneFont, keys: keys)
-        guard generated != lastWritten else { return (false, keysChanged) }
+        guard generated != lastWritten else { return (false, keysChanged, layoutChanged) }
         try? generated.write(to: ghosttyURL, atomically: true, encoding: .utf8)
         lastWritten = generated
-        return (true, keysChanged)
+        return (true, keysChanged, layoutChanged)
     }
 
     /// The user's Warp size; fixtures keep the mockup's `Tok.Size.paneFont` so fidelity still compares.
@@ -138,7 +144,7 @@ final class HauntConfig {
 
     /// Calls `onChange` on the main queue after config.toml changes. The directory catches atomic saves,
     /// which replace the file; the file itself catches editors that write in place.
-    func watch(_ onChange: @escaping (_ ghostty: Bool, _ keys: Bool) -> Void) {
+    func watch(_ onChange: @escaping (_ ghostty: Bool, _ keys: Bool, _ layout: Bool) -> Void) {
         self.onChange = onChange
         source = Self.observe(dir.path, [.write, .rename, .delete]) { [weak self] in self?.changed() }
         watchFile()
@@ -147,7 +153,7 @@ final class HauntConfig {
     private func changed() {
         watchFile()
         let r = reload()
-        if r.ghostty || r.keys { onChange?(r.ghostty, r.keys) }
+        if r.ghostty || r.keys || r.layout { onChange?(r.ghostty, r.keys, r.layout) }
     }
 
     /// Re-armed on every event, since an atomic save leaves the old watch on a deleted file.
@@ -178,6 +184,41 @@ enum AgentsViewStyle: String {
         if case let .scalar(s) = value, let style = AgentsViewStyle(rawValue: s) { return style }
         log("[layout] agents_view = \(value.strings.joined(separator: ",")): unknown view, using \"narrow-list\"")
         return .narrowList
+    }
+}
+
+/// `[layout] titlebar_buttons`: the title bar's icons, drawn left to right in this order.
+enum TitlebarButton: String, CaseIterable {
+    case search
+    case newTab = "new_tab"
+    case settings
+    case sidebar
+
+    static let defaults: [TitlebarButton] = [.search, .newTab, .sidebar]
+
+    /// The `[keys]` action the button runs, for its tooltip.
+    var action: KeyMap.Action {
+        switch self {
+        case .search: return .palette
+        case .newTab: return .newTab
+        case .settings: return .settings
+        case .sidebar: return .toggleSidebar
+        }
+    }
+
+    /// Unknown and repeated names are skipped through `log`; an empty list leaves the bar bare.
+    static func parse(_ value: TOML.Value?, log: (String) -> Void) -> [TitlebarButton] {
+        guard let value else { return defaults }
+        var out: [TitlebarButton] = []
+        for name in value.strings {
+            guard let b = TitlebarButton(rawValue: name) else {
+                log("[layout] titlebar_buttons: unknown button \"\(name)\", ignored (search, new_tab, settings, sidebar)")
+                continue
+            }
+            if out.contains(b) { log("[layout] titlebar_buttons: \"\(name)\" listed twice, ignored"); continue }
+            out.append(b)
+        }
+        return out
     }
 }
 

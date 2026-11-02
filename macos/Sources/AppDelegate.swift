@@ -97,13 +97,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
 
         if fixture == nil {
-            config.watch { [weak self] ghosttyChanged, keysChanged in
+            config.watch { [weak self] ghosttyChanged, keysChanged, layoutChanged in
                 guard let self else { return }
                 if keysChanged {
                     self.buildMenu()
                     self.controller?.updateKeys(self.config.keys)
                 }
                 if ghosttyChanged { self.ghostty.reloadConfig() }
+                if layoutChanged { self.controller?.updateTitlebarButtons(self.config.titlebarButtons) }
             }
             c.drainPluginRequests()
         }
@@ -235,9 +236,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             [keys]
             \(KeyMap.Action.allCases.map { a in a.defaultKey.map { "# \(a.rawValue) = \"\($0)\"" } ?? "# \(a.rawValue): no default" }.joined(separator: "\n"))
 
-            # The view cmd+shift+a shows. Only "narrow-list" for now.
             [layout]
+            # The view cmd+shift+a shows. Only "narrow-list" for now.
             # agents_view = "narrow-list"
+            # Title bar icons, left to right: any of "search", "new_tab", "settings", "sidebar".
+            # titlebar_buttons = [\(TitlebarButton.defaults.map { "\"\($0.rawValue)\"" }.joined(separator: ", "))]
 
             # Raw Ghostty keys, passed through as is.
             [ghostty]

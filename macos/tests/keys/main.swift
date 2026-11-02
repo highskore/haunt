@@ -77,6 +77,14 @@ check(AgentsViewStyle.parse(TOML.parse("[layout]\nagents_view = \"narrow-list\""
       && layoutLogs.isEmpty, "narrow-list parses")
 check(AgentsViewStyle.parse(.scalar("dashboard")) { layoutLogs.append($0) } == .narrowList, "unknown view falls back")
 check(layoutLogs.count == 1 && layoutLogs[0].contains("dashboard"), "unknown view logged")
+
+// [layout] titlebar_buttons
+var tbLogs: [String] = []
+check(TitlebarButton.parse(nil) { tbLogs.append($0) } == [.search, .newTab, .sidebar] && tbLogs.isEmpty, "titlebar_buttons default")
+let tb = TOML.parse("[layout]\ntitlebar_buttons = [\"sidebar\", \"bogus\", \"search\", \"sidebar\"]")["layout"]?["titlebar_buttons"]
+check(TitlebarButton.parse(tb) { tbLogs.append($0) } == [.sidebar, .search], "titlebar_buttons keeps order, drops unknown and repeats")
+check(tbLogs.count == 2 && tbLogs[0].contains("bogus") && tbLogs[1].contains("twice"), "titlebar_buttons problems logged")
+check(TitlebarButton.parse(.array([])) { _ in } == [], "empty titlebar_buttons leaves the bar bare")
 let old = try! JSONDecoder().decode(HauntConfig.State.self, from: Data(#"{"sidebar_hidden":true}"#.utf8))
 check(old.sidebarHidden && !old.agentsView, "older state.json keeps sidebar_hidden")
 var st = HauntConfig.State()
