@@ -2,7 +2,7 @@ import AppKit
 
 /// Mockup 06's grouped flat sidebar, drawn from a core `SidebarSnapshot`.
 final class SidebarView: NSView, NSTextFieldDelegate {
-    var snapshot = SidebarSnapshot(groups: []) { didSet { relayout() } }
+    var snapshot = SidebarSnapshot(groups: []) { didSet { snapshotChanged() } }
     var onSelect: ((String) -> Void)?
     var onClose: ((String) -> Void)?
     /// Agents view 01's list: the window's background and no right hairline.
@@ -20,13 +20,28 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         if x { v.removeLast() }
         return Int(v).map { ($0 - 1, x) }
     }()
-    private var hoverId: String? { didSet { if hoverId != oldValue { needsDisplay = true } } }
-    private var hoverClose = false { didSet { if hoverClose != oldValue { needsDisplay = true } } }
+    private var hoverId: String? {
+        didSet { if hoverId != oldValue { invalidateRow(oldValue); invalidateRow(hoverId) } }
+    }
+    private var hoverClose = false { didSet { if hoverClose != oldValue { invalidateRow(hoverId) } } }
     private static let closeSize: CGFloat = 8
 
     private enum Item {
         case label(String, top: CGFloat)
         case row(Row, top: CGFloat, height: CGFloat)
+
+        enum Shape: Equatable {
+            case label(String, CGFloat)
+            case row(String, CGFloat, CGFloat)
+        }
+
+        /// What decides the layout; rows with the same shape can be redrawn alone.
+        var shape: Shape {
+            switch self {
+            case let .label(text, top): return .label(text, top)
+            case let .row(r, top, h): return .row(r.surfaceId, top, h)
+            }
+        }
     }
 
     private var items: [Item] = []
@@ -67,13 +82,37 @@ final class SidebarView: NSView, NSTextFieldDelegate {
                 y += h
             }
         }
+        let ids = Set(orderedIds), labels = Set(snapshot.groups.map(\.label))
+        rowLines = rowLines.filter { ids.contains($0.key) }
+        labelLines = labelLines.filter { labels.contains($0.key) }
         positionEditor()
+    }
+
+    /// Same layout: only rows whose content changed are redrawn. Otherwise everything is.
+    private func snapshotChanged() {
+        let old = items
+        relayout()
+        if old.map(\.shape) == items.map(\.shape) {
+            for (a, b) in zip(old, items) {
+                if case let .row(ra, top, h) = a, case let .row(rb, _, _) = b, ra != rb {
+                    setNeedsDisplay(NSRect(x: 0, y: top, width: bounds.width, height: h))
+                }
+            }
+        } else {
+            needsDisplay = true
+        }
         if let p = Self.pinned {
             let ids = orderedIds
             hoverId = ids.indices.contains(p.index) ? ids[p.index] : nil
             hoverClose = p.onClose
         }
-        needsDisplay = true
+    }
+
+    private func invalidateRow(_ id: String?) {
+        guard let id else { return }
+        for case let .row(r, top, h) in items where r.surfaceId == id {
+            setNeedsDisplay(NSRect(x: 0, y: top, width: bounds.width, height: h))
+        }
     }
 
     /// The × in a row's status slot, centred on line 1.
@@ -151,7 +190,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         field.isBordered = false
         field.focusRingType = .none
         field.drawsBackground = true
-        field.font = Draw.ui(Tok.Size.rowName)
+        field.font = Fonts.name
         field.textColor = Tok.Color.textPrimary
         field.cell?.usesSingleLineMode = true
         field.cell?.lineBreakMode = .byClipping
@@ -208,24 +247,91 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         for item in items {
             switch item {
             case let .label(text, top):
+                guard top < dirtyRect.maxY, top + labelHeight > dirtyRect.minY else { continue }
                 drawLabel(text, top: top, ctx: ctx)
             case let .row(row, top, height):
+                guard top < dirtyRect.maxY, top + height > dirtyRect.minY else { continue }
                 drawRow(row, top: top, height: height, ctx: ctx)
             }
         }
     }
 
+    private enum Fonts {
+        static let label = Draw.ui(Tok.Size.labelFont)
+        static let status = Draw.uiTabular(Tok.Size.rowRight)
+        static let name = Draw.ui(Tok.Size.rowName)
+        static let meta = Draw.ui(Tok.Size.rowMeta)
+        static let sub = Draw.ui(Tok.Size.subFont)
+        static let glyph = Draw.mono(Tok.Size.iconGlyph)
+    }
+
+    private static let shellGlyph = Draw.line(">_", Fonts.glyph, Tok.Color.iconFg)
+    private var labelLines: [String: CTLine] = [:]
+
     private func drawLabel(_ text: String, top: CGFloat, ctx: CGContext) {
-        let font = Draw.ui(Tok.Size.labelFont)
-        let line = Draw.line(text.uppercased(), font, Tok.Color.textLabel, kern: Tok.Size.labelFont * Tok.Size.labelTrackingEm)
-        Draw.text(line, font: font, x: Tok.Size.labelPad[1], top: top + Tok.Size.labelPad[0],
+        let line = labelLines[text] ?? {
+            let l = Draw.line(text.uppercased(), Fonts.label, Tok.Color.textLabel, kern: Tok.Size.labelFont * Tok.Size.labelTrackingEm)
+            labelLines[text] = l
+            return l
+        }()
+        Draw.text(line, font: Fonts.label, x: Tok.Size.labelPad[1], top: top + Tok.Size.labelPad[0],
                   lineHeight: Tok.Size.labelFont * lh, in: ctx)
+    }
+
+    /// A row's text, laid out once per change of the row, the width, or its hover (the × narrows the name).
+    private struct RowLines {
+        let row: Row, width: CGFloat, hovered: Bool
+        let status: CTLine, statusW: CGFloat
+        let name: CTLine
+        let hint: CTLine?
+        let meta: CTLine
+        let subs: [(label: CTLine, meta: CTLine, metaW: CGFloat)]
+    }
+
+    private var rowLines: [String: RowLines] = [:]
+
+    private func lines(for row: Row) -> RowLines {
+        let hovered = row.surfaceId == hoverId
+        if let c = rowLines[row.surfaceId], c.row == row, c.width == contentWidth, c.hovered == hovered { return c }
+        let padX = Tok.Size.rowPad[1], gapX = Tok.Size.rowGap[1]
+        let right = contentWidth - padX
+        let col2 = padX + Tok.Size.iconSize + gapX
+
+        let status = Draw.line(row.statusText, Fonts.status, row.needsYou ? Tok.Color.needs : Tok.Color.textMeta)
+        let statusW = hovered ? Self.closeSize : Draw.width(status)
+        let name = Draw.truncated(Draw.line(row.name, Fonts.name, Tok.Color.textPrimary), right - gapX - statusW - col2,
+                                  Fonts.name, Tok.Color.textPrimary)
+
+        // A suspicious request shows its preview (⏎ and all) and is answered only in the terminal,
+        // so the hint stands where Allow/Deny would.
+        var metaRight = right
+        var hint: CTLine?
+        if let p = row.pending, p.suspicious {
+            let h = Draw.line(Self.suspiciousHint, Fonts.meta, Tok.Color.textMeta)
+            metaRight -= Draw.width(h) + gapX
+            hint = h
+        }
+        let metaText = row.pending.flatMap { $0.suspicious ? $0.preview : nil } ?? row.meta
+        let meta = Draw.truncated(Draw.line(metaText, Fonts.meta, Tok.Color.textMeta), metaRight - col2, Fonts.meta, Tok.Color.textMeta)
+
+        let subs = row.subagents.map { s in
+            let m = Draw.line(s.meta, Fonts.sub, Tok.Color.textSub)
+            let mw = Draw.width(m)
+            let label = Draw.truncated(Draw.line("↳ " + s.label, Fonts.sub, Tok.Color.textSub),
+                                       right - col2 - mw - Tok.Size.subGap, Fonts.sub, Tok.Color.textSub)
+            return (label: label, meta: m, metaW: mw)
+        }
+        let l = RowLines(row: row, width: contentWidth, hovered: hovered, status: status, statusW: statusW,
+                         name: name, hint: hint, meta: meta, subs: subs)
+        rowLines[row.surfaceId] = l
+        return l
     }
 
     private func drawRow(_ row: Row, top: CGFloat, height: CGFloat, ctx: CGContext) {
         if row.selected {
             Draw.fill(NSRect(x: 0, y: top, width: contentWidth, height: height), Tok.Color.rowSelected)
         }
+        let l = lines(for: row)
         let padY = Tok.Size.rowPad[0], padX = Tok.Size.rowPad[1]
         let gapY = Tok.Size.rowGap[0], gapX = Tok.Size.rowGap[1]
         let left = padX, right = contentWidth - padX
@@ -236,13 +342,8 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let icon = NSRect(x: left, y: y + (rowLine1 - Tok.Size.iconSize) / 2, width: Tok.Size.iconSize, height: Tok.Size.iconSize)
         drawIcon(row.kind, in: icon, ctx: ctx)
 
-        let statusFont = Draw.uiTabular(Tok.Size.rowRight)
-        let statusColor = row.needsYou ? Tok.Color.needs : Tok.Color.textMeta
-        let status = Draw.line(row.statusText, statusFont, statusColor)
-        var statusW = Draw.width(status)
-        if row.surfaceId == hoverId {
+        if l.hovered {
             let r = closeRect(top: top)
-            statusW = r.width
             let x = NSBezierPath()
             x.move(to: NSPoint(x: r.minX, y: r.minY)); x.line(to: NSPoint(x: r.maxX, y: r.maxY))
             x.move(to: NSPoint(x: r.minX, y: r.maxY)); x.line(to: NSPoint(x: r.maxX, y: r.minY))
@@ -251,29 +352,18 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             (hoverClose ? Tok.Color.textPrimary : Tok.Color.textMeta).setStroke()
             x.stroke()
         } else {
-            Draw.text(status, font: statusFont, x: right - statusW, top: y + (rowLine1 - Tok.Size.rowRight * lh) / 2,
+            Draw.text(l.status, font: Fonts.status, x: right - l.statusW, top: y + (rowLine1 - Tok.Size.rowRight * lh) / 2,
                       lineHeight: Tok.Size.rowRight * lh, in: ctx)
         }
-
-        let nameFont = Draw.ui(Tok.Size.rowName)
-        let nameMax = right - gapX - statusW - col2
-        let name = Draw.truncated(Draw.line(row.name, nameFont, Tok.Color.textPrimary), nameMax, nameFont, Tok.Color.textPrimary)
-        Draw.text(name, font: nameFont, x: col2, top: y + (rowLine1 - Tok.Size.rowName * lh) / 2,
+        Draw.text(l.name, font: Fonts.name, x: col2, top: y + (rowLine1 - Tok.Size.rowName * lh) / 2,
                   lineHeight: Tok.Size.rowName * lh, in: ctx)
         y += rowLine1 + gapY
 
-        // Line 2: meta, spanning columns 2–3. A suspicious request shows its preview (⏎ and all) and is
-        // answered only in the terminal, so the hint stands where Allow/Deny would.
-        let metaFont = Draw.ui(Tok.Size.rowMeta)
-        var metaRight = right
-        if let p = row.pending, p.suspicious {
-            let hint = Draw.line(Self.suspiciousHint, metaFont, Tok.Color.textMeta)
-            metaRight -= Draw.width(hint) + gapX
-            Draw.text(hint, font: metaFont, x: right - Draw.width(hint), top: y, lineHeight: Tok.Size.rowMeta * lh, in: ctx)
+        // Line 2: meta, spanning columns 2–3.
+        if let hint = l.hint {
+            Draw.text(hint, font: Fonts.meta, x: right - Draw.width(hint), top: y, lineHeight: Tok.Size.rowMeta * lh, in: ctx)
         }
-        let metaText = row.pending.flatMap { $0.suspicious ? $0.preview : nil } ?? row.meta
-        let meta = Draw.truncated(Draw.line(metaText, metaFont, Tok.Color.textMeta), metaRight - col2, metaFont, Tok.Color.textMeta)
-        Draw.text(meta, font: metaFont, x: col2, top: y, lineHeight: Tok.Size.rowMeta * lh, in: ctx)
+        Draw.text(l.meta, font: Fonts.meta, x: col2, top: y, lineHeight: Tok.Size.rowMeta * lh, in: ctx)
         y += Tok.Size.rowMeta * lh
 
         if let p = row.progress {
@@ -285,15 +375,10 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             y += Tok.Size.barH
         }
 
-        let subFont = Draw.ui(Tok.Size.subFont)
-        for s in row.subagents {
+        for s in l.subs {
             y += gapY + Tok.Size.subMt
-            let metaLine = Draw.line(s.meta, subFont, Tok.Color.textSub)
-            let mw = Draw.width(metaLine)
-            let label = Draw.truncated(Draw.line("↳ " + s.label, subFont, Tok.Color.textSub),
-                                       right - col2 - mw - Tok.Size.subGap, subFont, Tok.Color.textSub)
-            Draw.text(label, font: subFont, x: col2, top: y, lineHeight: Tok.Size.subFont * lh, in: ctx)
-            Draw.text(metaLine, font: subFont, x: right - mw, top: y, lineHeight: Tok.Size.subFont * lh, in: ctx)
+            Draw.text(s.label, font: Fonts.sub, x: col2, top: y, lineHeight: Tok.Size.subFont * lh, in: ctx)
+            Draw.text(s.meta, font: Fonts.sub, x: right - s.metaW, top: y, lineHeight: Tok.Size.subFont * lh, in: ctx)
             y += Tok.Size.subFont * lh
         }
     }
@@ -311,10 +396,8 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         case .shell:
             Tok.Color.iconBg.setFill()
             NSBezierPath(roundedRect: r, xRadius: Tok.Size.iconRadius, yRadius: Tok.Size.iconRadius).fill()
-            let font = Draw.mono(Tok.Size.iconGlyph)
-            let line = Draw.line(">_", font, Tok.Color.iconFg)
             let glyphLH = Tok.Size.iconGlyph * lh
-            Draw.text(line, font: font, x: r.midX - Draw.width(line) / 2, top: r.midY - glyphLH / 2,
+            Draw.text(Self.shellGlyph, font: Fonts.glyph, x: r.midX - Draw.width(Self.shellGlyph) / 2, top: r.midY - glyphLH / 2,
                       lineHeight: glyphLH, in: ctx)
         }
     }
