@@ -28,9 +28,11 @@ final class HauntConfig {
     @discardableResult
     func reload(useUserConfig: Bool = true) -> (ghostty: Bool, keys: Bool) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let toml = useUserConfig ? ((try? String(contentsOf: tomlURL, encoding: .utf8)).map(TOML.parse) ?? [:]) : [:]
+        let text = useUserConfig ? (try? String(contentsOf: tomlURL, encoding: .utf8)) ?? "" : ""
+        let toml = TOML.parse(text)
         var problems: [String] = []
-        let newKeys = KeyMap(table: toml["keys"] ?? [:]) { problems.append($0) }
+        let newKeys = KeyMap(table: toml["keys"] ?? [:], order: TOML.keyOrder(text, table: "keys")) { problems.append($0) }
+        problems += Self.refusedGhostty(toml["ghostty"] ?? [:]).map { "[ghostty] \($0.key) = \($0.value): not allowed, ignored" }
         // One save can fire several events; each problem is logged once per edit.
         if problems != lastKeyProblems {
             for p in problems { Self.logger.error("\(p, privacy: .public)") }
@@ -79,8 +81,17 @@ final class HauntConfig {
         for a in KeyMap.Action.allCases { unbind += keys[a]?.ghosttyTriggers ?? [] }
         var seen = Set<String>()
         lines += unbind.filter { seen.insert($0).inserted }.map { "keybind = \($0)=unbind" }
-        let raw = (toml["ghostty"] ?? [:]).sorted { $0.key < $1.key }.flatMap { k, v in v.strings.map { "\(k) = \($0)" } }
+        let refused = Set(refusedGhostty(toml["ghostty"] ?? [:]).map { "\($0.key) = \($0.value)" })
+        let raw = (toml["ghostty"] ?? [:]).sorted { $0.key < $1.key }
+            .flatMap { k, v in v.strings.map { "\(k) = \($0)" } }.filter { !refused.contains($0) }
         return (lines + raw).joined(separator: "\n") + "\n"
+    }
+
+    /// Passthrough values Haunt can't allow: a right-click paste writes the clipboard to the pty
+    /// inside libghostty, past the checks on Haunt's own paste paths.
+    static func refusedGhostty(_ table: [String: TOML.Value]) -> [(key: String, value: String)] {
+        (table["right-click-action"]?.strings ?? []).filter { ["paste", "copy-or-paste"].contains($0) }
+            .map { ("right-click-action", $0) }
     }
 
     /// Berkeley Mono Variable's (ascent + descent + lineGap) / unitsPerEm from hhea: (956 + 244 + 0) / 1000.
@@ -186,8 +197,21 @@ enum TOML {
 
     static func parse(_ text: String) -> [String: [String: Value]] {
         var out: [String: [String: Value]] = [:]
+        entries(text) { table, key, value in out[table, default: [:]][key] = parseValue(value) }
+        return out
+    }
+
+    /// The keys of `table` in the order they are written.
+    static func keyOrder(_ text: String, table name: String) -> [String] {
+        var keys: [String] = []
+        entries(text) { table, key, _ in if table == name { keys.append(key) } }
+        return keys
+    }
+
+    private static func entries(_ text: String, _ body: (String, String, String) -> Void) {
         var table = ""
-        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        // By Character, "\r\n" is one newline, which splitting on "\n" alone would never find.
+        for raw in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             let line = stripComment(String(raw)).trimmingCharacters(in: .whitespaces)
             if line.isEmpty { continue }
             if line.hasPrefix("[") && line.hasSuffix("]") {
@@ -196,10 +220,8 @@ enum TOML {
             }
             guard let eq = line.firstIndex(of: "=") else { continue }
             let key = unquote(line[..<eq].trimmingCharacters(in: .whitespaces))
-            let value = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
-            out[table, default: [:]][key] = parseValue(value)
+            body(table, key, line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces))
         }
-        return out
     }
 
     private static func parseValue(_ v: String) -> Value {

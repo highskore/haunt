@@ -8,6 +8,11 @@ struct PastePreview: Equatable {
     var hasPasteEnd: Bool
     var hasControls: Bool
 
+    /// Ghostty treats a bracketed paste as safe however it ends, so Haunt asks itself before any paste
+    /// that carries an escape, another control or a hidden character. Plain text, newlines included,
+    /// is left to Ghostty's own paste protection.
+    var needsConfirmation: Bool { hasControls }
+
     static let pasteEnd = "\u{1B}[201~"
 
     init(_ s: String) {
@@ -35,6 +40,11 @@ struct PastePreview: Equatable {
                 out += "⏎\n"
                 lines += 1
                 i += 1
+            case "\r":
+                // A lone CR ends a line for the shell too, so it counts as one, and stays spelled out.
+                out += "\\u{d}\n"
+                lines += 1
+                controls = true
             case "\t":
                 out.unicodeScalars.append(c)
             case "\u{1B}":
@@ -51,15 +61,17 @@ struct PastePreview: Equatable {
             i += 1
         }
         // A trailing newline ends the last line rather than starting one.
-        if s.unicodeScalars.last == "\n", lines > 1 { lines -= 1 }
+        if let last = s.unicodeScalars.last, last == "\n" || last == "\r", lines > 1 { lines -= 1 }
         self.text = out
         self.lines = lines
         self.hasPasteEnd = pasteEnd
         self.hasControls = controls
     }
 
-    /// C0/C1 controls and DEL, plus format characters (bidi overrides, zero-width) that can disguise text.
+    /// The core's `is_hidden`: controls, format characters (bidi overrides, zero-width) and any whitespace
+    /// but the plain space (U+2028/2029, NBSP, ideographic space…), all of which can disguise text.
     private static func hidden(_ c: Unicode.Scalar) -> Bool {
-        c.value < 0x20 || (0x7F...0x9F).contains(c.value) || c.properties.generalCategory == .format
+        c != " " && (c.properties.generalCategory == .control || c.properties.generalCategory == .format
+            || c.properties.isWhitespace)
     }
 }
