@@ -28,7 +28,6 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         didSet { if hoverId != oldValue { invalidateRow(oldValue); invalidateRow(hoverId) } }
     }
     private var hoverClose = false { didSet { if hoverClose != oldValue { invalidateRow(hoverId) } } }
-    private static let closeSize: CGFloat = 8
 
     private enum Item {
         case label(String, top: CGFloat)
@@ -121,7 +120,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
 
     /// The × in a row's status slot, centred on line 1.
     private func closeRect(top: CGFloat) -> NSRect {
-        let d = Self.closeSize
+        let d = Tok.App.closeSize
         return NSRect(x: contentWidth - Tok.Size.rowPad[1] - d, y: top + Tok.Size.rowPad[0] + (rowLine1 - d) / 2,
                       width: d, height: d)
     }
@@ -154,7 +153,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let p = convert(event.locationInWindow, from: nil)
         let hit = row(at: p)
         hoverId = hit?.0.surfaceId
-        hoverClose = hit.map { closeRect(top: $0.1).insetBy(dx: -4, dy: -4).contains(p) } ?? false
+        hoverClose = hit.map { closeRect(top: $0.1).insetBy(dx: -Tok.App.hitSlop, dy: -Tok.App.hitSlop).contains(p) } ?? false
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -302,7 +301,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let col2 = padX + Tok.Size.iconSize + gapX
 
         let status = Draw.line(row.statusText, Fonts.status, row.needsYou ? Tok.Color.needs : Tok.Color.textMeta)
-        let statusW = hovered ? Self.closeSize : Draw.width(status)
+        let statusW = hovered ? Tok.App.closeSize : Draw.width(status)
         let name = Draw.truncated(Draw.line(row.name, Fonts.name, Tok.Color.textPrimary), right - gapX - statusW - col2,
                                   Fonts.name, Tok.Color.textPrimary)
 
@@ -351,7 +350,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             let x = NSBezierPath()
             x.move(to: NSPoint(x: r.minX, y: r.minY)); x.line(to: NSPoint(x: r.maxX, y: r.maxY))
             x.move(to: NSPoint(x: r.minX, y: r.maxY)); x.line(to: NSPoint(x: r.maxX, y: r.minY))
-            x.lineWidth = 1.2
+            x.lineWidth = Tok.App.closeStroke
             x.lineCapStyle = .round
             (hoverClose ? Tok.Color.textPrimary : Tok.Color.textMeta).setStroke()
             x.stroke()
@@ -410,7 +409,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let p = convert(event.locationInWindow, from: nil)
         guard let (row, top) = row(at: p) else { return }
         // Only where the × is drawn: on the hovered row.
-        if row.surfaceId == hoverId, closeRect(top: top).insetBy(dx: -4, dy: -4).contains(p) {
+        if row.surfaceId == hoverId, closeRect(top: top).insetBy(dx: -Tok.App.hitSlop, dy: -Tok.App.hitSlop).contains(p) {
             onClose?(row.surfaceId)
         } else if event.clickCount == 2, nameRect(top: top).contains(p) {
             beginRename(row.surfaceId)

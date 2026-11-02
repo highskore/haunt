@@ -369,7 +369,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
         let font = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         let lineH = NSLayoutManager().defaultLineHeight(for: font)
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: (lineH * 10).rounded(.up) + 8))
+        let inset = Tok.App.pastePreviewInset
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: Tok.App.pastePreviewW,
+                                                height: (lineH * Tok.App.pastePreviewLines).rounded(.up) + inset.height * 2))
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
         let tv = NSTextView(frame: NSRect(origin: .zero, size: scroll.contentSize))
@@ -377,7 +379,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         tv.isSelectable = true
         tv.isRichText = false
         tv.font = font
-        tv.textContainerInset = NSSize(width: 2, height: 4)
+        tv.textContainerInset = inset
         tv.isVerticallyResizable = true
         tv.autoresizingMask = .width
         tv.textContainer?.widthTracksTextView = true
