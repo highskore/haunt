@@ -59,4 +59,11 @@ final class TabStore {
             ghostty_surface_text(surface, p, UInt(buf.count))
         }
     }
+
+    /// A Return as its own keystroke: `ghostty_surface_text` pastes, and a pasted CR doesn't submit.
+    func pressReturn(_ surfaceId: String) {
+        guard let surface = tab(surfaceId)?.view.surface else { return }
+        let action = "text:\\r"
+        _ = ghostty_surface_binding_action(surface, action, UInt(action.utf8.count))
+    }
 }

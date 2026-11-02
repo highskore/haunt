@@ -1,15 +1,15 @@
 import AppKit
 import UserNotifications
 
-/// Carries out what plugins ask of the host: `.notify` becomes a macOS notification; a `.ptyAnswer` is
-/// written only as the bytes the core's gate returns.
+/// Carries out what plugins ask of the host: `.notify` becomes a macOS notification; a `.ptyAnswer` or
+/// `.ptyType` is written only as the bytes the core's gate returns.
 final class PluginBridge {
     /// Set once the core has started, so the decision log is loaded before plugins read it.
     var plugins: PluginsAPI?
     private let core: CoreAPI
-    private let write: (Data, String) -> Void
+    private let write: (PtyWrite) -> Void
 
-    init(core: CoreAPI, write: @escaping (_ bytes: Data, _ surfaceId: String) -> Void) {
+    init(core: CoreAPI, write: @escaping (PtyWrite) -> Void) {
         self.core = core
         self.write = write
     }
@@ -22,9 +22,9 @@ final class PluginBridge {
             switch req {
             case let .notify(pluginId, title, body, _, _):
                 Self.notify(pluginId: pluginId, title: title, body: body)
-            case .ptyAnswer:
+            case .ptyAnswer, .ptyType:
                 guard let w = core.gatePluginRequest(request: req) else { continue }
-                write(w.bytes, w.surfaceId)
+                write(w)
             }
         }
     }

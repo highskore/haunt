@@ -1,7 +1,7 @@
 // haunt plugin API, plan section 3.3. Gated imports are linked only when the capability is granted.
 // 0.2: `decisions` and `allowlist` imports; palette items carry a time, a mark and a surface.
 // 0.3: `verified` on agent-event; `sidebar` import; `row-menu` and `on-row-moved` exports.
-// 0.4: `theme` import; `on-theme-changed` export.
+// 0.4: `theme` and `typing` imports; `on-theme-changed` export.
 package haunt:plugin@0.4.0;
 
 interface types {
@@ -97,6 +97,14 @@ interface notify {
 // haunt writes Allow or Deny only while that request is still live; there is no free-form text.
 interface pty {
   answer: func(surface: string, allow: bool, request-id: u64) -> result<_, string>;
+}
+
+// Capability `pty_type`. Types `text` into the current tab, then presses Return if `enter`. Only while
+// handling a palette command or key the user just ran, and only into the tab focused then. haunt
+// refuses it while that tab has a prompt up, and refuses text with control or invisible characters
+// (a tab is fine).
+interface typing {
+  type-text: func(text: string, enter: bool) -> result<_, string>;
 }
 
 // `read` and `list` need `fs_read`, `write` needs `fs_write`; paths must match the declared globs.
@@ -204,6 +212,7 @@ world plugin {
   import theme;
   import notify;
   import pty;
+  import typing;
   import fs;
   import decisions;
   import allowlist;

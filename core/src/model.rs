@@ -602,6 +602,15 @@ impl Core {
         lock(&self.state).surfaces.iter().any(|s| s.id == surface_id && s.session.has_unresolved())
     }
 
+    /// A plugin may type into `surface_id` only while it is still the selected tab and no prompt, live
+    /// or possibly still on screen, is there.
+    #[cfg(feature = "plugins")]
+    pub(crate) fn may_type_into(&self, surface_id: &str) -> bool {
+        let st = lock(&self.state);
+        st.selected.as_deref() == Some(surface_id)
+            && st.surfaces.iter().any(|s| s.id == surface_id && !s.session.has_unresolved() && s.session.live_permission().is_none())
+    }
+
     /// Bytes for `ghostty_surface_text`, only while `request_key` is that surface's live,
     /// nonce-verified permission request. The request is consumed. The keys are the asking agent's
     /// (`Agent::answer_bytes`); Enter is never sent, since it takes whichever option is highlighted.
@@ -710,6 +719,10 @@ impl std::fmt::Debug for CoreHandle {
 }
 
 impl CoreHandle {
+    pub fn selected_surface(&self) -> Option<String> {
+        lock(&self.state).selected.clone()
+    }
+
     pub fn decisions(&self, query: &str, limit: u32) -> Vec<Decision> {
         let hits = lock(&self.state).decisions.query(query, None, limit as usize);
         hits.iter().map(|d| Decision::clone(d)).collect()

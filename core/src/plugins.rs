@@ -27,7 +27,7 @@ mod bindings {
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
-    allowlist as wallow, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, sidebar as wside, theme as wtheme,
+    allowlist as wallow, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, sidebar as wside, theme as wtheme, typing as wtyping,
     types as wit,
 };
 
@@ -103,13 +103,14 @@ pub struct NotifyAction {
     pub title: String,
 }
 
-/// Side effects a plugin asked for; the app drains and performs them. A `PtyAnswer` becomes bytes
-/// only through `Core::gate_plugin_request` (`ptygate`).
+/// Side effects a plugin asked for; the app drains and performs them. A `PtyAnswer` or `PtyType`
+/// becomes bytes only through `Core::gate_plugin_request` (`ptygate`).
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 pub enum HostRequest {
     Notify { plugin_id: String, title: String, body: String, actions: Vec<NotifyAction>, binding: Option<String> },
     PtyAnswer { plugin_id: String, surface: String, allow: bool, request_id: u64 },
+    PtyType { plugin_id: String, surface: String, text: String, enter: bool },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -214,6 +215,8 @@ pub struct HostState {
     /// Set while this instance may arrange the sidebar.
     sidebar: Option<SidebarToken>,
     theme: Arc<Theme>,
+    /// The tab focused when the user ran one of this plugin's commands, while that call runs.
+    typing_into: Option<String>,
 }
 
 impl Drop for HostState {
@@ -245,6 +248,7 @@ impl HostState {
             },
             core,
             theme: Theme::default_shared(),
+            typing_into: None,
         }
     }
 
@@ -382,6 +386,20 @@ impl wpty::Host for HostState {
         let surface = clip(surface);
         self.push_log(format!("info pty.answer surface={surface} allow={allow} request={request_id}"));
         self.request(HostRequest::PtyAnswer { plugin_id: self.id.clone(), surface, allow, request_id })
+    }
+}
+
+impl wtyping::Host for HostState {
+    fn type_text(&mut self, text: String, enter: bool) -> Result<(), String> {
+        let surface = self.typing_into.clone().ok_or("only while running a command the user chose")?;
+        if let Some(why) = crate::ptygate::untypable(&text) {
+            return Err(format!("not typed: {why}"));
+        }
+        if !self.pty_rate_ok() {
+            return Err(format!("pty rate limit ({PTY_PER_SEC}/s)"));
+        }
+        self.push_log(format!("info typing surface={surface} bytes={} enter={enter}", text.len()));
+        self.request(HostRequest::PtyType { plugin_id: self.id.clone(), surface, text, enter })
     }
 }
 
@@ -680,6 +698,16 @@ impl LoadedPlugin {
         self.call(|b, s| b.call_on_action(s, action_id, payload))
     }
 
+    /// The user ran palette item `action_id` (from the palette or its key): `typing` may type into the
+    /// tab focused now, until the call returns.
+    pub fn run_command(&mut self, action_id: &str) -> Result<(), PluginError> {
+        let data = self.store.data_mut();
+        data.typing_into = data.core.as_ref().and_then(CoreHandle::selected_surface);
+        let res = self.on_action(action_id, "");
+        self.store.data_mut().typing_into = None;
+        res
+    }
+
     pub fn row_menu(&mut self, surface: &str) -> Result<Vec<RowMenuItem>, PluginError> {
         let items = self.call(|b, s| b.call_row_menu(s, surface))?;
         let id = self.id().to_owned();
@@ -759,6 +787,9 @@ impl PluginHost {
         }
         if caps.pty_write {
             wpty::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if caps.pty_type {
+            wtyping::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.decisions_read {
             wdec::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
@@ -969,6 +1000,24 @@ mod tests {
         let glass = crate::plugin_theme::ThemeToken { name: "color.hairline".into(), value: "#ffffff40".into() };
         st.theme = Arc::new(Theme::new("glass", vec![glass]).unwrap());
         assert_eq!((wtheme::Host::name(&mut st), wtheme::Host::tokens(&mut st).len()), ("glass".to_owned(), 1));
+    }
+
+    #[test]
+    fn typing_needs_pty_type_and_a_command_the_user_ran() {
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/typing@0.4.0" (instance
+            (export "type-text" (func (param "text" string) (param "enter" bool) (result (result (error string))))))))"#).unwrap();
+        let e = host.check_links(&c, &Capabilities { pty_write: true, notifications: true, sidebar: true, ..Default::default() }).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/typing"), "{e}");
+        let caps = Capabilities { pty_type: true, ..Default::default() };
+        host.check_links(&c, &caps).unwrap();
+
+        let mut st = HostState::new("dev.haunt.t", &caps, None, None, None);
+        assert!(wtyping::Host::type_text(&mut st, "ls".into(), true).unwrap_err().contains("only while"));
+        st.typing_into = Some("s1".into());
+        assert!(wtyping::Host::type_text(&mut st, "ls\nrm -rf ~".into(), false).unwrap_err().contains("not typed"));
+        wtyping::Host::type_text(&mut st, "ls".into(), true).unwrap();
+        assert_eq!(st.outbox, [HostRequest::PtyType { plugin_id: "dev.haunt.t".into(), surface: "s1".into(), text: "ls".into(), enter: true }]);
     }
 
     #[test]

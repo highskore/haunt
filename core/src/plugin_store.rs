@@ -517,8 +517,9 @@ impl PluginSet {
         out
     }
 
+    /// The user chose `item_id` in the palette or pressed its key.
     pub fn invoke(&mut self, plugin_id: &str, item_id: &str) -> Result<(), PluginError> {
-        self.plugin(plugin_id)?.on_action(item_id, "")
+        self.plugin(plugin_id)?.run_command(item_id)
     }
 
     fn plugin(&mut self, plugin_id: &str) -> Result<&mut LoadedPlugin, PluginError> {

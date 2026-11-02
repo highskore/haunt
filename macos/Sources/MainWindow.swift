@@ -112,7 +112,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.ghostty = ghostty
         self.fixture = fixture
         self.config = config
-        bridge = PluginBridge(core: core) { [store] bytes, id in store.write(bytes, to: id) }
+        bridge = PluginBridge(core: core) { [store] w in
+            store.write(w.bytes, to: w.surfaceId)
+            if w.enter { store.pressReturn(w.surfaceId) }
+        }
         let size = fixture?.size ?? Self.defaultSize
         let win = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],

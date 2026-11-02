@@ -42,6 +42,7 @@ pub struct PluginMeta {
 pub struct Capabilities {
     pub events: Vec<String>,
     pub pty_write: bool,
+    pub pty_type: bool,
     pub notifications: bool,
     pub decisions_read: bool,
     pub allowlist_suggest: bool,
@@ -100,14 +101,14 @@ pub fn event_topic(kind: &EventKind) -> &'static str {
 
 impl Capabilities {
     /// Whether an event goes to this plugin. Anything in the terminal can forge an unverified one,
-    /// so a plugin that can answer prompts or sees approved commands only gets verified events.
+    /// so a plugin that can answer prompts, type or see approved commands only gets verified events.
     pub fn wants_event(&self, kind: &EventKind, verified: bool) -> bool {
         let topic = event_topic(kind);
         (verified || !self.verified_only()) && self.events.iter().any(|e| e == topic || e == "agent.*")
     }
 
     pub fn verified_only(&self) -> bool {
-        self.pty_write || self.allowlist_suggest || self.decisions_read
+        self.pty_write || self.pty_type || self.allowlist_suggest || self.decisions_read
     }
 
     pub fn fs_read_granted(&self) -> bool {
@@ -169,6 +170,9 @@ impl Capabilities {
         if self.pty_write {
             out.push(("can answer permission prompts in your terminal (Allow or Deny, nothing else)".into(), true));
         }
+        if self.pty_type {
+            out.push(("can type text into the current tab when you run one of its commands".into(), true));
+        }
         for g in &self.fs_read {
             out.push((format!("can read files matching {}", plain_glob(g)), false));
         }
@@ -183,6 +187,7 @@ impl Capabilities {
         let grown = Capabilities {
             events: self.events.iter().filter(|e| !old.events.contains(e)).cloned().collect(),
             pty_write: self.pty_write && !old.pty_write,
+            pty_type: self.pty_type && !old.pty_type,
             notifications: self.notifications && !old.notifications,
             decisions_read: self.decisions_read && !old.decisions_read,
             allowlist_suggest: self.allowlist_suggest && !old.allowlist_suggest,
@@ -274,6 +279,7 @@ mod tests {
             ("", true),
             ("notifications = true\nsidebar = true", true),
             ("pty_write = true", false),
+            ("pty_type = true", false),
             ("allowlist_suggest = true", false),
             ("decisions_read = true", false),
         ] {
@@ -281,6 +287,15 @@ mod tests {
             assert!(m.capabilities.wants_event(&kind, true), "{caps}");
             assert_eq!(m.capabilities.wants_event(&kind, false), unverified, "{caps}");
         }
+    }
+
+    #[test]
+    fn typing_is_its_own_capability_and_consent_line() {
+        let m = Manifest::parse(&manifest("pty_type = true")).unwrap();
+        assert_eq!(m.capabilities.describe(), [("can type text into the current tab when you run one of its commands".to_owned(), true)]);
+        let answers = Capabilities { pty_write: true, ..Default::default() };
+        assert_eq!(m.capabilities.added_since(&answers).len(), 1, "pty_write never implies typing");
+        assert!(!answers.describe().iter().any(|(l, _)| l.contains("type text")));
     }
 
     #[test]

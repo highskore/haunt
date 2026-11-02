@@ -282,11 +282,13 @@ struct NotifyAction: Equatable, Hashable {
 enum HostRequest: Equatable, Hashable {
     case notify(pluginId: String, title: String, body: String, actions: [NotifyAction], binding: String?)
     case ptyAnswer(pluginId: String, surface: String, allow: Bool, requestId: UInt64)
+    case ptyType(pluginId: String, surface: String, text: String, enter: Bool)
 }
 
 struct PtyWrite: Equatable, Hashable {
     var surfaceId: String
     var bytes: Data
+    var enter: Bool
 }
 
 enum CommandOutcome: Equatable, Hashable {
