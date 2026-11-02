@@ -66,8 +66,13 @@ final class HauntConfig {
         }
         let generated = Self.ghosttyConfig(toml, defaultSize: useUserConfig ? Self.defaultFontSize : Tok.Size.paneFont, keys: keys)
         guard generated != lastWritten else { return (false, keysChanged, layoutChanged) }
-        try? generated.write(to: ghosttyURL, atomically: true, encoding: .utf8)
-        lastWritten = generated
+        do {
+            try generated.write(to: ghosttyURL, atomically: true, encoding: .utf8)
+            lastWritten = generated
+        } catch {
+            // Without lastWritten, the next change regenerates and retries the write.
+            Self.logger.error("writing ghostty config failed: \(error.localizedDescription, privacy: .public)")
+        }
         return (true, keysChanged, layoutChanged)
     }
 
@@ -102,7 +107,7 @@ final class HauntConfig {
         // haunt owns tabs and windows, and its shortcuts must reach the menu instead of Ghostty.
         var unbind: [String] = (["t", "w", "n", "d", "shift+d"] + (1...9).flatMap { ["digit_\($0)", "\($0)"] }).map { "super+" + $0 }
         // Ghostty's own paste bindings would write to the pty past Haunt's paste checks, whatever [keys] says.
-        unbind += ["cmd+v", "cmd+shift+v"].flatMap { Shortcut.parse($0)!.ghosttyTriggers } + ["paste"]
+        unbind += ["cmd+v", "cmd+shift+v"].flatMap { Shortcut.parse($0)!.ghosttyTriggers }
         for a in KeyMap.Action.allCases { unbind += keys[a]?.ghosttyTriggers ?? [] }
         for (_, s) in keys.plugin.sorted(by: { $0.key < $1.key }) { unbind += s.ghosttyTriggers }
         var seen = Set<String>()

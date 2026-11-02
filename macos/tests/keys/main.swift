@@ -150,9 +150,11 @@ check(defaults[.pasteSelection] == Shortcut.parse("cmd+shift+v"), "paste_selecti
 let moved = HauntConfig.ghosttyConfig([:], defaultSize: 11,
                                       keys: KeyMap(table: TOML.parse("[keys]\npaste = \"cmd+shift+p\"\npaste_selection = \"cmd+opt+p\"\n")["keys"]!) { _ in })
 for c in [conf, moved] {
-    for line in ["keybind = super+v=unbind", "keybind = shift+super+v=unbind", "keybind = paste=unbind"] {
+    for line in ["keybind = super+v=unbind", "keybind = shift+super+v=unbind"] {
         check(c.contains(line + "\n"), "ghostty config has \(line)")
     }
+    // "paste" is an action name, not a trigger; libghostty would reject the line.
+    check(!c.contains("keybind = paste=unbind"), "no bogus paste trigger")
 }
 for (entry, key) in [("middle-click-action = clipboard-paste", "clipboard-paste"), ("middle-click-action = primary-paste", "primary-paste"),
                      ("keybind = super+p=paste_from_clipboard", "paste_from_clipboard"),

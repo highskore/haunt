@@ -92,7 +92,8 @@ cursor-style = "bar"
 
 `[keys]` sets shortcuts by action name (the generated `config.toml` lists them with their defaults). A plugin's palette command is named `"<plugin id>/<item id>"`, for example `"dev.haunt.tabs-plus/move-up" = "alt+cmd+up"`; a plugin's default key must include cmd and never takes one of Haunt's or a chord the terminal or macOS uses (a chord set here has no such limit), and bound plugin commands appear in the Window menu.
 
-`[ghostty]` is passed through to libghostty, except for what would get a paste past Haunt's paste check or slip in config Haunt never sees. These are dropped and logged: `right-click-action = paste` or `copy-or-paste`, `middle-click-action` other than `ignore` (Haunt pastes on middle click itself; `ignore` turns that off), any `keybind` to `paste_from_clipboard` or `paste_from_selection`, `config-file`, `config-default-files`, and any key or value with a line break. Haunt also always unbinds Ghostty's ⌘V, ⇧⌘V and Paste key, so every paste goes through its own Edit menu.
+`[ghostty]` is passed through to libghostty, except for what would get a paste past Haunt's paste check or slip in config Haunt never sees. These are dropped and logged: `right-click-action = paste` or `copy-or-paste`, `middle-click-action` other than `ignore` (Haunt pastes on middle click itself; `ignore` turns that off), any `keybind` to `paste_from_clipboard` or `paste_from_selection`, `config-file`, `config-default-files`, and any key or value with a line break. Haunt also always unbinds Ghostty's ⌘V and ⇧⌘V chords, so every paste goes through its own Edit menu.
+The passthrough reads plain `key = value` lines only: the TOML subset without dotted keys, arrays of tables or multi-line strings — unknown forms are ignored.
 
 ## Use
 

@@ -201,9 +201,9 @@ enum DiffParser {
 
     /// A minified or generated line cut to `maxLineChars`, saying how much is left out.
     static func capped(_ s: String) -> String {
-        guard s.utf16.count > maxLineChars else { return s }
         let n = s.count
-        return n > maxLineChars ? String(s.prefix(maxLineChars)) + " … \(n - maxLineChars) more" : s
+        guard n > maxLineChars else { return s }
+        return String(s.prefix(maxLineChars)) + " … \(n - maxLineChars) more"
     }
 
     static func expandTabs(_ s: String, width: Int = 4) -> String {

@@ -106,6 +106,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self?.bridge.drain()
     }
     private lazy var reviewer = ReviewCoordinator(host: self)
+    /// The title bar's own accessory, saved while the review screen's is shown; per window, not shared.
+    private var savedAccessory: TitleBarView.Accessory?
 
     init(core: CoreAPI, ghostty: Ghostty.App, fixture: Fixture?, config: HauntConfig) {
         self.core = core
@@ -557,7 +559,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         ticker?.invalidate()
         ticker = nil
-        for t in store.tabs { core.unregisterSurface(surfaceId: t.env.surfaceId) }
+        // The same teardown remove(_:) does; when it closed the window first, the store is already empty.
+        for t in store.tabs {
+            t.subscriptions.removeAll()
+            t.host.removeFromSuperview()
+            core.unregisterSurface(surfaceId: t.env.surfaceId)
+        }
         store.removeAll()
     }
 }
@@ -630,16 +637,14 @@ extension MainWindowController: ReviewHost {
         syncFocus()
     }
 
-    private static var savedAccessory: TitleBarView.Accessory?
-
     func setReviewTitle(crumb: [String], accessory: TitleBarView.Accessory?) {
         root.titleBar.crumb = crumb
         if let accessory {
-            if Self.savedAccessory == nil { Self.savedAccessory = root.titleBar.accessory }
+            if savedAccessory == nil { savedAccessory = root.titleBar.accessory }
             root.titleBar.accessory = accessory
-        } else if crumb.isEmpty, let saved = Self.savedAccessory {
+        } else if crumb.isEmpty, let saved = savedAccessory {
             root.titleBar.accessory = saved
-            Self.savedAccessory = nil
+            savedAccessory = nil
         }
     }
 

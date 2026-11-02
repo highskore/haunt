@@ -31,6 +31,8 @@ enum LoginPath {
             }
         }
         if p.isRunning { p.terminate() }
+        // Off main: fetch runs on the launch path, and a shell that ignores SIGTERM would hang the wait.
+        DispatchQueue.global().async { p.waitUntilExit() }
         return parse(String(decoding: data, as: UTF8.self))
     }
 

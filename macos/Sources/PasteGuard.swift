@@ -30,6 +30,8 @@ final class PasteGuard {
         queue.removeAll(where: stale)
         if let shown, stale(shown.ask) || shown.ask.view == nil {
             self.shown = nil
+            // Withdrawn or its surface is gone: finish it here, as the sheet completion's guard won't.
+            shown.ask.finish(false)
             window?.endSheet(shown.alert.window, returnCode: .abort)
         }
         if let request {
