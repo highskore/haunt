@@ -424,8 +424,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     var isSidebarHidden: Bool { root.sidebarHidden }
 
+    var onSidebarToggle: (() -> Void)?
+
     func toggleSidebar() {
         root.sidebarHidden.toggle()
+        onSidebarToggle?()
         root.layoutSubtreeIfNeeded()
         if fixture == nil {
             var state = config.loadState()
