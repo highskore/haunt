@@ -21,7 +21,8 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
         return true
     }
 
-    /// Writes a paste the user confirmed, exactly the text they saw.
+    /// Writes a paste the user confirmed, encoded as Ghostty pastes: ESC and other controls become spaces,
+    /// and LF becomes CR outside a bracketed paste.
     func sendPaste(_ text: String) {
         onInput?()
         surfaceModel?.sendText(text)

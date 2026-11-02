@@ -249,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             # Title bar icons, left to right: any of "search", "new_tab", "settings", "sidebar".
             # titlebar_buttons = [\(TitlebarButton.defaults.map { "\"\($0.rawValue)\"" }.joined(separator: ", "))]
 
-            # Raw Ghostty keys, passed through as is.
+            # Raw Ghostty keys, passed through, except ones that paste past Haunt's check (see the README).
             [ghostty]
 
             """

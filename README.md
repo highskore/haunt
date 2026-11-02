@@ -81,15 +81,24 @@ font = "Berkeley Mono Variable"
 font_size = 11
 
 [layout]
+agents_view = "narrow-list"                           # the default, and the only view so far
 titlebar_buttons = ["search", "new_tab", "sidebar"]   # the default
 
-[ghostty]            # passed through to libghostty as-is
+[ghostty]            # passed through to libghostty, less the keys below
 cursor-style = "bar"
 ```
 
-`titlebar_buttons` lists the title bar's icons, left to right, from `search`, `new_tab`, `settings` and `sidebar`. Unknown names are skipped and logged; `[]` leaves the bar empty. Each icon's tooltip shows its shortcut from `[keys]`.
+`agents_view` is the view ⌘⇧A shows. `titlebar_buttons` lists the title bar's icons, left to right, from `search`, `new_tab`, `settings` and `sidebar`. Unknown names are skipped and logged; `[]` leaves the bar empty. Each icon's tooltip shows its shortcut from `[keys]`.
 
 `[keys]` sets shortcuts by action name (the generated `config.toml` lists them with their defaults). A plugin's palette command is named `"<plugin id>/<item id>"`, for example `"dev.haunt.tabs/move-up" = "alt+cmd+up"`; a plugin's default key must include cmd and never takes one of Haunt's or a chord the terminal or macOS uses (a chord set here has no such limit), and bound plugin commands appear in the Window menu.
+
+`[ghostty]` is passed through to libghostty, except for what would get a paste past Haunt's paste check or slip in config Haunt never sees. These are dropped and logged: `right-click-action = paste` or `copy-or-paste`, `middle-click-action = clipboard-paste`, any `keybind` to `paste_from_clipboard` or `paste_from_selection`, `config-file`, `config-default-files`, and any key or value with a line break. Haunt also always unbinds Ghostty's ⌘V, ⇧⌘V and Paste key, so every paste goes through its own Edit menu.
+
+## Use
+
+- **Tabs:** ⌘T new, ⌘W close, ⌘1–⌘9 select, ⇧⌘] and ⇧⌘[ next and previous. **Rename Tab** is in the Window menu (no default key; set `rename_tab` in `[keys]`), on a row's right-click menu, or a double-click on its name. An empty name goes back to the automatic one.
+- **Agents view:** ⌘⇧A shrinks the window to a narrow strip of agent rows docked to the right of the screen, with shell tabs counted at the foot. Click a row to get the full window back on that tab, or press ⌘⇧A again. It is remembered across launches.
+- **Paste:** ⌘V pastes the clipboard and ⇧⌘V (Edit ▸ Paste Selection, `paste_selection`) the selection. Haunt shows a paste that carries an escape, another control or a hidden character in full, characters spelled out, and asks first; Ghostty's own paste protection asks before a multi-line one that isn't bracketed.
 
 ## CLI
 
@@ -116,7 +125,12 @@ Each plugin lives in its own repo. `haunt plugin new my-plugin [--dir <path>] [-
 ```sh
 cargo test --workspace                   # hook_e2e skips if the adapter isn't checked out
 ../haunt-plugins/haunt-claude/tests/run.sh
-macos/fidelity.sh        # pixel check against the mockups
+macos/tests/keys.sh      # [keys], [layout], the generated Ghostty config and its refusals
+macos/tests/paste.sh     # the paste preview and what needs confirming
+macos/tests/sidebar.sh   # sidebar drop targets, the agents view's restored frame
+macos/tests/git.sh       # reading .git safely when its contents are hostile
+macos/tests/loginpath.sh # the login-shell PATH lookup
+macos/fidelity.sh        # pixel check against the mockups (HAUNT_INACTIVE=1 for the unfocused window)
 ```
 
 ## Licence
