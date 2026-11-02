@@ -143,10 +143,12 @@ pub struct LoadSpec {
     pub core: Option<CoreHandle>,
 }
 
+/// Written once per export call (`LoadedPlugin::call`) and on drop, not once per `set`.
 struct Kv {
     map: BTreeMap<String, String>,
     bytes: usize,
     path: Option<PathBuf>,
+    dirty: bool,
 }
 
 impl Kv {
@@ -157,7 +159,7 @@ impl Kv {
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
         let bytes = map.iter().map(|(k, v)| k.len() + v.len()).sum();
-        Self { map, bytes, path }
+        Self { map, bytes, path, dirty: false }
     }
 
     fn set(&mut self, key: String, value: String) -> Result<(), String> {
@@ -168,21 +170,30 @@ impl Kv {
         }
         self.map.insert(key, value);
         self.bytes = bytes;
-        self.persist()
-    }
-
-    fn delete(&mut self, key: &str) -> Result<(), String> {
-        if let Some(v) = self.map.remove(key) {
-            self.bytes -= key.len() + v.len();
-            self.persist()?;
-        }
+        self.dirty = true;
         Ok(())
     }
 
-    fn persist(&self) -> Result<(), String> {
-        let Some(path) = &self.path else { return Ok(()) };
+    fn delete(&mut self, key: &str) {
+        if let Some(v) = self.map.remove(key) {
+            self.bytes -= key.len() + v.len();
+            self.dirty = true;
+        }
+    }
+
+    /// A failed write stays dirty and is tried again after the next call.
+    fn flush(&mut self) -> Result<(), String> {
+        let Some(path) = self.path.as_deref().filter(|_| self.dirty) else { return Ok(()) };
         let json = serde_json::to_vec(&self.map).map_err(|e| e.to_string())?;
-        crate::plugin_cache::write_atomic(path, &json).map_err(|e| e.to_string())
+        crate::plugin_cache::write_atomic(path, &json).map_err(|e| e.to_string())?;
+        self.dirty = false;
+        Ok(())
+    }
+}
+
+impl Drop for Kv {
+    fn drop(&mut self) {
+        let _ = self.flush();
     }
 }
 
@@ -326,9 +337,7 @@ impl wkv::Host for HostState {
         self.kv.set(key, value)
     }
     fn delete(&mut self, key: String) {
-        if let Err(e) = self.kv.delete(&key) {
-            self.push_log(format!("error kv delete: {e}"));
-        }
+        self.kv.delete(&key);
     }
 }
 
@@ -568,6 +577,10 @@ impl LoadedPlugin {
         self.store.set_epoch_deadline(CALL_TICKS);
         let (bindings, store) = (&self.bindings, &mut self.store);
         let res = self.epoch.ticking(|| f(bindings, store));
+        let data = self.store.data_mut();
+        if let Err(e) = data.kv.flush() {
+            data.push_log(format!("error kv write: {e}"));
+        }
         res.map_err(|e| {
             let why = if e.downcast_ref::<Trap>() == Some(&Trap::Interrupt) {
                 format!("plugin {} exceeded its {} ms CPU budget and was disabled", self.id(), CALL_TICKS * TICK.as_millis() as u64)
@@ -1112,10 +1125,14 @@ mod tests {
         assert!(kv.set("b".into(), "yy".into()).is_err());
         kv.set("a".into(), "small".into()).unwrap();
         kv.set("b".into(), "yy".into()).unwrap();
-        kv.delete("a").unwrap();
+        kv.delete("a");
+        assert!(!path.exists(), "nothing written before the flush");
+        kv.flush().unwrap();
+        kv.set("c".into(), "z".into()).unwrap();
+        drop(kv);
         let again = Kv::open(Some(path));
         assert_eq!(again.map.get("b").map(String::as_str), Some("yy"));
-        assert_eq!(again.bytes, 3);
+        assert_eq!((again.map.get("c").map(String::as_str), again.bytes), (Some("z"), 5), "dropping flushes");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
