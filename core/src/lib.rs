@@ -25,7 +25,7 @@ pub mod session;
 
 pub use allowlist::AllowSuggestion;
 pub use decisions::Decision;
-pub use event::{AgentEvent, EventKind, ParseError, ToolCall, parse_body, parse_osc};
+pub use event::{Agent, AgentEvent, EventKind, ParseError, ToolCall, parse_body, parse_osc};
 pub use layout::{PendingRequest, Progress, Row, RowKind, SidebarGroup, SidebarSnapshot, Subrow};
 pub use model::{Core, CoreError, Listener, SurfaceEnv};
 pub use session::Outcome;

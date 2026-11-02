@@ -13,6 +13,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::decisions::Decision;
+use crate::event::Agent;
 use crate::session::Outcome;
 
 pub const SUGGEST_AFTER: u32 = 3;
@@ -53,9 +54,9 @@ pub fn rule_for(command: &str) -> Option<String> {
 }
 
 /// Only a click in haunt counts: an `AnsweredInTerminal` outcome rests on hook events, which code
-/// running inside the session can forge with the nonce it inherited.
+/// running inside the session can forge with the nonce it inherited. Only Claude Code reads the rules.
 fn is_approval(d: &Decision) -> bool {
-    d.outcome == Outcome::AllowedInHaunt
+    d.outcome == Outcome::AllowedInHaunt && d.agent == Agent::Claude
 }
 
 /// The command an approval may count for: the raw one, and only if cleaning changed nothing, so
@@ -239,7 +240,7 @@ mod tests {
     }
 
     fn approval(cwd: &str, cmd: &str, outcome: Outcome) -> Decision {
-        Decision { at_ms: 0, surface_id: "s".into(), tool: "Bash".into(), preview: cmd.into(), command: Some(cmd.into()), cwd: Some(cwd.into()), outcome }
+        Decision { at_ms: 0, surface_id: "s".into(), tool: "Bash".into(), preview: cmd.into(), command: Some(cmd.into()), cwd: Some(cwd.into()), outcome, agent: Agent::Claude }
     }
 
     #[test]
@@ -260,6 +261,14 @@ mod tests {
         let s = suggestions(log.iter(), |_| true, |_, _| false);
         assert_eq!(s, [AllowSuggestion { project: "/p".into(), command: "cargo test".into(), rule: "Bash(cargo test)".into(), approvals: 3 }]);
         assert!(suggestions(log.iter(), |_| true, |p, c| p == "/p" && c == "cargo test").is_empty());
+    }
+
+    #[test]
+    fn only_claude_approvals_count() {
+        for agent in [Agent::Codex, Agent::Other { id: "aider".into() }] {
+            let log: Vec<_> = (0..3).map(|_| Decision { agent: agent.clone(), ..approval("/p", "cargo test", Outcome::AllowedInHaunt) }).collect();
+            assert!(suggestions(log.iter(), |_| true, |_, _| false).is_empty(), "{agent:?}");
+        }
     }
 
     #[test]

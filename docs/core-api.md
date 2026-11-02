@@ -1,6 +1,6 @@
 # haunt-core API (Phase 2)
 
-The Swift app talks to the core through one UniFFI object, `HauntCore` (`ffi/src/lib.rs`). The core owns the sidebar view-model: Swift renders `SidebarSnapshot` verbatim and doesn't format text or decide state.
+The Swift app talks to the core through one UniFFI object, `HauntCore` (`ffi/src/lib.rs`). The core owns the sidebar view-model: Swift renders `SidebarSnapshot` verbatim and doesn't format text or decide state. The events adapters send are specified in [agent-events.md](agent-events.md).
 
 ## Object
 
@@ -36,11 +36,12 @@ record Row {
   pending: Option<PendingRequest>
 }
 record PendingRequest { key: u64, tool: string, preview: string, suspicious: bool }
-enum   RowKind { Shell, Claude }
+enum   RowKind { Shell, Claude, Codex }     // an agent without a kind of its own is Claude
 record Progress { done: u64, total: u64 }
 record Subrow { label: string, meta: string }
 
-record Decision { at_ms: u64, surface_id: string, tool: string, preview: string, command: Option<string>, cwd: Option<string>, outcome: Outcome }
+record Decision { at_ms: u64, surface_id: string, tool: string, preview: string, command: Option<string>, cwd: Option<string>, outcome: Outcome, agent: Agent }
+enum   Agent { Claude, Codex, Other { id: string } }   // "claude", "codex" or the id in decisions.jsonl; absent is Claude
 enum   Outcome { AllowedInHaunt, DeniedInHaunt, AllowedByPlugin { plugin_id: string }, DeniedByPlugin { plugin_id: string }, AnsweredInTerminal, Superseded }
 record AllowSuggestion { project: string, command: string, rule: string, approvals: u32 }
 ```
@@ -64,7 +65,7 @@ In Swift, the generated `Progress` struct shadows `Foundation.Progress` inside t
 3. On `PWD` and title changes, and whenever the git branch is known, call `setSurfaceInfo`. On tab selection, call `selectSurface`. When a tab closes, call `unregisterSurface`.
 4. On `GHOSTTY_ACTION_DESKTOP_NOTIFICATION` with title `haunt://cli-agent` or `warp://cli-agent`, call `onOscNotification`. The core ignores other titles, so the UI can pass every notification through and still show the non-agent ones itself.
 5. `changed()` fires on whatever thread made the change. That is often the socket thread. Hop to the main actor, then call `snapshot()`. It is never called while the core holds its lock, so calling back into the core is safe.
-6. Allow/Deny: a row with `pending` has a nonce-verified request. If `pending.suspicious` is set, show the preview with a warning and no Allow/Deny: the command is multi-line or has hidden characters, so it is answered only in the terminal, and `answerPermission` returns `nil` for it. Keep `pending.key` with whatever offers the answer (the button, a notification's `userInfo`) and pass it back: `answerPermission(surfaceId, requestKey, allow)` returns `"1"` (allow) or `"\u{1b}"` (deny) for `ghostty_surface_text`. `1` picks Claude Code's first option, "Yes", wherever the highlight is, where Enter would pick the highlighted one ("Yes, and don't ask again" or "No" if the highlight moved). In a prompt that defaults to No, Claude Code hides the indexes and ignores digits, so `1` does nothing there rather than answering No. It returns them only while that key is still the surface's live request, and consumes the request, so a second call, or a key from a prompt that has since changed, returns `nil`. If it returns `nil`, write nothing.
+6. Allow/Deny: a row with `pending` has a nonce-verified request. If `pending.suspicious` is set, show the preview with a warning and no Allow/Deny: the command is multi-line or has hidden characters, so it is answered only in the terminal, and `answerPermission` returns `nil` for it. Keep `pending.key` with whatever offers the answer (the button, a notification's `userInfo`) and pass it back: `answerPermission(surfaceId, requestKey, allow)` returns the asking agent's keys for `ghostty_surface_text`: `"1"` (allow) or `"\u{1b}"` (deny) for Claude Code, `"y"` or `"\u{1b}"` for Codex (see [agent-events.md](agent-events.md#agent-ids)). An agent haunt has no keys for gets no `pending` at all. For Claude Code, `1` picks Claude Code's first option, "Yes", wherever the highlight is, where Enter would pick the highlighted one ("Yes, and don't ask again" or "No" if the highlight moved). In a prompt that defaults to No, Claude Code hides the indexes and ignores digits, so `1` does nothing there rather than answering No. It returns them only while that key is still the surface's live request, and consumes the request, so a second call, or a key from a prompt that has since changed, returns `nil`. If it returns `nil`, write nothing.
 
 ### UI must call
 
@@ -91,7 +92,7 @@ Requests only exist for verified events, so unverified events never add an entry
 
 ## Allowlist suggestions
 
-Nothing is allowed by default; the core only suggests. After 3 approvals in haunt (`AllowedInHaunt`; `AllowedByPlugin` and `AnsweredInTerminal` never count, see the nonce limit below) of the same Bash command with the same hook cwd, `allow_suggestions()` lists it with the exact rule `Bash(<command>)`, most recently approved first.
+Nothing is allowed by default; the core only suggests, and only for Claude Code, the one agent that reads `.claude/settings.local.json`: decisions of any other agent never count. After 3 approvals in haunt (`AllowedInHaunt`; `AllowedByPlugin` and `AnsweredInTerminal` never count, see the nonce limit below) of the same Bash command with the same hook cwd, `allow_suggestions()` lists it with the exact rule `Bash(<command>)`, most recently approved first.
 
 - Counting uses `Decision.command`, the command exactly as the hook sent it (`ToolCall.raw_command`), not the shown `preview`. An approval counts only if the two are equal, so a command with invisible characters, tabs or newlines (which the preview shows as markers) never counts, and a rule can't allow a variant of what was approved. Log lines without `command` (written before it existed) don't count.
 - Wildcards are never suggested: a command containing `*`, `(` or `)`, anything outside printable ASCII, leading or trailing spaces, or over 1024 bytes gets no suggestion.
@@ -103,7 +104,7 @@ Nothing is allowed by default; the core only suggests. After 3 approvals in haun
 
 Groups, in order: `NEEDS YOU`, `RUNNING`, `IDLE`. Done, failed and shell rows go in `IDLE`. Empty groups are left out. Within a group, the most recent status change comes first. Ties keep tab (registration) order.
 
-| field | shell | Claude |
+| field | shell | agent (Claude, Codex) |
 |---|---|---|
 | `name` | last path component of the cwd (`~` for home) | same, of the agent cwd |
 | `meta` | `~cwd · <shell>`, e.g. `~/code/vibes · zsh` (the basename of `$SHELL`) | `branch · task`; the agent cwd stands in for a missing branch |
@@ -120,7 +121,7 @@ The task part of `meta`:
 - done: `Done in 4m` (`45s`, `4m`, `1h5m`)
 - failed: `Failed`
 
-A surface becomes a Claude row with its first agent event and stays one until it is unregistered. Phase 1 hooks send no session-end event.
+A surface becomes an agent row with its first agent event and stays one until it is unregistered. Its kind follows the `agent` of the latest verified event (`Claude` until one arrives). Phase 1 hooks send no session-end event.
 
 ## Transport and security
 
@@ -130,7 +131,7 @@ A surface becomes a Claude row with its first agent event and stays one until it
 - A leftover socket of ours is replaced. `start` refuses anything else at that path, a socket owned by another uid, and a socket that still accepts connections (`CoreError::Io`: another haunt is running). It also refuses a path longer than `sun_path` allows.
 - Every connection's peer uid (`getpeereid`) must equal ours. At most 32 connections are open at once. Each line must arrive whole within 2 s of the previous one, and a connection is closed after 10 s in total, so a peer trickling bytes can't hold the slots and silence the hooks.
 - Messages are newline-delimited JSON of at most 64 KB. A longer line is discarded, and the stream continues with the next line.
-- Each line is the hook's v1 envelope (`hooks/README.md`) plus `surface_id`. Lines for a surface that isn't registered are dropped before rate limiting, so random ids cost nothing. Each surface is rate-limited to 50 events/s with a burst of 200, separately for verified and unverified lines, so a flood of forged lines for a known surface id can't drop the real ones; extra lines are dropped and counted.
+- Each line is one v1 event ([agent-events.md](agent-events.md)) with `surface_id`. Lines for a surface that isn't registered are dropped before rate limiting, so random ids cost nothing. Each surface is rate-limited to 50 events/s with a burst of 200, separately for verified and unverified lines, so a flood of forged lines for a known surface id can't drop the real ones; extra lines are dropped and counted.
 
 **Nonce gating** (`core/src/session.rs`): an event is *verified* only if it came over the socket and its `nonce` matches that surface's nonce, compared in constant time. Unverified events (wrong or missing nonce, or any OSC 777 event) may change status and progress, but can never create an answerable request. The rules:
 
@@ -139,7 +140,7 @@ A surface becomes a Claude row with its first agent event and stays one until it
 - Each entry into `needs you`, and each `permission_seen`, starts a new generation. A request can be answered only in the generation that created it. So an unverified event that puts the row back into `needs you` (a forged stop and then a forged `permission_prompt`, say) can never revive an old request. A forged `permission_seen` retires the real one, which costs the user the button but never sends an answer to the wrong prompt.
 - `answer_permission` needs the surface to be in `needs you` with a live request at that moment whose key is the one passed in, not `suspicious` and not retired by `on_user_input`, and consumes it.
 
-A request resolves when a verified `tool_ran`, `tool_done` or `tool_failed` matches it. The match is on `tool_use_id` when both sides have one (the id is taken from the matching `tool_start`), otherwise on tool name plus exact command or file path. An event with `truncated: true` never matches. Any change out of `needs you`, or an answer, also clears it.
+A request resolves when a verified `tool_ran`, `tool_done` or `tool_failed` matches it. The match is on `tool_use_id` when both sides have one (the id is taken from the matching `tool_start`), otherwise on tool name plus exact command or file path. An event with `truncated: true` never matches. Any change out of `needs you`, or an answer, also clears it. For an agent other than Claude Code (Codex has no failure hook), a verified tool event from the same thread that isn't the pending call also ends it as `Superseded` (see [agent-events.md](agent-events.md#agent-ids)).
 
 **Invisible characters**: the hook sends `tool_input` strings over the socket unmodified (JSON escapes keep them on one line). Every other decoded string has control characters and Unicode format characters (General_Category Cf: bidi overrides U+202A–202E and U+2066–2069, zero-widths U+200B–200F, U+2060, U+FEFF, soft hyphen, tags and so on) removed, and other whitespace turned into a space.
 
@@ -152,6 +153,8 @@ A request keeps its command or file path exactly as sent. Its `preview` hides no
 ## Plugins (`HauntPlugins`, feature `plugins`)
 
 Installed with `haunt plugin install <path>` (cli/), which shows the capabilities, asks y/N (`--yes` for scripts) and pins sha256 of the wasm and manifest in `~/.haunt/plugins.lock`. A plugin whose files no longer match is not loaded until `haunt plugin approve <id>`.
+
+`haunt plugin new <name> [--dir <path>] [--id <id>]` scaffolds a plugin repo from `cli/template/`, a snapshot of the `haunt-plugin-template` repo embedded in the binary, with `wit/haunt-plugin.wit` from this checkout. The id defaults to `dev.haunt.<name>` and must pass the same reverse-DNS rule as the manifest; it refuses a non-empty folder and runs `git init`. When the template repo changes, copy it over `cli/template/` (without `wit/`); `cli/tests/plugin.rs` builds and installs the scaffold.
 
 | call | what |
 |---|---|

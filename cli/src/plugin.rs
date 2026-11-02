@@ -1,18 +1,25 @@
-//! `haunt plugin …`: install, list, remove, approve. Operates on `~/.haunt` directly.
+//! `haunt plugin …`: new, install, list, remove, approve. Operates on `~/.haunt` directly.
 
 use std::io::{BufRead, IsTerminal, Write};
-use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
+use haunt_core::plugin_manifest::valid_id;
 use haunt_core::plugin_store::{Installed, Prompt, Store, default_home};
 use haunt_core::plugins::PluginHost;
 
 const USAGE: &str = "usage:
+  haunt plugin new <name> [--dir <path>] [--id <reverse-dns id>]
   haunt plugin install <path> [--yes]
   haunt plugin list
   haunt plugin remove <id>
   haunt plugin approve <id> [--yes]";
 
 pub fn run(args: &[String]) -> u8 {
+    if args.first().is_some_and(|a| a == "new") {
+        return finish(new(&args[1..]));
+    }
     let yes = args.iter().any(|a| a == "--yes" || a == "-y");
     let pos: Vec<&str> = args.iter().map(String::as_str).filter(|a| !a.starts_with('-')).collect();
     let res = match pos.as_slice() {
@@ -25,6 +32,10 @@ pub fn run(args: &[String]) -> u8 {
             return 2;
         }
     };
+    finish(res)
+}
+
+fn finish(res: Result<(), String>) -> u8 {
     match res {
         Ok(()) => 0,
         Err(e) => {
@@ -32,6 +43,62 @@ pub fn run(args: &[String]) -> u8 {
             1
         }
     }
+}
+
+/// Snapshot of the haunt-plugin-template repo; the WIT comes from this checkout so it matches the host.
+const TEMPLATE: &[(&str, &str)] = &[
+    (".gitignore", include_str!("../template/.gitignore")),
+    ("Cargo.lock", include_str!("../template/Cargo.lock")),
+    ("Cargo.toml", include_str!("../template/Cargo.toml")),
+    ("LICENSE", include_str!("../template/LICENSE")),
+    ("README.md", include_str!("../template/README.md")),
+    ("build.sh", include_str!("../template/build.sh")),
+    ("haunt-plugin.toml", include_str!("../template/haunt-plugin.toml")),
+    ("rust-toolchain.toml", include_str!("../template/rust-toolchain.toml")),
+    ("src/lib.rs", include_str!("../template/src/lib.rs")),
+    ("tests/manifest.rs", include_str!("../template/tests/manifest.rs")),
+    ("wit/haunt-plugin.wit", include_str!("../../wit/haunt-plugin.wit")),
+];
+
+fn new(args: &[String]) -> Result<(), String> {
+    let (mut name, mut dir, mut id) = (None, None, None);
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--dir" => dir = Some(PathBuf::from(it.next().ok_or(USAGE)?)),
+            "--id" => id = Some(it.next().ok_or(USAGE)?.clone()),
+            s if !s.starts_with('-') && name.is_none() => name = Some(s),
+            _ => return Err(USAGE.into()),
+        }
+    }
+    let name = name.ok_or(USAGE)?;
+    let slug = name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if name.is_empty() || name.starts_with('-') || !slug {
+        return Err(format!("name {name:?} must be lowercase letters, digits and '-'"));
+    }
+    let id = id.unwrap_or_else(|| format!("dev.haunt.{name}"));
+    if !valid_id(&id) {
+        return Err(format!("id {id:?} must be reverse-DNS: lowercase letters, digits and '-', dot separated"));
+    }
+    let dir = dir.unwrap_or_else(|| PathBuf::from(name));
+    if dir.exists() && !dir.read_dir().is_ok_and(|mut d| d.next().is_none()) {
+        return Err(format!("{} is not an empty folder", dir.display()));
+    }
+    let fill = |t: &str| t.replace("{{id}}", &id).replace("{{name}}", name).replace("{{description}}", "A Haunt plugin.");
+    for (path, text) in TEMPLATE {
+        let dest = dir.join(path);
+        let parent = dest.parent().unwrap_or(&dir);
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        std::fs::write(&dest, fill(text)).map_err(|e| format!("{}: {e}", dest.display()))?;
+    }
+    std::fs::set_permissions(dir.join("build.sh"), std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    match Command::new("git").args(["init", "-q"]).current_dir(&dir).status() {
+        Ok(s) if s.success() => {}
+        _ => eprintln!("haunt plugin: git init failed in {}; the files are written", dir.display()),
+    }
+    println!("created {id} in {}", dir.display());
+    println!("next: cd {} && cargo build --release --target wasm32-wasip2 && haunt plugin install .", dir.display());
+    Ok(())
 }
 
 fn open() -> Result<Store, String> {

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run inside a haunt surface: real hook bodies, a burst, a large body and forgeries over $HAUNT_SOCK.
 set -u
-HOOK="$(cd "$(dirname "$0")/.." && pwd)/hooks/scripts/haunt-hook.sh"
+HOOK="${HAUNT_CLAUDE_ADAPTER:-$(cd "$(dirname "$0")/../.." && pwd)/haunt-plugins/haunt-claude}/scripts/haunt-hook.sh"
 TMP=$(mktemp -d)
 base='"session_id":"probe","cwd":"/tmp/probe","hook_event_name":"x"'
 

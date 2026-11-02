@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::event::Agent;
 use crate::session::{Session, Status};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -17,11 +18,13 @@ pub struct SidebarGroup {
     pub rows: Vec<Row>,
 }
 
+/// An agent with no kind of its own shows as `Claude`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 pub enum RowKind {
     Shell,
     Claude,
+    Codex,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -77,7 +80,8 @@ pub struct SurfaceView<'a> {
     pub selected: bool,
 }
 
-/// Groups rows as NEEDS YOU, RUNNING, IDLE (done, failed and shells included); empty groups are left out.
+/// Groups rows as NEEDS YOU, RUNNING, IDLE (done, failed and shells included); empty groups are left out,
+/// and a shells-only group has no label.
 /// `surfaces` come in tab order; within a group the latest status change comes first.
 pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, shell: Option<&str>, now: Instant) -> SidebarSnapshot {
     let mut groups: Vec<SidebarGroup> = [NEEDS_YOU, RUNNING, IDLE].iter().map(|l| SidebarGroup { label: (*l).to_owned(), rows: vec![] }).collect();
@@ -93,6 +97,12 @@ pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, shell: Option<&str
         groups[g].rows.push(row(s, home, shell, now));
     }
     groups.retain(|g| !g.rows.is_empty());
+    // Plain shells aren't agents, so a shells-only group gets no label.
+    for g in &mut groups {
+        if g.rows.iter().all(|r| r.kind == RowKind::Shell) {
+            g.label.clear();
+        }
+    }
     SidebarSnapshot { groups }
 }
 
@@ -145,7 +155,10 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
     let subagents = if active { session.progress.subagents.iter().map(|a| subrow(session, a, now)).collect() } else { vec![] };
     Row {
         surface_id: s.id.to_owned(),
-        kind: RowKind::Claude,
+        kind: match session.agent {
+            Agent::Codex => RowKind::Codex,
+            _ => RowKind::Claude,
+        },
         name,
         meta: join(Some(place), task),
         status_text,
@@ -153,8 +166,10 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
         progress,
         subagents,
         selected: s.selected,
+        // An agent whose answer keys haunt doesn't know gets no Allow/Deny.
         pending: session
             .live_permission()
+            .filter(|p| p.agent.answer_bytes(true).is_some())
             .map(|p| PendingRequest { key: p.key(), tool: p.tool.clone(), preview: p.preview(), suspicious: p.suspicious() }),
     }
 }
@@ -332,7 +347,7 @@ mod tests {
         let views = [SurfaceView { id: "a", cwd: "/Users/me", branch: None, session: &shell, selected: false }];
         let snap = snapshot(&views, HOME, Some("zsh"), t);
         assert_eq!(snap.groups.len(), 1);
-        assert_eq!(snap.groups[0].label, "IDLE");
+        assert_eq!(snap.groups[0].label, "", "shells alone get no IDLE label");
         assert_eq!((snap.groups[0].rows[0].name.as_str(), snap.groups[0].rows[0].meta.as_str()), ("~", "~ · zsh"));
     }
 
@@ -353,6 +368,24 @@ mod tests {
         let views = [SurfaceView { id: "a", cwd: "/srv/app", branch: None, session: &s, selected: false }];
         let row = &snapshot(&views, HOME, Some("zsh"), t).groups[0].rows[0];
         assert_eq!((row.meta.as_str(), row.status_text.as_str()), ("/srv/app · fix the bug", ""));
+    }
+
+    #[test]
+    fn row_kind_follows_the_agent() {
+        let t = Instant::now();
+        let kind = |agent: &str, verified: bool| {
+            let mut s = Session::new(t);
+            let perm = format!(r#"{{"agent":"{agent}","event":"permission_seen","tool_name":"Bash","tool_input":{{"command":"git push"}}}}"#);
+            s.apply(&ev(&perm), verified, t);
+            let views = [SurfaceView { id: "a", cwd: "/w", branch: None, session: &s, selected: false }];
+            let row = snapshot(&views, HOME, None, t).groups[0].rows[0].clone();
+            (row.kind, row.meta, row.pending.is_some())
+        };
+        let approve = "/w · Approve: git push?".to_owned();
+        assert_eq!(kind("codex", true), (RowKind::Codex, approve.clone(), true));
+        assert_eq!(kind("codex", false), (RowKind::Claude, "/w · Waiting for you".into(), false), "unverified keeps the default");
+        assert_eq!(kind("claude", true), (RowKind::Claude, approve.clone(), true));
+        assert_eq!(kind("aider", true), (RowKind::Claude, approve, false), "shown, but answered in the terminal");
     }
 
     #[test]

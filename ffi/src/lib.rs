@@ -18,7 +18,7 @@ pub fn event_name(event: AgentEvent) -> String {
 }
 
 pub use haunt_core::{
-    AllowSuggestion, CoreError, Decision, Outcome, PendingRequest, Progress, Row, RowKind, SidebarGroup, SidebarSnapshot, Subrow,
+    Agent, AllowSuggestion, CoreError, Decision, Outcome, PendingRequest, Progress, Row, RowKind, SidebarGroup, SidebarSnapshot, Subrow,
     SurfaceEnv,
 };
 
