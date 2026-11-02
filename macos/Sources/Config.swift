@@ -113,8 +113,15 @@ final class HauntConfig {
         table.sorted { $0.key < $1.key }.flatMap { k, v in v.strings.filter { refused(k, $0) }.map { (k, $0) } }
     }
 
-    private static func refused(_ key: String, _ value: String) -> Bool {
-        if (key + value).contains(where: \.isNewline) { return true }
+    private static func refused(_ key: String, _ raw: String) -> Bool {
+        if raw.contains(where: \.isNewline) { return true }
+        // Ghostty trims spaces and tabs from both sides and one pair of double quotes from the value
+        // (cli/args.zig), so a key it reads must already be bare, and values are compared as it reads them.
+        guard key.range(of: "^[a-z0-9-]+$", options: .regularExpression) != nil else { return true }
+        let ws = CharacterSet(charactersIn: " \t")
+        var value = raw.trimmingCharacters(in: ws)
+        if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") { value = String(value.dropFirst().dropLast()) }
+        value = value.trimmingCharacters(in: ws).lowercased()
         switch key {
         case "right-click-action": return ["paste", "copy-or-paste"].contains(value)
         case "middle-click-action": return value == "clipboard-paste"

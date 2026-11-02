@@ -125,6 +125,19 @@ check(crlf[""]?["font_size"] == .scalar("13"), "CRLF top-level value")
 check(crlf["keys"]?["palette"] == .scalar("cmd+p"), "CRLF table value")
 check(TOML.parse("a = 1\rb = 2")[""]?["b"] == .scalar("2"), "lone CR line break")
 
+// Ghostty's own reading of a line: spaces, tabs and one pair of double quotes don't get past the refusals.
+for spelling in ["\"right-click-action \" = \"paste\"", "right-click-action = \" paste\"", "right-click-action = '\"paste\"'",
+                 "right-click-action = '\" paste \"'", "right-click-action = PASTE", "\" config-file\" = \"/tmp/x\"",
+                 "\"\\tkeybind\" = \"super+p=paste_from_clipboard\"", "\"middle-click-action\\t\" = clipboard-paste",
+                 "middle-click-action = '\"clipboard-paste\"'", "Config-File = /tmp/x", "\"\" = paste"] {
+    let text = "[ghostty]\n\(spelling)\n"
+    let out = HauntConfig.ghosttyConfig(TOML.parse(text), defaultSize: 11, keys: defaults)
+    check(!out.contains("paste\n") && !out.contains("/tmp/x") && !out.contains("paste_from"), "\(spelling) refused")
+    check(HauntConfig.refusedGhostty(TOML.parse(text)["ghostty"]!).count == 1, "\(spelling) reported")
+}
+check(HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\nright-click-action = \" copy\"\n"), defaultSize: 11, keys: defaults)
+      .contains("right-click-action =  copy\n"), "a quoted, spaced safe value still passes")
+
 // A right-click paste would bypass Haunt's paste checks.
 let rc = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\nright-click-action = copy-or-paste\ncursor-style = bar\n"), defaultSize: 11, keys: defaults)
 check(!rc.contains("right-click-action"), "right-click paste refused")
