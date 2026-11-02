@@ -9,6 +9,8 @@ final class HauntConfig {
     var tomlURL: URL { dir.appendingPathComponent("config.toml") }
     var ghosttyURL: URL { dir.appendingPathComponent("ghostty.generated.conf") }
     private(set) var keys = KeyMap.defaults
+    /// The loaded plugins' commands that come with a key, as "<plugin id>/<item id>": default key; set before `reload`.
+    var pluginKeyDefaults: [String: String] = [:]
     private(set) var agentsView = AgentsViewStyle.narrowList
     private(set) var titlebarButtons = TitlebarButton.defaults
 
@@ -33,7 +35,9 @@ final class HauntConfig {
         let text = useUserConfig ? (try? String(contentsOf: tomlURL, encoding: .utf8)) ?? "" : ""
         let toml = TOML.parse(text)
         var problems: [String] = []
-        let newKeys = KeyMap(table: toml["keys"] ?? [:], order: TOML.keyOrder(text, table: "keys")) { problems.append($0) }
+        let newKeys = KeyMap(table: toml["keys"] ?? [:], order: TOML.keyOrder(text, table: "keys"), pluginDefaults: pluginKeyDefaults) {
+            problems.append($0)
+        }
         problems += Self.refusedGhostty(toml["ghostty"] ?? [:]).map { "[ghostty] \($0.key) = \($0.value): not allowed, ignored" }
         // One save can fire several events; each problem is logged once per edit.
         if problems != lastKeyProblems {
@@ -86,6 +90,7 @@ final class HauntConfig {
         // haunt owns tabs and windows, and its shortcuts must reach the menu instead of Ghostty.
         var unbind: [String] = (["t", "w", "n", "d", "shift+d"] + (1...9).flatMap { ["digit_\($0)", "\($0)"] }).map { "super+" + $0 }
         for a in KeyMap.Action.allCases { unbind += keys[a]?.ghosttyTriggers ?? [] }
+        for (_, s) in keys.plugin.sorted(by: { $0.key < $1.key }) { unbind += s.ghosttyTriggers }
         var seen = Set<String>()
         lines += unbind.filter { seen.insert($0).inserted }.map { "keybind = \($0)=unbind" }
         let refused = Set(refusedGhostty(toml["ghostty"] ?? [:]).map { "\($0.key) = \($0.value)" })

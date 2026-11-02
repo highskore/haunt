@@ -244,6 +244,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             self?.refresh()
         }
         root.sidebar.onRenameEnd = { [weak self] in self?.focusSelectedSurface() }
+        root.sidebar.rowMenu = { [weak self] id in self?.plugins?.rowMenuItems(surfaceId: id) ?? [] }
+        root.sidebar.onRowMenu = { [weak self] item, id in self?.invokeRowMenuItem(item, surfaceId: id) }
+        root.sidebar.onRowMoved = { [weak self] id, group, before in
+            self?.plugins?.rowMoved(surfaceId: id, groupId: group, beforeSurfaceId: before)
+        }
         core.setListener(listener: listener)
 
         let nc = NotificationCenter.default
@@ -799,6 +804,16 @@ extension MainWindowController: PaletteHost {
             try plugins?.invokePaletteItem(pluginId: pluginId, itemId: itemId)
         } catch {
             AppDelegate.logger.error("plugin \(pluginId, privacy: .public) item \(itemId, privacy: .public): \(String(describing: error), privacy: .public)")
+            NSSound.beep()
+        }
+        drainPluginRequests()
+    }
+
+    func invokeRowMenuItem(_ item: RowMenuItem, surfaceId: String) {
+        do {
+            try plugins?.invokeRowMenuItem(pluginId: item.pluginId, itemId: item.id, surfaceId: surfaceId)
+        } catch {
+            AppDelegate.logger.error("plugin \(item.pluginId, privacy: .public) row item \(item.id, privacy: .public): \(String(describing: error), privacy: .public)")
             NSSound.beep()
         }
         drainPluginRequests()

@@ -21,6 +21,9 @@ protocol PluginsAPI: AnyObject {
     func paletteItems(mode: String?, query: String) -> [PaletteItem]
     func invokePaletteItem(pluginId: String, itemId: String) throws
     func takeRequests() -> [HostRequest]
+    func rowMenuItems(surfaceId: String) -> [RowMenuItem]
+    func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws
+    func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?)
 }
 
 #if HAUNT_REAL_CORE
@@ -82,6 +85,9 @@ final class NoPlugins: PluginsAPI {
     func paletteItems(mode: String?, query: String) -> [PaletteItem] { [] }
     func invokePaletteItem(pluginId: String, itemId: String) throws {}
     func takeRequests() -> [HostRequest] { [] }
+    func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
+    func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
+    func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?) {}
 }
 
 /// The decision-log plugin's `log` mode over the fixture's decisions, worded as the plugin words them.
@@ -96,6 +102,9 @@ final class FixturePlugins: PluginsAPI {
     func loadErrors() -> [String] { [] }
     func invokePaletteItem(pluginId: String, itemId: String) throws {}
     func takeRequests() -> [HostRequest] { [] }
+    func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
+    func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
+    func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?) {}
 
     func paletteItems(mode: String?, query: String) -> [PaletteItem] {
         guard let mode else {
@@ -243,6 +252,14 @@ struct PaletteItem: Equatable, Hashable {
     var atMs: UInt64?
     var mark: Mark?
     var surfaceId: String?
+}
+
+struct RowMenuItem: Equatable, Hashable {
+    var pluginId: String
+    var id: String
+    var title: String
+    var checked: Bool
+    var parent: String?
 }
 
 enum Mark: Equatable, Hashable {
