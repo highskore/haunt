@@ -587,10 +587,20 @@ pub fn attach(core: &crate::Core, set: &Arc<Mutex<PluginSet>>) {
     core.set_event_tap(Some(Arc::new(move |event, verified| {
         let Some(set) = weak.upgrade() else { return false };
         let mut set = crate::sync::lock(&set);
-        let before = set.pending_requests();
         set.on_event(event, verified);
-        set.pending_requests() > before
+        // Any left, not just new ones: a drain that found the set busy took none.
+        set.pending_requests() > 0
     })));
+}
+
+/// `take_requests` without waiting: empty while a plugin is handling an event, whose tap then
+/// signals again (see `attach`). The UI thread drains with this, so a slow plugin never stalls it.
+pub fn take_requests_now(set: &Mutex<PluginSet>) -> Vec<HostRequest> {
+    match set.try_lock() {
+        Ok(mut s) => s.take_requests(),
+        Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner().take_requests(),
+        Err(std::sync::TryLockError::WouldBlock) => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -600,6 +610,25 @@ mod tests {
 
     fn tempdir(tag: &str) -> TempDir {
         TempDir::created(&format!("store-{tag}"))
+    }
+
+    #[test]
+    fn draining_never_waits_for_a_busy_set() {
+        let set = Arc::new(Mutex::new(PluginSet { plugins: Vec::new(), errors: Vec::new() }));
+        let (held, release) = (std::sync::mpsc::channel(), std::sync::mpsc::channel::<()>());
+        let s = set.clone();
+        let th = std::thread::spawn(move || {
+            let _busy = s.lock().unwrap();
+            held.0.send(()).unwrap();
+            let _ = release.1.recv();
+        });
+        held.1.recv().unwrap();
+        let t = std::time::Instant::now();
+        assert!(take_requests_now(&set).is_empty());
+        assert!(t.elapsed() < std::time::Duration::from_millis(100));
+        release.0.send(()).unwrap();
+        th.join().unwrap();
+        assert!(take_requests_now(&set).is_empty(), "free again");
     }
 
     fn src(dir: &Path, caps: &str) -> PathBuf {

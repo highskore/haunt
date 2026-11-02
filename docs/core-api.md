@@ -10,7 +10,7 @@ object HauntCore {
   fn start() -> Result<(), CoreError>             // binds sock and ctl, opens decisions.jsonl; a second call is a no-op
   fn register_surface(cwd: string) -> Result<SurfaceEnv, CoreError>   // Invalid past 512 surfaces
   fn unregister_surface(surface_id: string)
-  fn set_surface_info(surface_id: string, title: string, cwd: string, git_branch: Option<string>)   // git_branch is ignored
+  fn set_surface_info(surface_id: string, title: string, cwd: string, git_branch: Option<string>)   // title and git_branch are ignored
   fn select_surface(surface_id: string)           // marks Row.selected
   fn on_osc_notification(surface_id: string, title: string, body: string)
   fn snapshot() -> SidebarSnapshot
@@ -117,7 +117,7 @@ Groups, in order: `NEEDS YOU`, `RUNNING`, `IDLE`. Done, failed and shell rows go
 | `name` | last path component of the cwd (`~` for home) | same, of the agent cwd |
 | `meta` | `~cwd · <shell>`, e.g. `~/code/vibes · zsh` (the basename of `$SHELL`) | `branch · task`; the agent cwd stands in for a missing branch |
 
-The agent cwd is the latest verified hook event's `cwd`, falling back to the surface cwd from `setSurfaceInfo`. A Claude launched as the surface's command never changes the shell's `PWD`, so the hook is the only place its cwd shows up. The core reads every branch itself, from `.git/HEAD` above the cwd: the surface cwd's on each `set_surface_info`, and the agent cwd's on every verified event, so a checkout inside the session shows up. The lookups run outside the state lock and are cached per surface by cwd and HEAD (inode, size, mtime), so an unchanged HEAD costs one `lstat`. `git_branch` is ignored and will be dropped from the API once the app stops passing it.
+The agent cwd is the latest verified hook event's `cwd`, falling back to the surface cwd from `setSurfaceInfo`. A Claude launched as the surface's command never changes the shell's `PWD`, so the hook is the only place its cwd shows up. The core reads every branch itself, from `.git/HEAD` above the cwd: the surface cwd's on each `set_surface_info`, and the agent cwd's on every verified event, so a checkout inside the session shows up. The lookups run outside the state lock and are cached per surface by cwd and HEAD (inode, size, mtime), so an unchanged HEAD costs one `lstat`. `title` and `git_branch` are ignored; they stay in the signature so the app's call needs no change.
 | `status_text` | empty | `needs you`, `3/5` (running with progress), empty (running without progress), `done`, `failed`, empty (idle) |
 | `progress` | none | `done/total` of the main agent's tasks, else of its latest TodoWrite |
 | `subagents` | none | while running or needing you: `label` = `Explore · trace hooks`, `meta` = `2/4 · 1m12s` or `14 tools · 48s` |
@@ -199,7 +199,7 @@ Installed with `haunt plugin install <path>` (cli/), which shows the capabilitie
 | `paletteItems(mode: nil, query:)` | registered commands and modes (`isMode`), title-filtered by `query` |
 | `paletteItems(mode: "word", query:)` | the items that mode's plugin returns for `query`, each with optional `atMs` (time column), `mark` (`open`, `filled`, `round`) and `surfaceId` (Enter jumps to that tab, if it is open, instead of invoking the item) |
 | `invokePaletteItem(pluginId:itemId:)` | calls the plugin's `on-action(itemId, "")` |
-| `takeRequests()` | `HostRequest.notify` / `.ptyAnswer` queued by plugins. Drain it on every listener call: a request a plugin queues while handling an event counts as a change, so the listener fires (and the version moves) for it even when the event changed nothing else. |
+| `takeRequests()` | `HostRequest.notify` / `.ptyAnswer` queued by plugins. Drain it on every listener call. After each event a plugin handles, the listener fires again while any request is waiting, whether or not the event changed anything and without waiting for a snapshot (the version does not move for it). It never blocks: while a plugin is busy with an event it returns none, and the listener fires again once that event is done. |
 | `rowMenuItems(surfaceId:)` | every plugin's entries for that row's context menu, built when it opens: `RowMenuItem { pluginId, id, title, checked, parent }`. An entry whose `parent` is another entry's id goes in that entry's submenu (one level). |
 | `invokeRowMenuItem(pluginId:itemId:surfaceId:)` | calls the plugin's `on-action(itemId, surfaceId)` |
 | `rowMoved(surfaceId:groupId:beforeSurfaceId:)` | a sidebar drag ended: the row was dropped into the `SidebarGroup.id` `groupId`, above `beforeSurfaceId` (`nil`: at the end). It goes to plugins granted `sidebar`, whose new arrangement then fires `changed()`. Don't offer drops into `needs-you`; they are ignored. |

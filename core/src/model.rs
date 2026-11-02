@@ -68,7 +68,7 @@ pub struct SurfaceEnv {
 
 pub type Listener = Arc<dyn Fn() + Send + Sync>;
 /// Sees every event for a registered surface, with whether it was verified; called outside the lock.
-/// Returns whether it queued host requests, so the UI is told to drain them.
+/// Returns whether host requests are waiting, so the UI is told to drain them.
 pub type EventTap = Arc<dyn Fn(&AgentEvent, bool) -> bool + Send + Sync>;
 
 struct Surface {
@@ -301,10 +301,14 @@ impl Offload {
     }
 }
 
-/// The listener fired after a delivery comes before the tap runs, and may not fire at all for an
-/// event that changed nothing, so new plugin requests count as a change of their own.
+/// Plugin requests are waiting. The listener fired for the delivery came before the tap ran, or
+/// never fired (nothing changed, or it is waiting for a snapshot), and a waiting request may be all
+/// that unblocks the agent, so this fires it whatever `notified` says.
 fn requests_queued(state: &Mutex<State>) {
-    update_state(state, |_, _| true);
+    let listener = lock(state).listener.clone();
+    if let Some(l) = listener {
+        l();
+    }
 }
 
 /// A thread running `f` on each job sent, until every sender is gone.
@@ -479,8 +483,8 @@ impl Core {
         });
     }
 
-    /// `title` is accepted for the contract; rows are named after the cwd. The core reads the
-    /// branch at `cwd` itself, outside its lock, so `_git_branch` is ignored (to be dropped from the API).
+    /// `_title` and `_git_branch` are ignored, kept so the app's call needs no change: rows are named
+    /// after the cwd, and the core reads the branch at `cwd` itself, outside every lock.
     pub fn set_surface_info(&self, surface_id: &str, _title: &str, cwd: &str, _git_branch: Option<String>) {
         if !lock(&self.state).surfaces.iter().any(|s| s.id == surface_id) {
             return;
@@ -1058,7 +1062,7 @@ mod tests {
     }
 
     #[test]
-    fn requests_a_plugin_queues_wake_the_ui_even_when_nothing_else_changed() {
+    fn waiting_plugin_requests_always_wake_the_ui() {
         let c = core();
         let env = c.register_surface("/w").unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1078,7 +1082,7 @@ mod tests {
         };
         send();
         rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        let version = c.snapshot().version;
+        // No snapshot from here on, so the listener stays spent for state changes.
         let osc = || c.on_osc_notification(&env.surface_id, "haunt://cli-agent", r#"{"v":1,"event":"session_start"}"#);
 
         queue.store(false, Ordering::SeqCst);
@@ -1089,11 +1093,12 @@ mod tests {
         queue.store(true, Ordering::SeqCst);
         send();
         rx.recv_timeout(Duration::from_secs(1)).expect("the tap's request wakes the UI");
-        let snap = c.snapshot_if_newer(version).expect("and a newer snapshot re-arms the listener");
+        queue.store(true, Ordering::SeqCst);
+        send();
+        rx.recv_timeout(Duration::from_secs(1)).expect("every time, without a snapshot in between");
         queue.store(true, Ordering::SeqCst);
         osc();
         rx.recv_timeout(Duration::from_secs(1)).expect("so does one queued for an OSC event");
-        assert!(c.snapshot_if_newer(snap.version).is_some());
     }
 
     #[test]
