@@ -142,6 +142,29 @@ final class HauntConfig {
         try? data.write(to: stateURL, options: .atomic)
     }
 
+    /// state.json as read at launch, with the app's own changes since.
+    private(set) lazy var state = loadState()
+    private var stateDirty = false
+
+    /// Changes the app's keys in memory; they are written a second later or at quit, whichever comes first.
+    func updateState(_ change: (inout State) -> Void) {
+        change(&state)
+        guard !stateDirty else { return }
+        stateDirty = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.flushState() }
+    }
+
+    /// Merges into the file rather than overwriting it, so `agents` from a `haunt setup` run meanwhile survives.
+    func flushState() {
+        guard stateDirty else { return }
+        stateDirty = false
+        var file = loadState()
+        file.sidebarHidden = state.sidebarHidden
+        file.agentsView = state.agentsView
+        state.agents = file.agents
+        saveState(file)
+    }
+
     /// Calls `onChange` on the main queue after config.toml changes. The directory catches atomic saves,
     /// which replace the file; the file itself catches editors that write in place.
     func watch(_ onChange: @escaping (_ ghostty: Bool, _ keys: Bool, _ layout: Bool) -> Void) {

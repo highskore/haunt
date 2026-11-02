@@ -172,6 +172,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    func applicationWillTerminate(_ notification: Notification) { config.flushState() }
+
     // MARK: Menu actions
 
     @objc func newTab(_ sender: Any?) { controller?.newTab() }

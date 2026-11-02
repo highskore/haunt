@@ -231,8 +231,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             }
         }
         // Fixtures neither read nor overwrite the user's saved state.
-        root.sidebarHidden = fixture?.sidebarHidden ?? config.loadState().sidebarHidden
-        agentsViewAtLaunch = fixture?.agentsView ?? config.loadState().agentsView
+        root.sidebarHidden = fixture?.sidebarHidden ?? config.state.sidebarHidden
+        agentsViewAtLaunch = fixture?.agentsView ?? config.state.agentsView
         updateKeys(config.keys)
         root.titleBar.buttons = fixture?.titlebarButtons ?? config.titlebarButtons
         root.sidebar.onSelect = { [weak self] id in self?.select(id) }
@@ -591,11 +591,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         root.sidebarHidden.toggle()
         onSidebarToggle?()
         root.layoutSubtreeIfNeeded()
-        if fixture == nil {
-            var state = config.loadState()
-            state.sidebarHidden = root.sidebarHidden
-            config.saveState(state)
-        }
+        if fixture == nil { config.updateState { $0.sidebarHidden = root.sidebarHidden } }
     }
 
     /// The zen hint and anything else that shows a shortcut follow the `[keys]` table.
@@ -704,11 +700,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     func toggleAgentsView() {
         setAgentsView(!root.agentsOn, animate: true)
-        if fixture == nil {
-            var state = config.loadState()
-            state.agentsView = root.agentsOn
-            config.saveState(state)
-        }
+        if fixture == nil { config.updateState { $0.agentsView = root.agentsOn } }
     }
 
     /// A row click: the full window comes back on that tab.

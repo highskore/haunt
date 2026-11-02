@@ -92,6 +92,19 @@ st.agentsView = true
 let round = try! JSONDecoder().decode(HauntConfig.State.self, from: JSONEncoder().encode(st))
 check(round.agentsView && !round.sidebarHidden, "agents_view round-trips")
 check(String(data: try! JSONEncoder().encode(st), encoding: .utf8)!.contains("\"agents_view\":true"), "stored as agents_view")
+// The app's state is read once and merged on save, so agents written by `haunt setup` meanwhile survive.
+let stateDir = FileManager.default.temporaryDirectory.appendingPathComponent("haunt-state-\(getpid())")
+try! FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+let sc = HauntConfig(dir: stateDir)
+check(!sc.state.sidebarHidden && sc.state.agents == nil, "missing state.json reads as defaults")
+sc.updateState { $0.sidebarHidden = true }
+check(!FileManager.default.fileExists(atPath: sc.stateURL.path), "state is not written on every change")
+try! Data(#"{"agents":["codex"]}"#.utf8).write(to: sc.stateURL)
+sc.flushState()
+let merged = HauntConfig(dir: stateDir).loadState()
+check(merged.sidebarHidden && merged.agents == ["codex"], "flush merges the app's keys into the file")
+check(sc.state.agents == ["codex"], "flush picks up the file's agents")
+try? FileManager.default.removeItem(at: stateDir)
 // Shifted digits and punctuation match as the shifted character; delete is forward delete.
 check(Shortcut.parse("cmd+shift+1")?.keyEquivalent == "!", "cmd+shift+1 matches as !")
 check(Shortcut.parse("cmd+shift+comma")?.keyEquivalent == "<", "cmd+shift+comma matches as <")
