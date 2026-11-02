@@ -80,6 +80,12 @@ impl HauntCore {
         self.core.set_listener(std::sync::Arc::new(move || listener.changed()));
     }
 
+    /// True while a verified permission prompt may be on the surface's screen; only verified
+    /// events clear it, so gate anything that types into the surface on this, not `needs_you`.
+    pub fn has_unresolved(&self, surface_id: String) -> bool {
+        self.core.has_unresolved(&surface_id)
+    }
+
     pub fn answer_permission(&self, surface_id: String, request_key: u64, allow: bool) -> Option<Vec<u8>> {
         self.core.answer_permission(&surface_id, request_key, allow)
     }

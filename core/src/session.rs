@@ -327,6 +327,12 @@ impl Session {
         }
     }
 
+    /// A verified request may be on screen: one is pending, even if typing took it over, or one
+    /// ended without its call being seen. Only verified events (or closing) clear this.
+    pub fn has_unresolved(&self) -> bool {
+        self.permission.is_some() || self.overflowed || !self.unresolved.is_empty()
+    }
+
     /// The live request may be shown but not answered from haunt: it is suspicious, or another
     /// verified request may still be on screen ahead of it.
     pub fn terminal_only(&self, p: &Permission) -> bool {
@@ -645,6 +651,25 @@ mod tests {
             assert!(p.preview().contains(&format!("\\u{{{:x}}}", c as u32)));
             assert!(!s.answer(p.key(), true, now));
         }
+    }
+
+    #[test]
+    fn only_verified_events_clear_has_unresolved() {
+        let (mut s, now) = running();
+        assert!(!s.has_unresolved());
+        s.apply(&ev(START_T1), true, now);
+        s.apply(&ev(PERM), true, now);
+        assert!(s.has_unresolved());
+        for forged in [r#"{"event":"stop"}"#, r#"{"event":"prompt_submit","query":"x"}"#, r#"{"event":"stop_failure"}"#, RAN_T1] {
+            s.apply(&ev(forged), false, now);
+            assert!(s.has_unresolved(), "{forged}");
+        }
+        assert_ne!(s.status, Status::NeedsYou, "the row no longer says needs you");
+        s.user_input();
+        s.apply(&ev(r#"{"event":"prompt_submit","query":"x"}"#), false, now);
+        assert!(s.has_unresolved(), "a forged new turn after typing clears nothing");
+        s.apply(&ev(RAN_T1), true, now);
+        assert!(!s.has_unresolved(), "its call ran");
     }
 
     #[test]
