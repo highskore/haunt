@@ -43,7 +43,7 @@ struct Shortcut: Equatable, Hashable {
             "space": (" ", "space", "Space"),
             "escape": ("\u{1b}", "escape", "⎋"), "esc": ("\u{1b}", "escape", "⎋"),
             "backspace": ("\u{8}", "backspace", "⌫"),
-            "delete": ("\u{7f}", "delete", "⌦"),
+            "delete": (fn(NSDeleteFunctionKey), "delete", "⌦"),
             "up": (fn(NSUpArrowFunctionKey), "arrow_up", "↑"),
             "down": (fn(NSDownArrowFunctionKey), "arrow_down", "↓"),
             "left": (fn(NSLeftArrowFunctionKey), "arrow_left", "←"),
@@ -128,7 +128,7 @@ struct KeyMap: Equatable {
         case selectTab4 = "select_tab_4", selectTab5 = "select_tab_5", selectTab6 = "select_tab_6"
         case selectTab7 = "select_tab_7", selectTab8 = "select_tab_8", selectTab9 = "select_tab_9"
         case nextTab = "next_tab"
-        case previousTab = "previous_tab"
+        case previousTab = "prev_tab"
         case renameTab = "rename_tab"
         case palette
         case toggleSidebar = "toggle_sidebar"
@@ -179,10 +179,13 @@ struct KeyMap: Equatable {
 
     static let defaults = KeyMap(table: [:], log: { _ in })
 
-    /// Invalid, unknown or clashing entries are dropped through `log`, never thrown.
-    init(table: [String: TOML.Value], log: (String) -> Void) {
+    /// Invalid, unknown or clashing entries are dropped through `log`, never thrown. `order` is the
+    /// table's keys as written, so of two entries with one chord the earlier wins.
+    init(table: [String: TOML.Value], order: [String] = [], log: (String) -> Void) {
         var configured: [Action: Shortcut] = [:]
-        for (name, value) in table.sorted(by: { $0.key < $1.key }) {
+        let names = order.filter { table[$0] != nil } + table.keys.filter { !order.contains($0) }.sorted()
+        for name in names {
+            let value = table[name]!
             guard let action = Action(rawValue: name) else {
                 log("[keys] \(name): unknown action, ignored")
                 continue

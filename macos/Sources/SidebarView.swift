@@ -320,7 +320,8 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         guard let (row, top) = row(at: p) else { return }
-        if closeRect(top: top).insetBy(dx: -4, dy: -4).contains(p) {
+        // Only where the × is drawn: on the hovered row.
+        if row.surfaceId == hoverId, closeRect(top: top).insetBy(dx: -4, dy: -4).contains(p) {
             onClose?(row.surfaceId)
         } else if event.clickCount == 2, nameRect(top: top).contains(p) {
             beginRename(row.surfaceId)

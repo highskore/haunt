@@ -84,6 +84,32 @@ st.agentsView = true
 let round = try! JSONDecoder().decode(HauntConfig.State.self, from: JSONEncoder().encode(st))
 check(round.agentsView && !round.sidebarHidden, "agents_view round-trips")
 check(String(data: try! JSONEncoder().encode(st), encoding: .utf8)!.contains("\"agents_view\":true"), "stored as agents_view")
+// Shifted digits and punctuation match as the shifted character; delete is forward delete.
+check(Shortcut.parse("cmd+shift+1")?.keyEquivalent == "!", "cmd+shift+1 matches as !")
+check(Shortcut.parse("cmd+shift+comma")?.keyEquivalent == "<", "cmd+shift+comma matches as <")
+check(Shortcut.parse("cmd+delete")?.keyEquivalent == String(UnicodeScalar(UInt16(NSDeleteFunctionKey))!), "delete is forward delete")
+check(Shortcut.parse("cmd+backspace")?.keyEquivalent == "\u{8}", "backspace")
+
+// Of two entries with one chord, the one written first wins, whatever the names.
+let clashText = "[keys]\nsettings = \"cmd+j\"\nclose_tab = \"cmd+j\"\n"
+var clashLogs: [String] = []
+let clash = KeyMap(table: TOML.parse(clashText)["keys"] ?? [:], order: TOML.keyOrder(clashText, table: "keys")) { clashLogs.append($0) }
+check(clash[.settings] == Shortcut.parse("cmd+j"), "first written wins")
+check(clash[.closeTab] == Shortcut.parse("cmd+w"), "later clash keeps its default")
+check(TOML.keyOrder(clashText, table: "keys") == ["settings", "close_tab"], "key order")
+
+// CRLF files parse like LF ones.
+let crlf = TOML.parse("font_size = 13\r\n[keys]\r\npalette = \"cmd+p\"\r\n")
+check(crlf[""]?["font_size"] == .scalar("13"), "CRLF top-level value")
+check(crlf["keys"]?["palette"] == .scalar("cmd+p"), "CRLF table value")
+check(TOML.parse("a = 1\rb = 2")[""]?["b"] == .scalar("2"), "lone CR line break")
+
+// A right-click paste would bypass Haunt's paste checks.
+let rc = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\nright-click-action = copy-or-paste\ncursor-style = bar\n"), defaultSize: 11, keys: defaults)
+check(!rc.contains("right-click-action"), "right-click paste refused")
+check(rc.contains("cursor-style = bar\n"), "other passthrough kept")
+let rcOK = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\nright-click-action = copy\n"), defaultSize: 11, keys: defaults)
+check(rcOK.contains("right-click-action = copy\n"), "right-click copy allowed")
 
 print(failures == 0 ? "keys: all passed" : "keys: \(failures) failed")
 exit(failures == 0 ? 0 : 1)
