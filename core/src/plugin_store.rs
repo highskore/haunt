@@ -564,6 +564,10 @@ impl PluginSet {
         out
     }
 
+    fn pending_requests(&self) -> usize {
+        self.plugins.iter().map(|(_, p)| p.pending_requests()).sum()
+    }
+
     pub fn take_requests(&mut self) -> Vec<HostRequest> {
         self.plugins.iter_mut().flat_map(|(_, p)| p.take_requests()).collect()
     }
@@ -581,9 +585,11 @@ impl PluginSet {
 pub fn attach(core: &crate::Core, set: &Arc<Mutex<PluginSet>>) {
     let weak = Arc::downgrade(set);
     core.set_event_tap(Some(Arc::new(move |event, verified| {
-        if let Some(set) = weak.upgrade() {
-            crate::sync::lock(&set).on_event(event, verified);
-        }
+        let Some(set) = weak.upgrade() else { return false };
+        let mut set = crate::sync::lock(&set);
+        let before = set.pending_requests();
+        set.on_event(event, verified);
+        set.pending_requests() > before
     })));
 }
 

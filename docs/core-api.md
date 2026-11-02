@@ -199,7 +199,7 @@ Installed with `haunt plugin install <path>` (cli/), which shows the capabilitie
 | `paletteItems(mode: nil, query:)` | registered commands and modes (`isMode`), title-filtered by `query` |
 | `paletteItems(mode: "word", query:)` | the items that mode's plugin returns for `query`, each with optional `atMs` (time column), `mark` (`open`, `filled`, `round`) and `surfaceId` (Enter jumps to that tab, if it is open, instead of invoking the item) |
 | `invokePaletteItem(pluginId:itemId:)` | calls the plugin's `on-action(itemId, "")` |
-| `takeRequests()` | `HostRequest.notify` / `.ptyAnswer` queued by plugins |
+| `takeRequests()` | `HostRequest.notify` / `.ptyAnswer` queued by plugins. Drain it on every listener call: a request a plugin queues while handling an event counts as a change, so the listener fires (and the version moves) for it even when the event changed nothing else. |
 | `rowMenuItems(surfaceId:)` | every plugin's entries for that row's context menu, built when it opens: `RowMenuItem { pluginId, id, title, checked, parent }`. An entry whose `parent` is another entry's id goes in that entry's submenu (one level). |
 | `invokeRowMenuItem(pluginId:itemId:surfaceId:)` | calls the plugin's `on-action(itemId, surfaceId)` |
 | `rowMoved(surfaceId:groupId:beforeSurfaceId:)` | a sidebar drag ended: the row was dropped into the `SidebarGroup.id` `groupId`, above `beforeSurfaceId` (`nil`: at the end). It goes to plugins granted `sidebar`, whose new arrangement then fires `changed()`. Don't offer drops into `needs-you`; they are ignored. |
