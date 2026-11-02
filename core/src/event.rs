@@ -176,9 +176,18 @@ pub fn clean(s: &str) -> String {
 }
 
 /// Characters a terminal shows as nothing or as layout: anything but a plain space that is a
-/// control, a format (Cf) character or whitespace.
+/// control, a format (Cf) character, whitespace (Zl and Zp included) or default-ignorable.
 pub fn is_hidden(c: char) -> bool {
-    c != ' ' && (c.is_control() || is_format(c) || c.is_whitespace())
+    c != ' ' && (c.is_control() || is_format(c) || c.is_whitespace() || is_default_ignorable(c))
+}
+
+/// Unicode Default_Ignorable_Code_Point (Unicode 16): fonts draw these as nothing, so `ls` and
+/// `l\u{115F}s` look the same.
+pub fn is_default_ignorable(c: char) -> bool {
+    matches!(c as u32,
+        0xAD | 0x34F | 0x61C | 0x115F..=0x1160 | 0x17B4..=0x17B5 | 0x180B..=0x180F
+        | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x206F | 0x3164 | 0xFE00..=0xFE0F | 0xFEFF
+        | 0xFFA0 | 0xFFF0..=0xFFF8 | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0000..=0xE0FFF)
 }
 
 /// `s` with nothing hidden: a newline shows as ⏎, a tab as ⇥, and every other hidden character
@@ -370,6 +379,17 @@ mod tests {
         assert_eq!(visible("a\tb\r\x1b[2J\u{202e}c\u{200b}\u{a0}d"), "a⇥b\\u{d}\\u{1b}[2J\\u{202e}c\\u{200b}\\u{a0}d");
         assert_eq!(visible("git push -- 'é 👻'"), "git push -- 'é 👻'");
         assert!(!"git push".chars().any(is_hidden));
+    }
+
+    #[test]
+    fn default_ignorable_and_separator_characters_are_hidden() {
+        for c in ['\u{2028}', '\u{2029}', '\u{115F}', '\u{1160}', '\u{3164}', '\u{FFA0}', '\u{FE00}', '\u{FE0F}', '\u{E0100}', '\u{E01EF}', '\u{34F}', '\u{17B4}', '\u{180B}', '\u{FFF0}', '\u{E0FFF}'] {
+            assert!(is_hidden(c), "{:x}", c as u32);
+            assert_eq!(visible(&format!("l{c}s")), format!("l\\u{{{:x}}}s", c as u32));
+        }
+        for c in ['a', 'é', '한', '\u{1100}', '\u{3165}', '\u{FFA1}', '\u{E1000}', '👻'] {
+            assert!(!is_hidden(c), "{:x}", c as u32);
+        }
     }
 
     #[test]
