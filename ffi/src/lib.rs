@@ -18,8 +18,8 @@ pub fn event_name(event: AgentEvent) -> String {
 }
 
 pub use haunt_core::{
-    Agent, AllowSuggestion, CoreError, Decision, Outcome, PendingRequest, Progress, Row, RowKind, SidebarGroup, SidebarSnapshot, Subrow,
-    SurfaceEnv,
+    Agent, AllowSuggestion, CommandOutcome, CoreError, Decision, Outcome, PendingRequest, Progress, ReviewTurn, Row, RowKind, SidebarGroup,
+    SidebarSnapshot, Subrow, SurfaceEnv, TurnCommand, TurnSubagent, TurnTask,
 };
 
 /// Called after any change to the snapshot, on the thread that caused it (often the socket thread).
@@ -80,6 +80,10 @@ impl HauntCore {
     /// Call on every keyDown routed to the surface, before it reaches the pty.
     pub fn on_user_input(&self, surface_id: String) {
         self.core.on_user_input(&surface_id);
+    }
+
+    pub fn review_turn(&self, surface_id: String) -> Option<ReviewTurn> {
+        self.core.review_turn(&surface_id)
     }
 
     pub fn decisions(&self, query: String, limit: u32) -> Vec<Decision> {

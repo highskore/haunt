@@ -22,6 +22,7 @@ pub mod progress;
 #[cfg(feature = "plugins")]
 pub mod ptygate;
 pub mod session;
+pub mod turn;
 
 pub use allowlist::AllowSuggestion;
 pub use decisions::Decision;
@@ -29,6 +30,7 @@ pub use event::{Agent, AgentEvent, EventKind, ParseError, ToolCall, parse_body, 
 pub use layout::{PendingRequest, Progress, Row, RowKind, SidebarGroup, SidebarSnapshot, Subrow};
 pub use model::{Core, CoreError, Listener, SurfaceEnv};
 pub use session::Outcome;
+pub use turn::{CommandOutcome, ReviewTurn, TurnCommand, TurnSubagent, TurnTask};
 
 #[cfg(feature = "ffi")]
 uniffi::setup_scaffolding!();

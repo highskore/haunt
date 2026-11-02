@@ -16,6 +16,7 @@ use crate::event::{AgentEvent, parse_osc};
 use crate::intake::{Delivery, Intake, IntakeError, Limits, SOCKET_NAME};
 use crate::layout::{self, SidebarSnapshot, SurfaceView};
 use crate::session::{Outcome, Session};
+use crate::turn::ReviewTurn;
 
 const MAX_SURFACES: usize = 512;
 
@@ -100,6 +101,10 @@ impl State {
                 let b = crate::git::branch(cwd);
                 changed |= b != s.agent_branch;
                 s.agent_branch = b;
+            }
+            if d.verified && matches!(event.kind, crate::event::EventKind::PromptSubmit { .. }) {
+                let cwd = s.session.cwd.as_deref().unwrap_or(&s.cwd);
+                s.session.turn.turn.head_at_start = crate::git::head_commit(cwd);
             }
             changed
         });
@@ -402,6 +407,19 @@ impl Core {
         self.update(|st, _| st.surface(surface_id).is_some_and(|s| s.session.user_input()));
     }
 
+    /// The surface's latest turn for the review screen; None for an unknown surface or one that never
+    /// had a verified agent event.
+    pub fn review_turn(&self, surface_id: &str) -> Option<ReviewTurn> {
+        let mut st = lock(&self.state);
+        let s = st.surface(surface_id)?;
+        if !s.session.is_agent || s.session.turn.turn.number == 0 && s.session.turn.turn.cwd.is_none() {
+            return None;
+        }
+        let mut t = s.session.turn.turn.clone();
+        t.cwd = t.cwd.or_else(|| s.session.cwd.clone());
+        Some(t)
+    }
+
     /// Ended permission requests, newest first; see `DecisionLog::query`.
     pub fn decisions(&self, query: &str, limit: u32) -> Vec<Decision> {
         lock(&self.state).decisions.query(query, limit as usize)
@@ -509,6 +527,32 @@ mod tests {
         let row = only_row(&c);
         assert_eq!(row.name, "specs");
         assert!(row.meta.starts_with("~/code/vibes/specs · Done in"), "no branch falls back to the cwd: {}", row.meta);
+    }
+
+    #[test]
+    fn the_review_turn_comes_from_verified_events_only() {
+        let repo = std::env::temp_dir().join(format!("haunt-model-turn-{}", std::process::id()));
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        std::fs::write(repo.join(".git/HEAD"), format!("{sha}\n")).unwrap();
+        let c = core();
+        let env = c.register_surface("/Users/me").unwrap();
+        assert_eq!(c.review_turn(&env.surface_id), None);
+        let cmd = r#""event":"tool_start","tool_name":"Bash","tool_input":{"command":"cargo test"}"#;
+        let prompt = format!(r#""event":"prompt_submit","cwd":"{}","query":"fix it""#, repo.display());
+        c.with_state(|st| {
+            st.handle_line(&line(&env, None, &prompt), Instant::now());
+            st.handle_line(&line(&env, None, cmd), Instant::now());
+        });
+        assert_eq!(c.review_turn(&env.surface_id), None, "forged events leave no turn");
+        c.with_state(|st| {
+            st.handle_line(&line(&env, Some(&env.nonce), &prompt), Instant::now());
+            st.handle_line(&line(&env, Some(&env.nonce), cmd), Instant::now());
+        });
+        let t = c.review_turn(&env.surface_id).unwrap();
+        assert_eq!((t.number, t.prompt.as_deref(), t.head_at_start.as_deref()), (1, Some("fix it"), Some(sha)));
+        assert_eq!(t.commands.len(), 1);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]
