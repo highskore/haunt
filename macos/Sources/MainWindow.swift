@@ -94,15 +94,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private static let defaultSize = NSSize(width: Tok.App.windowW, height: Tok.Size.windowH)
     private let config: HauntConfig
     private let store = TabStore()
-    private let bridge: PluginBridge
+    let bridge: PluginBridge
     private lazy var pasteGuard = PasteGuard(window: window) { [weak self] view in
         guard let self, let tab = self.store.tab(for: view), tab.env.surfaceId != self.store.selectedId else { return }
         self.select(tab.env.surfaceId)
-    }
-    /// Set once the core has started, so the decision log is loaded before plugins read it.
-    var plugins: PluginsAPI? {
-        get { bridge.plugins }
-        set { bridge.plugins = newValue }
     }
     private lazy var palette: PaletteController = {
         let p = PaletteController(host: self)
@@ -177,11 +172,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         root.sidebar.onRenameEnd = { [weak self] in self?.focusSelectedSurface() }
         root.sidebar.rowMenu = { [weak self] id in
             defer { self?.bridge.drain() }
-            return self?.plugins?.rowMenuItems(surfaceId: id) ?? []
+            return self?.bridge.plugins?.rowMenuItems(surfaceId: id) ?? []
         }
         root.sidebar.onRowMenu = { [weak self] item, id in self?.bridge.invokeRowMenu(item, surfaceId: id) }
         root.sidebar.onRowMoved = { [weak self] id, group, before in
-            self?.plugins?.rowMoved(surfaceId: id, groupId: group, beforeSurfaceId: before)
+            self?.bridge.plugins?.rowMoved(surfaceId: id, groupId: group, beforeSurfaceId: before)
             self?.bridge.drain()
         }
         core.setListener(listener: listener)

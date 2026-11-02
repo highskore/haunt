@@ -82,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             startError = error
             Self.logger.error("core start failed: \(String(describing: error), privacy: .public)")
         }
-        c.plugins = Self.startPlugins(fixture: fixture, core: core, dir: config.dir)
+        c.bridge.plugins = Self.startPlugins(fixture: fixture, core: core, dir: config.dir)
         applyPluginKeys()
         Ghostty.App.desktopNotificationHook = { [weak c, weak self] view, title, body in
             guard let self, let tab = c?.tab(for: view) else { return false }
@@ -296,7 +296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private var pluginCommands: [PaletteItem] = []
 
     private func applyPluginKeys() {
-        pluginCommands = controller?.plugins?.paletteItems(mode: nil, query: "").filter { !$0.isMode } ?? []
+        pluginCommands = controller?.bridge.plugins?.paletteItems(mode: nil, query: "").filter { !$0.isMode } ?? []
         config.pluginKeyDefaults = Dictionary(pluginCommands.compactMap { i in i.defaultKey.map { (KeyMap.pluginName(i.pluginId, i.id), $0) } },
                                               uniquingKeysWith: { a, _ in a })
         if config.reload(useUserConfig: fixture == nil).ghostty { ghostty.reloadConfig() }
