@@ -68,7 +68,8 @@ pub struct SurfaceEnv {
 
 pub type Listener = Arc<dyn Fn() + Send + Sync>;
 /// Sees every event for a registered surface, with whether it was verified; called outside the lock.
-pub type EventTap = Arc<dyn Fn(&AgentEvent, bool) + Send + Sync>;
+/// Returns whether it queued host requests, so the UI is told to drain them.
+pub type EventTap = Arc<dyn Fn(&AgentEvent, bool) -> bool + Send + Sync>;
 
 struct Surface {
     id: String,
@@ -277,6 +278,7 @@ struct Offload {
 
 impl Offload {
     fn spawn(state: Arc<Mutex<State>>, branches: Arc<Branches>) -> std::io::Result<Self> {
+        let tap_state = state.clone();
         let branch = worker("haunt-branch", move |(surface, cwd): (String, Option<String>)| {
             let Some(b) = branches.agent(&surface, cwd.as_deref()) else { return };
             let mut gone = false;
@@ -290,9 +292,19 @@ impl Offload {
                 branches.forget(&surface);
             }
         })?;
-        let tap = worker("haunt-tap", |(tap, event, verified): (EventTap, AgentEvent, bool)| tap(&event, verified))?;
+        let tap = worker("haunt-tap", move |(tap, event, verified): (EventTap, AgentEvent, bool)| {
+            if tap(&event, verified) {
+                requests_queued(&tap_state);
+            }
+        })?;
         Ok(Self { branch, tap })
     }
+}
+
+/// The listener fired after a delivery comes before the tap runs, and may not fire at all for an
+/// event that changed nothing, so new plugin requests count as a change of their own.
+fn requests_queued(state: &Mutex<State>) {
+    update_state(state, |_, _| true);
 }
 
 /// A thread running `f` on each job sent, until every sender is gone.
@@ -509,8 +521,8 @@ impl Core {
             tap = st.tap_for(surface_id);
             st.apply_unverified(surface_id, &event, now)
         });
-        if let Some(tap) = tap {
-            tap(&event, false);
+        if tap.is_some_and(|tap| tap(&event, false)) {
+            requests_queued(&self.state);
         }
     }
 
@@ -719,7 +731,7 @@ impl Core {
 mod tests {
     use super::*;
     use crate::testdir::TempDir;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
     fn core() -> Core {
@@ -1030,6 +1042,7 @@ mod tests {
         let wait = Mutex::new(wait);
         c.set_event_tap(Some(Arc::new(move |_: &AgentEvent, _| {
             let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(3));
+            false
         })));
         let st = c.state.clone();
         let offload = Offload::spawn(st.clone(), c.branches.clone()).unwrap();
@@ -1045,12 +1058,54 @@ mod tests {
     }
 
     #[test]
+    fn requests_a_plugin_queues_wake_the_ui_even_when_nothing_else_changed() {
+        let c = core();
+        let env = c.register_surface("/w").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        c.set_listener(Arc::new(move || {
+            let _ = tx.lock().unwrap().send(());
+        }));
+        let queue = Arc::new(AtomicBool::new(false));
+        let q = queue.clone();
+        c.set_event_tap(Some(Arc::new(move |_: &AgentEvent, _| q.swap(false, Ordering::SeqCst))));
+        let st = c.state.clone();
+        let offload = Offload::spawn(st.clone(), c.branches.clone()).unwrap();
+        let nonces = lock(&st).nonces.clone();
+        let send = || {
+            let d = crate::intake::decode(&line(&env, Some(&env.nonce), r#""event":"session_start""#), &nonces).unwrap();
+            deliver(&st, &offload, d)
+        };
+        send();
+        rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let version = c.snapshot().version;
+        let osc = || c.on_osc_notification(&env.surface_id, "haunt://cli-agent", r#"{"v":1,"event":"session_start"}"#);
+
+        queue.store(false, Ordering::SeqCst);
+        assert!(!send(), "a repeated start changes nothing");
+        osc();
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "no requests, no wake-up");
+
+        queue.store(true, Ordering::SeqCst);
+        send();
+        rx.recv_timeout(Duration::from_secs(1)).expect("the tap's request wakes the UI");
+        let snap = c.snapshot_if_newer(version).expect("and a newer snapshot re-arms the listener");
+        queue.store(true, Ordering::SeqCst);
+        osc();
+        rx.recv_timeout(Duration::from_secs(1)).expect("so does one queued for an OSC event");
+        assert!(c.snapshot_if_newer(snap.version).is_some());
+    }
+
+    #[test]
     fn the_event_tap_sees_events_for_registered_surfaces_only() {
         let c = core();
         let env = c.register_surface("/w").unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let s = seen.clone();
-        c.set_event_tap(Some(Arc::new(move |e: &AgentEvent, verified| s.lock().unwrap().push((e.kind.name().to_owned(), verified)))));
+        c.set_event_tap(Some(Arc::new(move |e: &AgentEvent, verified| {
+            s.lock().unwrap().push((e.kind.name().to_owned(), verified));
+            false
+        })));
         let st = c.state.clone();
         let offload = Offload::spawn(st.clone(), c.branches.clone()).unwrap();
         let nonces = lock(&st).nonces.clone();
