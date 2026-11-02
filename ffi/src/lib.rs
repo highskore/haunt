@@ -55,6 +55,8 @@ impl HauntCore {
         self.core.unregister_surface(&surface_id);
     }
 
+    /// `title` and `git_branch` are ignored (see `Core::set_surface_info`). Never blocks on a lookup
+    /// running for another surface, so any thread may call it.
     pub fn set_surface_info(&self, surface_id: String, title: String, cwd: String, git_branch: Option<String>) {
         self.core.set_surface_info(&surface_id, &title, &cwd, git_branch);
     }
@@ -179,9 +181,10 @@ impl HauntPlugins {
         Ok(haunt_core::sync::lock(&self.set).invoke(&plugin_id, &item_id)?)
     }
 
-    /// Notifications and pty writes plugins asked for since the last call.
+    /// Notifications and pty writes plugins asked for since the last call. Never waits: while a
+    /// plugin is busy with an event it returns none, and the listener fires again once it is done.
     pub fn take_requests(&self) -> Vec<HostRequest> {
-        haunt_core::sync::lock(&self.set).take_requests()
+        haunt_core::plugin_store::take_requests_now(&self.set)
     }
 
     /// Plugin entries for a row's context menu, built when the menu opens.

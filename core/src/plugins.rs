@@ -689,6 +689,10 @@ impl LoadedPlugin {
     pub fn take_requests(&mut self) -> Vec<HostRequest> {
         std::mem::take(&mut self.store.data_mut().outbox)
     }
+
+    pub(crate) fn pending_requests(&self) -> usize {
+        self.store.data().outbox.len()
+    }
 }
 
 pub struct PluginHost {

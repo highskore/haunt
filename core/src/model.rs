@@ -68,7 +68,8 @@ pub struct SurfaceEnv {
 
 pub type Listener = Arc<dyn Fn() + Send + Sync>;
 /// Sees every event for a registered surface, with whether it was verified; called outside the lock.
-pub type EventTap = Arc<dyn Fn(&AgentEvent, bool) + Send + Sync>;
+/// Returns whether host requests are waiting, so the UI is told to drain them.
+pub type EventTap = Arc<dyn Fn(&AgentEvent, bool) -> bool + Send + Sync>;
 
 struct Surface {
     id: String,
@@ -277,6 +278,7 @@ struct Offload {
 
 impl Offload {
     fn spawn(state: Arc<Mutex<State>>, branches: Arc<Branches>) -> std::io::Result<Self> {
+        let tap_state = state.clone();
         let branch = worker("haunt-branch", move |(surface, cwd): (String, Option<String>)| {
             let Some(b) = branches.agent(&surface, cwd.as_deref()) else { return };
             let mut gone = false;
@@ -290,8 +292,22 @@ impl Offload {
                 branches.forget(&surface);
             }
         })?;
-        let tap = worker("haunt-tap", |(tap, event, verified): (EventTap, AgentEvent, bool)| tap(&event, verified))?;
+        let tap = worker("haunt-tap", move |(tap, event, verified): (EventTap, AgentEvent, bool)| {
+            if tap(&event, verified) {
+                requests_queued(&tap_state);
+            }
+        })?;
         Ok(Self { branch, tap })
+    }
+}
+
+/// Plugin requests are waiting. The listener fired for the delivery came before the tap ran, or
+/// never fired (nothing changed, or it is waiting for a snapshot), and a waiting request may be all
+/// that unblocks the agent, so this fires it whatever `notified` says.
+fn requests_queued(state: &Mutex<State>) {
+    let listener = lock(state).listener.clone();
+    if let Some(l) = listener {
+        l();
     }
 }
 
@@ -467,8 +483,8 @@ impl Core {
         });
     }
 
-    /// `title` is accepted for the contract; rows are named after the cwd. The core reads the
-    /// branch at `cwd` itself, outside its lock, so `_git_branch` is ignored (to be dropped from the API).
+    /// `_title` and `_git_branch` are ignored, kept so the app's call needs no change: rows are named
+    /// after the cwd, and the core reads the branch at `cwd` itself, outside every lock.
     pub fn set_surface_info(&self, surface_id: &str, _title: &str, cwd: &str, _git_branch: Option<String>) {
         if !lock(&self.state).surfaces.iter().any(|s| s.id == surface_id) {
             return;
@@ -509,8 +525,8 @@ impl Core {
             tap = st.tap_for(surface_id);
             st.apply_unverified(surface_id, &event, now)
         });
-        if let Some(tap) = tap {
-            tap(&event, false);
+        if tap.is_some_and(|tap| tap(&event, false)) {
+            requests_queued(&self.state);
         }
     }
 
@@ -719,7 +735,7 @@ impl Core {
 mod tests {
     use super::*;
     use crate::testdir::TempDir;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
     fn core() -> Core {
@@ -1030,6 +1046,7 @@ mod tests {
         let wait = Mutex::new(wait);
         c.set_event_tap(Some(Arc::new(move |_: &AgentEvent, _| {
             let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(3));
+            false
         })));
         let st = c.state.clone();
         let offload = Offload::spawn(st.clone(), c.branches.clone()).unwrap();
@@ -1045,12 +1062,55 @@ mod tests {
     }
 
     #[test]
+    fn waiting_plugin_requests_always_wake_the_ui() {
+        let c = core();
+        let env = c.register_surface("/w").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        c.set_listener(Arc::new(move || {
+            let _ = tx.lock().unwrap().send(());
+        }));
+        let queue = Arc::new(AtomicBool::new(false));
+        let q = queue.clone();
+        c.set_event_tap(Some(Arc::new(move |_: &AgentEvent, _| q.swap(false, Ordering::SeqCst))));
+        let st = c.state.clone();
+        let offload = Offload::spawn(st.clone(), c.branches.clone()).unwrap();
+        let nonces = lock(&st).nonces.clone();
+        let send = || {
+            let d = crate::intake::decode(&line(&env, Some(&env.nonce), r#""event":"session_start""#), &nonces).unwrap();
+            deliver(&st, &offload, d)
+        };
+        send();
+        rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        // No snapshot from here on, so the listener stays spent for state changes.
+        let osc = || c.on_osc_notification(&env.surface_id, "haunt://cli-agent", r#"{"v":1,"event":"session_start"}"#);
+
+        queue.store(false, Ordering::SeqCst);
+        assert!(!send(), "a repeated start changes nothing");
+        osc();
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "no requests, no wake-up");
+
+        queue.store(true, Ordering::SeqCst);
+        send();
+        rx.recv_timeout(Duration::from_secs(1)).expect("the tap's request wakes the UI");
+        queue.store(true, Ordering::SeqCst);
+        send();
+        rx.recv_timeout(Duration::from_secs(1)).expect("every time, without a snapshot in between");
+        queue.store(true, Ordering::SeqCst);
+        osc();
+        rx.recv_timeout(Duration::from_secs(1)).expect("so does one queued for an OSC event");
+    }
+
+    #[test]
     fn the_event_tap_sees_events_for_registered_surfaces_only() {
         let c = core();
         let env = c.register_surface("/w").unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let s = seen.clone();
-        c.set_event_tap(Some(Arc::new(move |e: &AgentEvent, verified| s.lock().unwrap().push((e.kind.name().to_owned(), verified)))));
+        c.set_event_tap(Some(Arc::new(move |e: &AgentEvent, verified| {
+            s.lock().unwrap().push((e.kind.name().to_owned(), verified));
+            false
+        })));
         let st = c.state.clone();
         let offload = Offload::spawn(st.clone(), c.branches.clone()).unwrap();
         let nonces = lock(&st).nonces.clone();
