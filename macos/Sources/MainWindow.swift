@@ -424,8 +424,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     var isSidebarHidden: Bool { root.sidebarHidden }
 
+    var onSidebarToggle: (() -> Void)?
+
     func toggleSidebar() {
         root.sidebarHidden.toggle()
+        onSidebarToggle?()
         root.layoutSubtreeIfNeeded()
         if fixture == nil {
             var state = config.loadState()
@@ -574,6 +577,12 @@ extension MainWindowController: PaletteHost {
         }
         drainPluginRequests()
     }
+
+    var paletteKeys: KeyMap { config.keys }
+
+    var isFullScreen: Bool { window?.styleMask.contains(.fullScreen) ?? false }
+
+    func paletteRun(_ action: KeyMap.Action) { (NSApp.delegate as? AppDelegate)?.performMenuItem(action) }
 
     func paletteDidClose() {
         root.scrim.isHidden = true

@@ -56,6 +56,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // The listener goes in before start() so no change is missed.
         let c = MainWindowController(core: core, ghostty: ghostty, fixture: fixture, config: config, plugins: plugins)
         controller = c
+        c.onSidebarToggle = { [weak self] in self?.updateSidebarItem() }
+        updateSidebarItem()
+        if fixture != nil {
+            // Lets a launch check confirm who answers the item and what it reads, once the window is key.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                guard let item = self?.menuItems[.toggleSidebar], let action = item.action else { return }
+                func who(_ sel: Selector) -> String {
+                    NSApp.target(forAction: sel, to: nil, from: item).map { String(describing: type(of: $0)) } ?? "nil"
+                }
+                let line = "menu: \(item.title) -> \(who(action)); toggleSidebar: -> \(who(Selector(("toggleSidebar:"))))\n"
+                FileHandle.standardError.write(line.data(using: .utf8)!)
+            }
+        }
         var startError: Error?
         do {
             try core.start()
@@ -125,14 +138,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc func newTab(_ sender: Any?) { controller?.newTab() }
     @objc func closeTab(_ sender: Any?) { controller?.closeSelectedTab() }
     @objc func selectTab(_ sender: NSMenuItem) { controller?.select(index: sender.tag) }
-    @objc func toggleSidebar(_ sender: Any?) { controller?.toggleSidebar() }
+    // Not toggleSidebar(_:): NSWindow answers that selector and sits ahead of us in the responder chain,
+    // so the menu item validated (and kept its title) against the window instead of us.
+    @objc func toggleHauntSidebar(_ sender: Any?) { controller?.toggleSidebar() }
     @objc func togglePalette(_ sender: Any?) { controller?.togglePalette() }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        if item.action == #selector(toggleSidebar(_:)) {
-            item.title = controller?.isSidebarHidden == true ? "Show Sidebar" : "Hide Sidebar"
-        }
+        if item.action == #selector(toggleHauntSidebar(_:)) { item.title = Self.sidebarTitle(hidden: sidebarHidden) }
         return true
+    }
+
+    private var sidebarHidden: Bool { controller?.isSidebarHidden ?? false }
+
+    static func sidebarTitle(hidden: Bool) -> String { hidden ? "Show Sidebar" : "Hide Sidebar" }
+
+    /// Set directly as well as in validation, so the title is right even when nothing validates it.
+    private func updateSidebarItem() {
+        menuItems[.toggleSidebar]?.title = Self.sidebarTitle(hidden: sidebarHidden)
     }
 
     @objc func openConfig(_ sender: Any?) {
@@ -157,8 +179,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     /// The menu carries every shortcut, so the `[keys]` table only has to change its key equivalents.
+    /// The menu items by the `[keys]` action they carry, so the palette can run exactly what the menu runs.
+    private var menuItems: [KeyMap.Action: NSMenuItem] = [:]
+
+    /// Runs the menu item for `action` the way choosing it would, validation included.
+    func performMenuItem(_ action: KeyMap.Action) {
+        guard let item = menuItems[action], let menu = item.menu else { return }
+        menu.update()
+        guard item.isEnabled else { return NSSound.beep() }
+        menu.performActionForItem(at: menu.index(of: item))
+    }
+
     private func buildMenu() {
         let keys = config.keys
+        menuItems = [:]
         let main = NSMenu()
         func submenu(_ title: String, _ items: [NSMenuItem]) {
             let item = NSMenuItem()
@@ -171,6 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             let s = key.flatMap { keys[$0] }
             let i = NSMenuItem(title: title, action: action, keyEquivalent: s?.keyEquivalent ?? "")
             i.keyEquivalentModifierMask = s?.mods ?? []
+            if let key { menuItems[key] = i }
             return i
         }
 
@@ -192,7 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         ])
         submenu("View", [
             item("Command Palette", #selector(togglePalette(_:)), .palette),
-            item("Hide Sidebar", #selector(toggleSidebar(_:)), .toggleSidebar),
+            item(Self.sidebarTitle(hidden: sidebarHidden), #selector(toggleHauntSidebar(_:)), .toggleSidebar),
             .separator(),
             item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), .fullScreen),
         ])

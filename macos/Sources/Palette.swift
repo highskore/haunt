@@ -10,6 +10,8 @@ struct PaletteRow: Equatable {
         case tab(String)
         case enterMode(String)
         case plugin(pluginId: String, itemId: String)
+        /// An app command, run through its menu item.
+        case command(KeyMap.Action)
     }
 
     var left = ""
@@ -31,6 +33,10 @@ protocol PaletteHost: AnyObject {
     var pluginLoadErrors: [String] { get }
     func paletteSelectTab(_ surfaceId: String)
     func paletteInvoke(pluginId: String, itemId: String)
+    var paletteKeys: KeyMap { get }
+    var isSidebarHidden: Bool { get }
+    var isFullScreen: Bool { get }
+    func paletteRun(_ action: KeyMap.Action)
     func paletteDidClose()
 }
 
@@ -168,6 +174,9 @@ final class PaletteController: NSObject, NSWindowDelegate {
         case let .plugin(pluginId, itemId):
             close()
             host.paletteInvoke(pluginId: pluginId, itemId: itemId)
+        case let .command(a):
+            close()
+            host.paletteRun(a)
         }
     }
 
@@ -205,6 +214,21 @@ final class PaletteController: NSObject, NSWindowDelegate {
             guard let s = Fuzzy.score(query, r.name) ?? Fuzzy.score(query, r.meta).map({ $0 - 50 }) else { continue }
             let row = PaletteRow(left: i < 9 ? "⌘\(i + 1)" : "", mark: nil, title: r.name, sub: r.meta,
                                  right: .jump, action: .tab(r.surfaceId))
+            scored.append((s, scored.count, row))
+        }
+        // App commands: after the tabs with an empty query, ranked with them otherwise. The sub line names the
+        // menu each lives in.
+        let commands: [(KeyMap.Action, String, String)] = [
+            (.toggleSidebar, host.isSidebarHidden ? "Show Sidebar" : "Hide Sidebar", "View"),
+            (.newTab, "New Tab", "Window"),
+            (.closeTab, "Close Tab", "Window"),
+            (.settings, "Open Settings", "Haunt · config.toml"),
+            (.fullScreen, host.isFullScreen ? "Exit Full Screen" : "Enter Full Screen", "View"),
+        ]
+        for (a, title, sub) in commands {
+            guard let s = Fuzzy.score(query, title) else { continue }
+            let row = PaletteRow(title: title, sub: sub, right: host.paletteKeys[a].map { .key($0.display) } ?? .none,
+                                 action: .command(a))
             scored.append((s, scored.count, row))
         }
         let logRow = PaletteRow(title: Self.logMode, sub: "Search the decision log", action: .enterMode(Self.logMode))
