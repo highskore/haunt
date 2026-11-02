@@ -138,6 +138,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc func newTab(_ sender: Any?) { controller?.newTab() }
     @objc func closeTab(_ sender: Any?) { controller?.closeSelectedTab() }
     @objc func selectTab(_ sender: NSMenuItem) { controller?.select(index: sender.tag) }
+    // Not selectNextTab(_:)/selectPreviousTab(_:): NSWindow answers those for its own window tabs.
+    @objc func selectNextHauntTab(_ sender: Any?) { controller?.selectAdjacent(1) }
+    @objc func selectPreviousHauntTab(_ sender: Any?) { controller?.selectAdjacent(-1) }
     // Not toggleSidebar(_:): NSWindow answers that selector and sits ahead of us in the responder chain,
     // so the menu item validated (and kept its title) against the window instead of us.
     @objc func toggleHauntSidebar(_ sender: Any?) { controller?.toggleSidebar() }
@@ -167,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
             # Shortcuts, as "cmd+shift+b" (cmd, shift, ctrl, opt). Commented lines show the defaults.
             [keys]
-            \(KeyMap.Action.allCases.map { "# \($0.rawValue) = \"\($0.defaultKey)\"" }.joined(separator: "\n"))
+            \(KeyMap.Action.allCases.map { a in a.defaultKey.map { "# \(a.rawValue) = \"\($0)\"" } ?? "# \(a.rawValue): no default" }.joined(separator: "\n"))
 
             # Raw Ghostty keys, passed through as is.
             [ghostty]
@@ -242,6 +245,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             item("New Tab", #selector(newTab(_:)), .newTab),
             item("Close Tab", #selector(closeTab(_:)), .closeTab),
             .separator(),
+            item("Next Tab", #selector(selectNextHauntTab(_:)), .nextTab),
+            item("Previous Tab", #selector(selectPreviousHauntTab(_:)), .previousTab),
         ] + tabs + [
             .separator(),
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), .minimize),

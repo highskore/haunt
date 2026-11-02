@@ -48,12 +48,18 @@ check(logs.contains { $0.contains("select_tab_1") }, "clash logged")
 let defaults = KeyMap.defaults
 check(defaults[.palette] == Shortcut.parse("cmd+k"), "palette defaults to cmd+k")
 check(defaults[.toggleSidebar] == Shortcut.parse("cmd+shift+b"), "toggle_sidebar defaults to cmd+shift+b")
-check(KeyMap.Action.allCases.allSatisfy { defaults[$0] != nil }, "every action has a default")
-check(Set(KeyMap.Action.allCases.compactMap { defaults[$0] }).count == KeyMap.Action.allCases.count, "defaults are distinct")
+let unbound: Set<KeyMap.Action> = [.renameTab]
+check(KeyMap.Action.allCases.allSatisfy { (defaults[$0] == nil) == unbound.contains($0) }, "every action but rename_tab has a default")
+check(Set(KeyMap.Action.allCases.compactMap { defaults[$0] }).count == KeyMap.Action.allCases.count - unbound.count, "defaults are distinct")
+check(defaults[.nextTab]?.keyEquivalent == "}" && defaults[.nextTab]?.display == "⇧⌘]", "next_tab is ⇧⌘], matched as }")
+check(defaults[.previousTab]?.keyEquivalent == "{" && defaults[.previousTab]?.display == "⇧⌘[", "previous_tab is ⇧⌘[")
+check(Shortcut.parse("cmd+,")?.keyEquivalent == ",", "unshifted punctuation unchanged")
+let renamed = KeyMap(table: TOML.parse("[keys]\nrename_tab = \"cmd+shift+r\"\n")["keys"] ?? [:], log: { _ in })
+check(renamed[.renameTab] == Shortcut.parse("cmd+shift+r"), "rename_tab can be bound")
 
 // Ghostty loses every chord haunt uses.
 let conf = HauntConfig.ghosttyConfig([:], defaultSize: 11, keys: defaults)
-for line in ["keybind = super+k=unbind", "keybind = shift+super+b=unbind", "keybind = super+comma=unbind", "keybind = super+t=unbind"] {
+for line in ["keybind = shift+super+bracket_right=unbind", "keybind = super+k=unbind", "keybind = shift+super+b=unbind", "keybind = super+comma=unbind", "keybind = super+t=unbind"] {
     check(conf.contains(line + "\n"), "ghostty config has \(line)")
 }
 check(conf.components(separatedBy: "keybind = super+t=unbind").count == 2, "unbinds are not repeated")

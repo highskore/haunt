@@ -358,6 +358,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         if ids.indices.contains(index) { select(ids[index]) }
     }
 
+    /// Next (+1) or previous (-1) tab in sidebar order, wrapping around.
+    func selectAdjacent(_ step: Int) {
+        let ids = root.sidebar.orderedIds
+        guard !ids.isEmpty else { return }
+        let i = selectedId.flatMap(ids.firstIndex(of:)) ?? 0
+        select(ids[((i + step) % ids.count + ids.count) % ids.count])
+    }
+
     func closeSelectedTab() {
         if let id = selectedId { closeTab(id) }
     }
