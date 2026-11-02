@@ -12,6 +12,8 @@ final class SidebarView: NSView {
 
     private var items: [Item] = []
 
+    static let suspiciousHint = "check terminal"
+
     override var isFlipped: Bool { true }
 
     /// Rows in display order, which ⌘1–9 follow.
@@ -98,9 +100,17 @@ final class SidebarView: NSView {
                   lineHeight: Tok.Size.rowName * lh, in: ctx)
         y += rowLine1 + gapY
 
-        // Line 2: meta, spanning columns 2–3.
+        // Line 2: meta, spanning columns 2–3. A suspicious request shows its preview (⏎ and all) and is
+        // answered only in the terminal, so the hint stands where Allow/Deny would.
         let metaFont = Draw.ui(Tok.Size.rowMeta)
-        let meta = Draw.truncated(Draw.line(row.meta, metaFont, Tok.Color.textMeta), right - col2, metaFont, Tok.Color.textMeta)
+        var metaRight = right
+        if let p = row.pending, p.suspicious {
+            let hint = Draw.line(Self.suspiciousHint, metaFont, Tok.Color.textMeta)
+            metaRight -= Draw.width(hint) + gapX
+            Draw.text(hint, font: metaFont, x: right - Draw.width(hint), top: y, lineHeight: Tok.Size.rowMeta * lh, in: ctx)
+        }
+        let metaText = row.pending.flatMap { $0.suspicious ? $0.preview : nil } ?? row.meta
+        let meta = Draw.truncated(Draw.line(metaText, metaFont, Tok.Color.textMeta), metaRight - col2, metaFont, Tok.Color.textMeta)
         Draw.text(meta, font: metaFont, x: col2, top: y, lineHeight: Tok.Size.rowMeta * lh, in: ctx)
         y += Tok.Size.rowMeta * lh
 

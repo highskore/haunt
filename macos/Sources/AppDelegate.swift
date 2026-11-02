@@ -2,13 +2,14 @@ import AppKit
 import GhosttyKit
 import os
 
-final class AppDelegate: NSObject, NSApplicationDelegate, GhosttyAppDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, GhosttyAppDelegate {
     static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "dev.haunt.Haunt", category: "app")
 
     let fixture = Fixture.current
     let config: HauntConfig
     let ghostty: Ghostty.App
     private let core: CoreAPI
+    private var plugins: PluginsAPI?
     private var controller: MainWindowController?
 
     // Members the vendored wrapper calls on NSApp.delegate.
@@ -29,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GhosttyAppDelegate {
         // Fixture screens must not pick up, or overwrite, the user's config.
         config = fixture == nil ? HauntConfig()
             : HauntConfig(dir: FileManager.default.temporaryDirectory.appendingPathComponent("haunt-fixture"))
-        config.writeGhosttyConfig(useUserConfig: fixture == nil)
+        config.reload(useUserConfig: fixture == nil)
         ghostty = Ghostty.App(configPath: config.ghosttyURL.path)
         core = Self.makeCore(fixture: fixture, configDir: config.dir.path)
         super.init()
@@ -50,9 +51,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GhosttyAppDelegate {
         }
         ghostty.delegate = self
         buildMenu()
+        if fixture == nil { plugins = Self.startPlugins(dir: config.dir) }
 
         // The listener goes in before start() so no change is missed.
-        let c = MainWindowController(core: core, ghostty: ghostty, fixture: fixture)
+        let c = MainWindowController(core: core, ghostty: ghostty, fixture: fixture, config: config, plugins: plugins)
         controller = c
         var startError: Error?
         do {
@@ -80,7 +82,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GhosttyAppDelegate {
         }
 
         if fixture == nil {
-            config.watch { [weak self] in self?.ghostty.reloadConfig() }
+            config.watch { [weak self] ghosttyChanged, keysChanged in
+                guard let self else { return }
+                if keysChanged {
+                    self.buildMenu()
+                    self.controller?.updateKeys(self.config.keys)
+                }
+                if ghosttyChanged { self.ghostty.reloadConfig() }
+            }
+            c.drainPluginRequests()
+        }
+        // HAUNT_PALETTE, like HAUNT_INACTIVE, lets a launch check capture the palette without synthetic keys.
+        // It opens once activation has settled, or the main window taking key would close it again.
+        if let text = fixture?.paletteQuery ?? ProcessInfo.processInfo.environment["HAUNT_PALETTE"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak c, fixture] in
+                c?.openPalette(text: text)
+                // The mockup's selection is its second entry.
+                if fixture == .palette { c?.paletteFixtureSelectNext() }
+            }
+        }
+    }
+
+    /// Load errors are logged, and listed in the palette, rather than put in front of the user.
+    private static func startPlugins(dir: URL) -> PluginsAPI? {
+        do {
+            let p = try loadPlugins(hauntDir: dir.path)
+            for e in p.loadErrors() { logger.error("plugin not loaded: \(e, privacy: .public)") }
+            return p
+        } catch {
+            logger.error("plugins unavailable: \(String(describing: error), privacy: .public)")
+            return nil
         }
     }
 
@@ -91,6 +122,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GhosttyAppDelegate {
     @objc func newTab(_ sender: Any?) { controller?.newTab() }
     @objc func closeTab(_ sender: Any?) { controller?.closeSelectedTab() }
     @objc func selectTab(_ sender: NSMenuItem) { controller?.select(index: sender.tag) }
+    @objc func toggleSidebar(_ sender: Any?) { controller?.toggleSidebar() }
+    @objc func togglePalette(_ sender: Any?) { controller?.togglePalette() }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggleSidebar(_:)) {
+            item.title = controller?.isSidebarHidden == true ? "Show Sidebar" : "Hide Sidebar"
+        }
+        return true
+    }
 
     @objc func openConfig(_ sender: Any?) {
         let url = config.tomlURL
@@ -99,6 +139,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GhosttyAppDelegate {
             # Haunt config. Saved changes apply right away.
             # font = "\(Tok.Font.monoFamily)"
             # font_size = 11
+
+            # Shortcuts, as "cmd+shift+b" (cmd, shift, ctrl, opt). Commented lines show the defaults.
+            [keys]
+            \(KeyMap.Action.allCases.map { "# \($0.rawValue) = \"\($0.defaultKey)\"" }.joined(separator: "\n"))
 
             # Raw Ghostty keys, passed through as is.
             [ghostty]
@@ -109,7 +153,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GhosttyAppDelegate {
         NSWorkspace.shared.open(url)
     }
 
+    /// The menu carries every shortcut, so the `[keys]` table only has to change its key equivalents.
     private func buildMenu() {
+        let keys = config.keys
         let main = NSMenu()
         func submenu(_ title: String, _ items: [NSMenuItem]) {
             let item = NSMenuItem()
@@ -118,46 +164,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GhosttyAppDelegate {
             item.submenu = menu
             main.addItem(item)
         }
-        func item(_ title: String, _ action: Selector, _ key: String, _ mods: NSEvent.ModifierFlags = .command) -> NSMenuItem {
-            let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
-            i.keyEquivalentModifierMask = mods
+        func item(_ title: String, _ action: Selector, _ key: KeyMap.Action? = nil) -> NSMenuItem {
+            let s = key.flatMap { keys[$0] }
+            let i = NSMenuItem(title: title, action: action, keyEquivalent: s?.keyEquivalent ?? "")
+            i.keyEquivalentModifierMask = s?.mods ?? []
             return i
         }
 
         submenu("Haunt", [
-            item("About Haunt", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), ""),
+            item("About Haunt", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
             .separator(),
-            item("Settings…", #selector(openConfig(_:)), ","),
+            item("Settings…", #selector(openConfig(_:)), .settings),
             .separator(),
-            item("Hide Haunt", #selector(NSApplication.hide(_:)), "h"),
-            item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
-            item("Show All", #selector(NSApplication.unhideAllApplications(_:)), ""),
+            item("Hide Haunt", #selector(NSApplication.hide(_:)), .hide),
+            item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), .hideOthers),
+            item("Show All", #selector(NSApplication.unhideAllApplications(_:))),
             .separator(),
-            item("Quit Haunt", #selector(NSApplication.terminate(_:)), "q"),
+            item("Quit Haunt", #selector(NSApplication.terminate(_:)), .quit),
         ])
         submenu("Edit", [
-            item("Copy", #selector(Ghostty.SurfaceView.copy(_:)), "c"),
-            item("Paste", #selector(Ghostty.SurfaceView.paste(_:)), "v"),
-            item("Select All", #selector(NSResponder.selectAll(_:)), "a"),
+            item("Copy", #selector(Ghostty.SurfaceView.copy(_:)), .copy),
+            item("Paste", #selector(Ghostty.SurfaceView.paste(_:)), .paste),
+            item("Select All", #selector(NSResponder.selectAll(_:)), .selectAll),
         ])
         submenu("View", [
-            item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control]),
+            item("Command Palette", #selector(togglePalette(_:)), .palette),
+            item("Hide Sidebar", #selector(toggleSidebar(_:)), .toggleSidebar),
+            .separator(),
+            item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), .fullScreen),
         ])
-        let tabs = (1...9).map { n -> NSMenuItem in
-            let i = item("Select Tab \(n)", #selector(selectTab(_:)), "\(n)")
-            i.tag = n - 1
+        let selects: [KeyMap.Action] = [.selectTab1, .selectTab2, .selectTab3, .selectTab4, .selectTab5,
+                                        .selectTab6, .selectTab7, .selectTab8, .selectTab9]
+        let tabs = selects.map { a -> NSMenuItem in
+            let i = item("Select Tab \(a.tabIndex! + 1)", #selector(selectTab(_:)), a)
+            i.tag = a.tabIndex!
             return i
         }
         submenu("Window", [
-            item("New Tab", #selector(newTab(_:)), "t"),
-            item("Close Tab", #selector(closeTab(_:)), "w"),
+            item("New Tab", #selector(newTab(_:)), .newTab),
+            item("Close Tab", #selector(closeTab(_:)), .closeTab),
             .separator(),
         ] + tabs + [
             .separator(),
-            item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
-            item("Zoom", #selector(NSWindow.performZoom(_:)), ""),
+            item("Minimize", #selector(NSWindow.performMiniaturize(_:)), .minimize),
+            item("Zoom", #selector(NSWindow.performZoom(_:))),
             .separator(),
-            item("Bring All to Front", #selector(NSApplication.arrangeInFront(_:)), ""),
+            item("Bring All to Front", #selector(NSApplication.arrangeInFront(_:))),
         ])
         NSApp.mainMenu = main
         NSApp.windowsMenu = main.items.last?.submenu

@@ -11,11 +11,34 @@ protocol CoreAPI: AnyObject {
     func snapshot() -> SidebarSnapshot
     func setListener(listener: CoreListener)
     func answerPermission(surfaceId: String, requestKey: UInt64, allow: Bool) -> Data?
+    func onUserInput(surfaceId: String)
+    func decisions(query: String, limit: UInt32) -> [Decision]
+    func gatePluginRequest(request: HostRequest) -> PtyWrite?
+}
+
+/// `HauntPlugins` as the UI uses it; the mock build has no plugin host.
+protocol PluginsAPI: AnyObject {
+    func loadErrors() -> [String]
+    func paletteItems(mode: String?, query: String) -> [PaletteItem]
+    func invokePaletteItem(pluginId: String, itemId: String) throws
+    func takeRequests() -> [HostRequest]
 }
 
 #if HAUNT_REAL_CORE
 extension HauntCore: CoreAPI {}
+extension HauntPlugins: PluginsAPI {}
+
+func loadPlugins(hauntDir: String) throws -> PluginsAPI { try HauntPlugins.load(hauntDir: hauntDir) }
 #else
+func loadPlugins(hauntDir: String) throws -> PluginsAPI { NoPlugins() }
+
+final class NoPlugins: PluginsAPI {
+    func loadErrors() -> [String] { [] }
+    func paletteItems(mode: String?, query: String) -> [PaletteItem] { [] }
+    func invokePaletteItem(pluginId: String, itemId: String) throws {}
+    func takeRequests() -> [HostRequest] { [] }
+}
+
 // Mirrors of the records UniFFI generates from the shared contract; the real bindings replace them.
 
 struct SurfaceEnv: Equatable, Hashable {
@@ -71,6 +94,50 @@ struct PendingRequest: Equatable, Hashable {
     var key: UInt64
     var tool: String
     var preview: String
+    var suspicious: Bool
+}
+
+struct Decision: Equatable, Hashable {
+    var atMs: UInt64
+    var surfaceId: String
+    var tool: String
+    var preview: String
+    var command: String?
+    var cwd: String?
+    var outcome: Outcome
+}
+
+enum Outcome: Equatable, Hashable {
+    case allowedInHaunt
+    case deniedInHaunt
+    case allowedByPlugin(pluginId: String)
+    case deniedByPlugin(pluginId: String)
+    case answeredInTerminal
+    case superseded
+}
+
+struct PaletteItem: Equatable, Hashable {
+    var pluginId: String
+    var id: String
+    var title: String
+    var subtitle: String?
+    var defaultKey: String?
+    var isMode: Bool
+}
+
+struct NotifyAction: Equatable, Hashable {
+    var id: String
+    var title: String
+}
+
+enum HostRequest: Equatable, Hashable {
+    case notify(pluginId: String, title: String, body: String, actions: [NotifyAction], binding: String?)
+    case ptyAnswer(pluginId: String, surface: String, allow: Bool, requestId: UInt64)
+}
+
+struct PtyWrite: Equatable, Hashable {
+    var surfaceId: String
+    var bytes: Data
 }
 
 protocol CoreListener: AnyObject, Sendable {
