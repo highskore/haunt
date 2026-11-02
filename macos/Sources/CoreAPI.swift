@@ -65,6 +65,13 @@ struct SidebarGroup: Equatable, Hashable {
 enum RowKind: Equatable, Hashable {
     case shell
     case claude
+    case codex
+}
+
+enum Agent: Equatable, Hashable {
+    case claude
+    case codex
+    case other(id: String)
 }
 
 struct Progress: Equatable, Hashable {
@@ -105,6 +112,7 @@ struct Decision: Equatable, Hashable {
     var command: String?
     var cwd: String?
     var outcome: Outcome
+    var agent: Agent
 }
 
 enum Outcome: Equatable, Hashable {

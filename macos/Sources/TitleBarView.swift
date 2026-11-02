@@ -53,6 +53,89 @@ final class TitleBarView: NSView {
         return NSRect(x: Tok.Size.titlebarPadx + CGFloat(i) * (d + Tok.Size.lightsGap), y: lightsY, width: d, height: d)
     }
 
+    // MARK: Traffic-light hover
+
+    /// Grey at rest (the mockups); hovering the group shows macOS's own colours and glyphs.
+    /// HAUNT_LIGHTS=hover or hover-option pins that state for a launch capture.
+    private static let pinned = ProcessInfo.processInfo.environment["HAUNT_LIGHTS"]
+    private var lightsHover = TitleBarView.pinned?.hasPrefix("hover") == true { didSet { needsDisplay = true } }
+    private var optionDown = TitleBarView.pinned == "hover-option" { didSet { if optionDown != oldValue { needsDisplay = true } } }
+    private var lightsArea: NSTrackingArea?
+    private var flagsMonitor: Any?
+
+    // The system's traffic-light fills and their dark glyph tints.
+    private static let lightFill = [NSColor(srgbRed: 1, green: 0x5F / 255, blue: 0x57 / 255, alpha: 1),
+                                    NSColor(srgbRed: 0xFE / 255, green: 0xBC / 255, blue: 0x2E / 255, alpha: 1),
+                                    NSColor(srgbRed: 0x28 / 255, green: 0xC8 / 255, blue: 0x40 / 255, alpha: 1)]
+    private static let lightGlyph = [NSColor(srgbRed: 0x4D / 255, green: 0, blue: 0, alpha: 1),
+                                     NSColor(srgbRed: 0x99 / 255, green: 0x57 / 255, blue: 0, alpha: 1),
+                                     NSColor(srgbRed: 0, green: 0x65 / 255, blue: 0, alpha: 1)]
+
+    private var lightsGroup: NSRect { lightRect(0).union(lightRect(2)).insetBy(dx: -2, dy: -2) }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let a = lightsArea { removeTrackingArea(a) }
+        let a = NSTrackingArea(rect: lightsGroup, options: [.mouseEnteredAndExited, .activeAlways], owner: self)
+        addTrackingArea(a)
+        lightsArea = a
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        lightsHover = true
+        optionDown = event.modifierFlags.contains(.option)
+        flagsMonitor = flagsMonitor ?? NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] e in
+            self?.optionDown = e.modifierFlags.contains(.option)
+            return e
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        guard Self.pinned == nil else { return }
+        lightsHover = false
+        optionDown = false
+        if let m = flagsMonitor { NSEvent.removeMonitor(m) }
+        flagsMonitor = nil
+    }
+
+    private func drawLights() {
+        for i in 0..<3 {
+            let r = lightRect(i)
+            (lightsHover ? Self.lightFill[i] : Tok.Color.lights).setFill()
+            NSBezierPath(ovalIn: r).fill()
+            guard lightsHover else { continue }
+            Self.lightGlyph[i].set()
+            let c = NSPoint(x: r.midX, y: r.midY), k = r.width * 0.22
+            let p = NSBezierPath()
+            p.lineWidth = 1.1
+            p.lineCapStyle = .round
+            switch i {
+            case 0:
+                p.move(to: NSPoint(x: c.x - k, y: c.y - k)); p.line(to: NSPoint(x: c.x + k, y: c.y + k))
+                p.move(to: NSPoint(x: c.x - k, y: c.y + k)); p.line(to: NSPoint(x: c.x + k, y: c.y - k))
+                p.stroke()
+            case 1:
+                p.move(to: NSPoint(x: c.x - k * 1.2, y: c.y)); p.line(to: NSPoint(x: c.x + k * 1.2, y: c.y))
+                p.stroke()
+            default:
+                if optionDown {
+                    p.move(to: NSPoint(x: c.x - k * 1.2, y: c.y)); p.line(to: NSPoint(x: c.x + k * 1.2, y: c.y))
+                    p.move(to: NSPoint(x: c.x, y: c.y - k * 1.2)); p.line(to: NSPoint(x: c.x, y: c.y + k * 1.2))
+                    p.stroke()
+                } else {
+                    // Full-screen arrows: two corner triangles pointing out along the diagonal (flipped view, y down).
+                    let a = r.width * 0.25, g = r.width * 0.07
+                    let tl = NSBezierPath()
+                    tl.move(to: NSPoint(x: c.x - a, y: c.y - a)); tl.line(to: NSPoint(x: c.x + a - g * 2, y: c.y - a))
+                    tl.line(to: NSPoint(x: c.x - a, y: c.y + a - g * 2)); tl.close(); tl.fill()
+                    let br = NSBezierPath()
+                    br.move(to: NSPoint(x: c.x + a, y: c.y + a)); br.line(to: NSPoint(x: c.x - a + g * 2, y: c.y + a))
+                    br.line(to: NSPoint(x: c.x + a, y: c.y - a + g * 2)); br.close(); br.fill()
+                }
+            }
+        }
+    }
+
     /// No mockup has this glyph; it is drawn as a window outline with its left column split off,
     /// about the ⚙ glyph's size at the icons' font size.
     private static let sidebarGlyph = NSSize(width: 12, height: 10)
@@ -108,8 +191,7 @@ final class TitleBarView: NSView {
             Draw.fill(NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1), Tok.Color.hairline)
         }
 
-        Tok.Color.lights.setFill()
-        for i in 0..<3 { NSBezierPath(ovalIn: lightRect(i)).fill() }
+        drawLights()
 
         if zen {
             let (parts, sep, sepX) = hintLayout()

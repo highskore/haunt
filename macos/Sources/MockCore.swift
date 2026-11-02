@@ -61,7 +61,7 @@ final class MockCore: CoreAPI {
     func onUserInput(surfaceId: String) {}
 
     func decisions(query: String, limit: UInt32) -> [Decision] {
-        fixture == .palette ? Array(Fixture.decisions().prefix(Int(limit))) : []
+        fixture == .palette || fixture == .codexLog ? Array((fixture?.decisions() ?? []).prefix(Int(limit))) : []
     }
 
     func gatePluginRequest(request: HostRequest) -> PtyWrite? { nil }

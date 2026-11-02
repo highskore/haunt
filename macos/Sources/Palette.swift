@@ -231,13 +231,23 @@ final class PaletteController: NSObject, NSWindowDelegate {
         return host.paletteDecisions(query: query)
             .filter { tabFilter == nil || $0.surfaceId == tabFilter }
             .map { d in
-                let place = names[d.surfaceId] ?? d.cwd.map { ($0 as NSString).lastPathComponent } ?? d.surfaceId
+                let tab = names[d.surfaceId] ?? d.cwd.map { ($0 as NSString).lastPathComponent } ?? d.surfaceId
+                let place = [tab, Self.agentName(d.agent)].compactMap { $0 }.joined(separator: " · ")
                 let what = d.tool == "Bash" ? d.preview : "\(d.tool) \(d.preview)"
                 return PaletteRow(left: Self.time(d.atMs), mark: Self.mark(d.outcome),
                                   title: "\(Self.phrase(d.outcome)) \(what)", sub: place,
                                   right: names[d.surfaceId] == nil ? .none : .jump,
                                   action: names[d.surfaceId] == nil ? .none : .tab(d.surfaceId))
             }
+    }
+
+    /// Claude is left implicit so the all-Claude log matches the mockup's tab-only sub line.
+    static func agentName(_ a: Agent) -> String? {
+        switch a {
+        case .claude: return nil
+        case .codex: return "Codex"
+        case let .other(id): return id
+        }
     }
 
     static func phrase(_ o: Outcome) -> String {
