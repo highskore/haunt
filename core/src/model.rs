@@ -595,6 +595,13 @@ impl Core {
         st.notified = false;
     }
 
+    /// Whether a verified permission prompt may be on the surface's screen (see
+    /// `Session::has_unresolved`); false for an unknown surface. Unlike a row's `needs_you`, no
+    /// unverified event can clear it.
+    pub fn has_unresolved(&self, surface_id: &str) -> bool {
+        lock(&self.state).surfaces.iter().any(|s| s.id == surface_id && s.session.has_unresolved())
+    }
+
     /// Bytes for `ghostty_surface_text`, only while `request_key` is that surface's live,
     /// nonce-verified permission request. The request is consumed. The keys are the asking agent's
     /// (`Agent::answer_bytes`); Enter is never sent, since it takes whichever option is highlighted.
@@ -1159,6 +1166,24 @@ mod tests {
         queue.store(true, Ordering::SeqCst);
         osc();
         rx.recv_timeout(Duration::from_secs(1)).expect("so does one queued for an OSC event");
+    }
+
+    #[test]
+    fn has_unresolved_outlives_forged_turn_ends() {
+        let c = core();
+        let env = c.register_surface("/w").unwrap();
+        let send = |nonce: Option<&str>, body: &str| c.with_state(|st| st.handle_line(&line(&env, nonce, body), Instant::now()));
+        assert!(!c.has_unresolved(&env.surface_id) && !c.has_unresolved("nope"));
+        send(Some(&env.nonce), PERM);
+        assert!(c.has_unresolved(&env.surface_id));
+        send(None, r#""event":"stop""#);
+        send(None, r#""event":"prompt_submit","query":"x""#);
+        assert!(!only_row(&c).needs_you, "the row was cleared");
+        assert!(c.has_unresolved(&env.surface_id), "the prompt may still be up");
+        send(Some(&env.nonce), r#""event":"stop""#);
+        assert!(c.has_unresolved(&env.surface_id), "a verified stop clears nothing either");
+        c.unregister_surface(&env.surface_id);
+        assert!(!c.has_unresolved(&env.surface_id));
     }
 
     #[test]
