@@ -78,9 +78,14 @@ Optional: `shell/install.sh` installs a matching Claude Code theme and prints th
 font = "Berkeley Mono Variable"
 font_size = 11
 
+[layout]
+titlebar_buttons = ["search", "new_tab", "sidebar"]   # the default
+
 [ghostty]            # passed through to libghostty as-is
 cursor-style = "bar"
 ```
+
+`titlebar_buttons` lists the title bar's icons, left to right, from `search`, `new_tab`, `settings` and `sidebar`. Unknown names are skipped and logged; `[]` leaves the bar empty. Each icon's tooltip shows its shortcut from `[keys]`.
 
 ## CLI
 
