@@ -15,6 +15,8 @@ final class MockCore: CoreAPI {
     private var nextId = 1
     private var selectedId: String?
     private weak var listener: CoreListener?
+    /// Bumped on every change, as the core's is.
+    private var version: UInt64 = 1
 
     init(fixture: Fixture?) {
         self.fixture = fixture
@@ -63,7 +65,17 @@ final class MockCore: CoreAPI {
 
     func gatePluginRequest(request: HostRequest) -> PtyWrite? { nil }
 
+    func snapshotIfNewer(version: UInt64) -> SidebarSnapshot? {
+        version == self.version ? nil : snapshot()
+    }
+
     func snapshot() -> SidebarSnapshot {
+        var snap = rawSnapshot()
+        snap.version = version
+        return snap
+    }
+
+    private func rawSnapshot() -> SidebarSnapshot {
         if let fixture { return fixture.snapshot(surfaceIds: surfaces.map(\.id), selected: selectedId) }
         let shell = ((ProcessInfo.processInfo.environment["SHELL"] ?? "zsh") as NSString).lastPathComponent
         let rows = surfaces.map { s in
@@ -75,6 +87,7 @@ final class MockCore: CoreAPI {
     }
 
     private func notify() {
+        version += 1
         listener?.changed()
     }
 }

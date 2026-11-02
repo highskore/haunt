@@ -183,12 +183,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let root = RootView()
     var tabs: [Tab] { store.tabs }
     private var observers: [NSObjectProtocol] = []
+    /// One-shot, for when a running subagent's elapsed time next reads differently.
     private var ticker: Timer?
+    /// The version of the snapshot on screen; 0 is older than any the core makes.
+    private var shownVersion: UInt64 = 0
     /// Applied in showWindow, once the window has its launch position to restore to.
     private var agentsViewAtLaunch = false
     /// The core fires once per burst of changes and re-arms on the next snapshot, so each call is one redraw.
     private lazy var listener = MainQueueListener { [weak self] in
-        self?.refresh()
+        self?.refreshIfNewer()
         self?.bridge.drain()
     }
 
@@ -420,26 +423,31 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: Core
 
-    /// Subagent elapsed times are computed in snapshot(), so poll once a second to keep them ticking,
-    /// but only while the window can be seen; becoming visible again catches up at once.
-    private func updateTicker() {
-        let visible = window?.occlusionState.contains(.visible) ?? false
-        guard visible != (ticker != nil) else { return }
+    /// Elapsed times change without a core event, so a tick or a UI change takes a full snapshot.
+    func refresh() { show(core.snapshot()) }
+
+    /// A listener call: nothing to redraw unless the core has moved past the snapshot on screen.
+    private func refreshIfNewer() {
+        if let snap = core.snapshotIfNewer(version: shownVersion) { show(snap) }
+    }
+
+    /// Fires when the core says the next elapsed time changes, and only while the window can be seen;
+    /// becoming visible again catches up with a full refresh.
+    private func scheduleTick(in ms: UInt64?) {
         ticker?.invalidate()
         ticker = nil
-        guard visible else { return }
-        refresh()
-        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-            self?.refresh()
-            self?.bridge.drain()
-        }
-        t.tolerance = 0.2
+        guard let ms, window?.occlusionState.contains(.visible) == true else { return }
+        let interval = TimeInterval(ms) / 1000
+        let t = Timer(timeInterval: interval, repeats: false) { [weak self] _ in self?.refresh() }
+        t.tolerance = min(interval * 0.1, 0.1)
         RunLoop.main.add(t, forMode: .common)
         ticker = t
     }
 
-    func refresh() {
-        let snap = store.named(core.snapshot())
+    private func show(_ raw: SidebarSnapshot) {
+        shownVersion = raw.version
+        scheduleTick(in: raw.nextTickMs)
+        let snap = store.named(raw)
         if snap != root.sidebar.snapshot { root.sidebar.snapshot = snap }
         if root.agentsOn { root.agents.update(snap) }
         let sel = snap.groups.lazy.flatMap(\.rows).first { $0.selected }
@@ -599,7 +607,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func windowDidResignKey(_ notification: Notification) { syncFocus() }
     func windowDidChangeScreen(_ notification: Notification) { syncFocus() }
     func windowDidChangeOcclusionState(_ notification: Notification) {
-        updateTicker()
+        if window?.occlusionState.contains(.visible) == true { refresh() } else { scheduleTick(in: nil) }
         syncFocus()
     }
 
