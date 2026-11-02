@@ -166,6 +166,17 @@ for (entry, key) in [("middle-click-action = clipboard-paste", "clipboard-paste"
     check(!HauntConfig.refusedGhostty(TOML.parse(text)["ghostty"]!).isEmpty, "\(entry) reported")
 }
 check(conf.contains("middle-click-action = ignore\n"), "Ghostty never pastes on middle click itself")
+// A user's ignore is honoured: it turns Haunt's middle-click paste off. Paste values stay refused.
+check(HauntConfig.middleClickPaste([:]), "Haunt pastes on middle click by default")
+for v in ["ignore", "\" ignore\"", "'\"IGNORE\"'", "[\"primary-paste\", \"ignore\"]"] {
+    let t = TOML.parse("[ghostty]\nmiddle-click-action = \(v)\n")["ghostty"]!
+    check(!HauntConfig.middleClickPaste(t), "middle-click-action = \(v) turns the paste off")
+    check(!HauntConfig.refusedGhostty(t).contains { $0.value.lowercased().contains("ignore") }, "middle-click-action = \(v) not refused")
+}
+for v in ["primary-paste", "clipboard-paste", "\"ignore\\nconfig-file = /x\""] {
+    let t = TOML.parse("[ghostty]\nmiddle-click-action = \(v)\n")["ghostty"]!
+    check(HauntConfig.middleClickPaste(t) && HauntConfig.refusedGhostty(t).count == 1, "middle-click-action = \(v) refused, paste stays on")
+}
 let kept = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\ncursor-style = bar\nkeybind = [\"super+j=paste_from_clipboard\", \"super+u=copy_to_clipboard\"]\n"),
                                      defaultSize: 11, keys: defaults)
 check(kept.contains("cursor-style = bar\n") && kept.contains("keybind = super+u=copy_to_clipboard\n"), "safe passthrough kept")

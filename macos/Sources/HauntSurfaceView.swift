@@ -11,6 +11,8 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
     var onPasteConfirmation: ((Ghostty.ClipboardConfirmationRequest?) -> Void)?
     /// A paste Haunt holds itself (PastePreview.needsConfirmation); the host asks, then calls `sendPaste`.
     var onRiskyPaste: ((String) -> Void)?
+    /// Whether a middle click pastes the selection, read at each click so config changes apply.
+    var middleClickPastes: () -> Bool = { true }
 
     /// True when `text` was held for confirmation instead of going to Ghostty.
     private func holdIfRisky(_ text: String?) -> Bool {
@@ -67,7 +69,7 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
     /// so the paste is Haunt's, and only while the app isn't taking the mouse; the click itself always goes on.
     override func otherMouseDown(with event: NSEvent) {
         super.otherMouseDown(with: event)
-        if event.buttonNumber == 2, surfaceModel?.mouseCaptured == false {
+        if event.buttonNumber == 2, middleClickPastes(), surfaceModel?.mouseCaptured == false {
             onInput?()
             _ = pasteChecked(NSPasteboard.ghosttySelection.getOpinionatedStringContents())
         }

@@ -13,6 +13,8 @@ final class HauntConfig {
     var pluginKeyDefaults: [String: String] = [:]
     private(set) var agentsView = AgentsViewStyle.narrowList
     private(set) var titlebarButtons = TitlebarButton.defaults
+    /// Haunt's own middle-click paste; `[ghostty] middle-click-action = ignore` turns it off.
+    private(set) var middleClickPaste = true
 
     private var source: DispatchSourceFileSystemObject?
     private var fileSource: DispatchSourceFileSystemObject?
@@ -48,6 +50,7 @@ final class HauntConfig {
             for p in problems { Self.logger.error("\(p, privacy: .public)") }
             lastKeyProblems = problems
         }
+        middleClickPaste = Self.middleClickPaste(toml["ghostty"] ?? [:])
         let keysChanged = newKeys != keys
         keys = newKeys
         var layoutProblems: [String] = []
@@ -115,18 +118,29 @@ final class HauntConfig {
         table.sorted { $0.key < $1.key }.flatMap { k, v in v.strings.filter { refused(k, $0) }.map { (k, $0) } }
     }
 
-    private static func refused(_ key: String, _ raw: String) -> Bool {
-        if raw.contains(where: \.isNewline) { return true }
-        // Ghostty trims spaces and tabs from both sides and one pair of double quotes from the value
-        // (cli/args.zig), so a key it reads must already be bare, and values are compared as it reads them.
-        guard key.range(of: "^[a-z0-9-]+$", options: .regularExpression) != nil else { return true }
+    /// False when the table sets `middle-click-action = ignore`; Haunt's paste values for it are refused.
+    static func middleClickPaste(_ table: [String: TOML.Value]) -> Bool {
+        !(table["middle-click-action"]?.strings ?? []).contains { !$0.contains(where: \.isNewline) && ghosttyValue($0) == "ignore" }
+    }
+
+    /// A value as Ghostty reads it (cli/args.zig): spaces and tabs trimmed and one pair of double quotes
+    /// dropped; then trimmed again and lowercased, to compare loosely.
+    private static func ghosttyValue(_ raw: String) -> String {
         let ws = CharacterSet(charactersIn: " \t")
         var value = raw.trimmingCharacters(in: ws)
         if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") { value = String(value.dropFirst().dropLast()) }
-        value = value.trimmingCharacters(in: ws).lowercased()
+        return value.trimmingCharacters(in: ws).lowercased()
+    }
+
+    private static func refused(_ key: String, _ raw: String) -> Bool {
+        if raw.contains(where: \.isNewline) { return true }
+        // A key Ghostty reads must already be bare; it trims the key the same way.
+        guard key.range(of: "^[a-z0-9-]+$", options: .regularExpression) != nil else { return true }
+        let value = ghosttyValue(raw)
         switch key {
         case "right-click-action": return ["paste", "copy-or-paste"].contains(value)
-        case "middle-click-action": return true
+        // Ghostty's is always ignore; the paste is Haunt's, and ignore turns it off (middleClickPaste).
+        case "middle-click-action": return value != "ignore"
         case "keybind": return ["paste_from_clipboard", "paste_from_selection"].contains { value.lowercased().contains($0) }
         case "config-file", "config-default-files": return true
         default: return false
