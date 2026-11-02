@@ -9,7 +9,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     let config: HauntConfig
     let ghostty: Ghostty.App
     private let core: CoreAPI
-    private var plugins: PluginsAPI?
     private var controller: MainWindowController?
     private lazy var setup = SetupSheets(config: config, fixture: fixture != nil)
     private var settings: SettingsWindowController?
@@ -53,10 +52,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         ghostty.delegate = self
         buildMenu()
-        if fixture == nil { plugins = Self.startPlugins(dir: config.dir) }
 
         // The listener goes in before start() so no change is missed.
-        let c = MainWindowController(core: core, ghostty: ghostty, fixture: fixture, config: config, plugins: plugins)
+        let c = MainWindowController(core: core, ghostty: ghostty, fixture: fixture, config: config)
         controller = c
         c.onSidebarToggle = { [weak self] in self?.updateSidebarItem() }
         updateSidebarItem()
@@ -78,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             startError = error
             Self.logger.error("core start failed: \(String(describing: error), privacy: .public)")
         }
+        c.plugins = Self.startPlugins(fixture: fixture, core: core, dir: config.dir)
         Ghostty.App.desktopNotificationHook = { [weak c, weak self] view, title, body in
             guard let self, let tab = c?.tab(for: view) else { return false }
             self.core.onOscNotification(surfaceId: tab.env.surfaceId, title: title, body: body)
@@ -97,13 +96,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
 
         if fixture == nil {
-            config.watch { [weak self] ghosttyChanged, keysChanged in
+            config.watch { [weak self] ghosttyChanged, keysChanged, layoutChanged in
                 guard let self else { return }
                 if keysChanged {
                     self.buildMenu()
                     self.controller?.updateKeys(self.config.keys)
                 }
                 if ghosttyChanged { self.ghostty.reloadConfig() }
+                if layoutChanged { self.controller?.updateTitlebarButtons(self.config.titlebarButtons) }
             }
             c.drainPluginRequests()
         }
@@ -117,6 +117,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 c.select(index: n - 1)
                 c.renameSelectedTab(text: text)
             }
+        }
+        if fixture == .pasteRisky {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak c] in c?.pasteRiskyFixture() }
         }
         if fixture == .pasteConfirm {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak c] in c?.showPasteFixture() }
@@ -133,10 +136,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
     }
 
-    /// Load errors are logged, and listed in the palette, rather than put in front of the user.
-    private static func startPlugins(dir: URL) -> PluginsAPI? {
+    /// Load errors are logged, and listed in the palette, rather than put in front of the user. Fixtures
+    /// get their own plugins; only the log palettes have any.
+    private static func startPlugins(fixture: Fixture?, core: CoreAPI, dir: URL) -> PluginsAPI? {
         do {
-            let p = try loadPlugins(hauntDir: dir.path)
+            let bundled = Bundle.main.resourceURL?.appendingPathComponent("plugins").path
+            guard let p = try fixture.map({ try fixturePlugins($0, bundledDir: bundled) })
+                ?? loadPlugins(hauntDir: dir.path, core: core, bundledDir: bundled) else { return nil }
             for e in p.loadErrors() { logger.error("plugin not loaded: \(e, privacy: .public)") }
             return p
         } catch {
@@ -232,9 +238,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             [keys]
             \(KeyMap.Action.allCases.map { a in a.defaultKey.map { "# \(a.rawValue) = \"\($0)\"" } ?? "# \(a.rawValue): no default" }.joined(separator: "\n"))
 
-            # The view cmd+shift+a shows. Only "narrow-list" for now.
             [layout]
+            # The view cmd+shift+a shows. Only "narrow-list" for now.
             # agents_view = "narrow-list"
+            # Title bar icons, left to right: any of "search", "new_tab", "settings", "sidebar".
+            # titlebar_buttons = [\(TitlebarButton.defaults.map { "\"\($0.rawValue)\"" }.joined(separator: ", "))]
 
             # Raw Ghostty keys, passed through as is.
             [ghostty]

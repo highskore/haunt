@@ -2,7 +2,7 @@ import AppKit
 
 /// Mockup 06's grouped flat sidebar, drawn from a core `SidebarSnapshot`.
 final class SidebarView: NSView, NSTextFieldDelegate {
-    var snapshot = SidebarSnapshot(groups: []) { didSet { relayout() } }
+    var snapshot = SidebarSnapshot(groups: [], colorStyle: .dot) { didSet { relayout() } }
     var onSelect: ((String) -> Void)?
     var onClose: ((String) -> Void)?
     /// Agents view 01's list: the window's background and no right hairline.
@@ -304,8 +304,10 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             let s = Tok.Size.claudeIcon
             Draw.claudeMark(in: NSRect(x: r.midX - s / 2, y: r.midY - s / 2, width: s, height: s))
         case .codex:
-            let s = Tok.Size.claudeIcon
-            Draw.codexMark(in: NSRect(x: r.midX - s / 2, y: r.midY - s / 2, width: s, height: s), ctx: ctx)
+            let s = Draw.openAIMarkSize
+            let box = backingAlignedRect(NSRect(x: r.midX - s / 2, y: r.midY - s / 2, width: s, height: s),
+                                         options: .alignAllEdgesNearest)
+            Draw.codexMark(in: box, color: Tok.Color.textPrimary, ctx: ctx)
         case .shell:
             Tok.Color.iconBg.setFill()
             NSBezierPath(roundedRect: r, xRadius: Tok.Size.iconRadius, yRadius: Tok.Size.iconRadius).fill()
@@ -320,7 +322,8 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         guard let (row, top) = row(at: p) else { return }
-        if closeRect(top: top).insetBy(dx: -4, dy: -4).contains(p) {
+        // Only where the × is drawn: on the hovered row.
+        if row.surfaceId == hoverId, closeRect(top: top).insetBy(dx: -4, dy: -4).contains(p) {
             onClose?(row.surfaceId)
         } else if event.clickCount == 2, nameRect(top: top).contains(p) {
             beginRename(row.surfaceId)

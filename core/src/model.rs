@@ -1,13 +1,14 @@
 //! `Core`: surfaces, their agent sessions, the socket intake and the sidebar snapshot.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde_json::{Value, json};
 
-use crate::allowlist::{self, AllowError, AllowSuggestion};
+use crate::allowlist::{self, AllowError, AllowSuggestion, Approval};
+use crate::arrange::{self, Arrangement, RowInfo};
 use crate::ctl::{self, Ctl};
 use crate::decisions::{Decision, DecisionLog};
 use crate::git::Branches;
@@ -19,6 +20,7 @@ use crate::session::{Outcome, Session};
 use crate::sync::{lock, write};
 
 const MAX_SURFACES: usize = 512;
+const MAX_PROPOSALS: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Error))]
@@ -62,6 +64,8 @@ pub struct SurfaceEnv {
 }
 
 pub type Listener = Arc<dyn Fn() + Send + Sync>;
+/// Sees every event for a registered surface, with whether it was verified; called outside the lock.
+pub type EventTap = Arc<dyn Fn(&AgentEvent, bool) + Send + Sync>;
 
 struct Surface {
     id: String,
@@ -86,14 +90,35 @@ pub(crate) struct State {
     /// The listener fired and no snapshot was taken since: further changes don't fire it again.
     notified: bool,
     version: u64,
-    decisions: DecisionLog,
+    pub(crate) decisions: DecisionLog,
     /// (project, command) suggestions the user accepted or dismissed.
     allow_done: HashSet<(String, String)>,
+    /// Rules plugins proposed, newest first, as (plugin id, project, command).
+    allow_proposals: Vec<(String, String, String)>,
+    event_tap: Option<EventTap>,
+    /// The arranging plugin's id, the token of the instance that set it, and its arrangement.
+    arrangement: Option<(String, u64, Arrangement)>,
+    /// Tokens of plugin instances loaded with the sidebar capability and not disabled.
+    sidebar_live: HashSet<u64>,
+    next_sidebar_token: u64,
 }
 
 impl State {
+    /// Whether an arrangement set by `token` was dropped.
+    fn drop_arrangement(&mut self, token: u64) -> bool {
+        let owned = self.arrangement.as_ref().is_some_and(|(_, t, _)| *t == token);
+        if owned {
+            self.arrangement = None;
+        }
+        owned
+    }
+
     fn surface(&mut self, id: &str) -> Option<&mut Surface> {
         self.surfaces.iter_mut().find(|s| s.id == id)
+    }
+
+    fn tap_for(&self, surface_id: &str) -> Option<EventTap> {
+        self.event_tap.clone().filter(|_| self.surfaces.iter().any(|s| s.id == surface_id))
     }
 
     /// Runs `f` on one surface, then moves the requests it ended into the decision log. Only
@@ -135,12 +160,63 @@ impl State {
         self.with_surface(id, |s| s.session.apply(event, false, now)) == Some(true)
     }
 
+    /// Proposals that still pass every check, most recently approved first. Each is re-checked here
+    /// and again on accept, so a proposal never outlives its approvals or its project's safety.
     fn suggestions(&self) -> Vec<AllowSuggestion> {
-        let done = |p: &str, c: &str| self.allow_done.contains(&(p.to_owned(), c.to_owned()));
-        allowlist::suggestions(self.decisions.iter(), |p| allowlist::check_project(p).is_ok(), done)
+        if self.allow_proposals.is_empty() {
+            return Vec::new();
+        }
+        let approvals = allowlist::approvals(self.decisions.iter(), 1);
+        let counted: HashMap<(&str, &str), (usize, u32)> =
+            approvals.iter().enumerate().map(|(rank, a)| ((a.project.as_str(), a.command.as_str()), (rank, a.count))).collect();
+        let mut out: Vec<(usize, AllowSuggestion)> = self
+            .allow_proposals
+            .iter()
+            .filter(|(_, p, c)| !self.allow_done.contains(&(p.clone(), c.clone())))
+            .filter_map(|(plugin_id, project, command)| {
+                let &(rank, count) = counted.get(&(project.as_str(), command.as_str()))?;
+                let rule = allowlist::rule_for(command)?;
+                allowlist::check_project(project).ok()?;
+                let s = AllowSuggestion { project: project.clone(), command: command.clone(), rule, approvals: count, plugin_id: plugin_id.clone() };
+                Some((rank, s))
+            })
+            .collect();
+        out.sort_by_key(|(rank, _)| *rank);
+        out.into_iter().map(|(_, s)| s).collect()
+    }
+
+    /// Records a plugin's proposal; true if it is new. Nothing is written until the user accepts it.
+    fn propose(&mut self, plugin_id: &str, project: &str, command: &str) -> Result<bool, CoreError> {
+        let invalid = |reason: &str| Err(CoreError::Invalid { reason: reason.into() });
+        if allowlist::rule_for(command).is_none() {
+            return invalid("not a command an exact rule can allow");
+        }
+        if !allowlist::approvals(self.decisions.iter(), 1).iter().any(|a| a.project == project && a.command == command) {
+            return invalid("the user never approved this command in this project in haunt");
+        }
+        allowlist::check_project(project)?;
+        let key = (project.to_owned(), command.to_owned());
+        if self.allow_done.contains(&key) {
+            return invalid("the user already accepted or dismissed this rule");
+        }
+        if self.allow_proposals.iter().any(|(_, p, c)| *p == key.0 && *c == key.1) {
+            return Ok(false);
+        }
+        self.allow_proposals.insert(0, (plugin_id.to_owned(), key.0, key.1));
+        self.allow_proposals.truncate(MAX_PROPOSALS);
+        Ok(true)
     }
 
     pub(crate) fn snapshot(&self, now: Instant) -> SidebarSnapshot {
+        let snap = self.core_snapshot(now);
+        match &self.arrangement {
+            Some((_, t, a)) if self.sidebar_live.contains(t) => arrange::arrange(snap, a),
+            _ => snap,
+        }
+    }
+
+    /// Before any plugin arrangement.
+    fn core_snapshot(&self, now: Instant) -> SidebarSnapshot {
         let views: Vec<SurfaceView> = self
             .surfaces
             .iter()
@@ -175,13 +251,23 @@ pub struct Core {
     servers: Mutex<Option<Servers>>,
 }
 
-/// The branch lookup goes first, outside the state lock: it reads files a hook-chosen cwd points at.
+/// One intake delivery. The branch lookup goes first and the event goes to the tap after, both
+/// outside the state lock: the lookup reads files a hook-chosen cwd points at, and plugins call
+/// back into the core.
 fn deliver(state: &Mutex<State>, branches: &Branches, d: &Delivery) -> bool {
     let branch = match &d.event {
         Some(e) if d.verified => branches.agent(&d.surface_id, e.cwd.as_deref()),
         _ => None,
     };
-    update_state(state, |st, now| st.deliver(d, branch, now))
+    let mut tap = None;
+    let changed = update_state(state, |st, now| {
+        tap = st.tap_for(&d.surface_id);
+        st.deliver(d, branch, now)
+    });
+    if let (Some(tap), Some(event)) = (tap, &d.event) {
+        tap(event, d.verified);
+    }
+    changed
 }
 
 /// Runs `f` on the state and, if it reports a change, fires the listener outside the lock, once
@@ -367,7 +453,14 @@ impl Core {
     /// The OSC 777 fallback: anything in the pty can print these, so they are status-only.
     pub fn on_osc_notification(&self, surface_id: &str, title: &str, body: &str) {
         let Ok(event) = parse_osc(title, body) else { return };
-        self.update(|st, now| st.apply_unverified(surface_id, &event, now));
+        let mut tap = None;
+        self.update(|st, now| {
+            tap = st.tap_for(surface_id);
+            st.apply_unverified(surface_id, &event, now)
+        });
+        if let Some(tap) = tap {
+            tap(&event, false);
+        }
     }
 
     pub fn snapshot(&self) -> SidebarSnapshot {
@@ -451,10 +544,121 @@ impl Core {
     }
 
     pub fn dismiss_allow_suggestion(&self, project: &str, command: &str) {
-        lock(&self.state).allow_done.insert((project.to_owned(), command.to_owned()));
+        self.update(|st, _| st.allow_done.insert((project.to_owned(), command.to_owned())));
     }
 
-    #[cfg(test)]
+    /// Replaces the event tap; plugins get their events through it.
+    pub fn set_event_tap(&self, tap: Option<EventTap>) {
+        lock(&self.state).event_tap = tap;
+    }
+
+    /// What plugin imports may reach: reading decisions and approvals, and proposing a rule.
+    pub fn handle(&self) -> CoreHandle {
+        CoreHandle { state: self.state.clone() }
+    }
+}
+
+/// The core as plugins see it. Plugin calls hold the plugin lock and then take the core's, so the
+/// core never calls a plugin while holding its own.
+/// One plugin instance's claim on the sidebar, from `CoreHandle::attach_sidebar`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidebarToken(u64);
+
+#[derive(Clone)]
+pub struct CoreHandle {
+    state: Arc<Mutex<State>>,
+}
+
+impl std::fmt::Debug for CoreHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CoreHandle")
+    }
+}
+
+impl CoreHandle {
+    pub fn decisions(&self, query: &str, limit: u32) -> Vec<Decision> {
+        let hits = lock(&self.state).decisions.query(query, None, limit as usize);
+        hits.iter().map(|d| Decision::clone(d)).collect()
+    }
+
+    pub fn approvals(&self, min_count: u32) -> Vec<Approval> {
+        allowlist::approvals(lock(&self.state).decisions.iter(), min_count)
+    }
+
+    /// Adds a pending suggestion for the UI; the rule is written only by `accept_allow_suggestion`.
+    pub fn propose_allow_rule(&self, plugin_id: &str, project: &str, command: &str) -> Result<(), CoreError> {
+        let mut res = Ok(false);
+        update_state(&self.state, |st, _| {
+            res = st.propose(plugin_id, project, command);
+            *res.as_ref().unwrap_or(&false)
+        });
+        res.map(|_| ())
+    }
+
+    /// The rows in the core's own order, without meta or task text.
+    pub fn sidebar_rows(&self) -> Vec<RowInfo> {
+        arrange::row_infos(&lock(&self.state).core_snapshot(Instant::now()))
+    }
+
+    /// The first live plugin to arrange owns the sidebar until it clears or goes away.
+    pub fn set_arrangement(&self, plugin_id: &str, token: SidebarToken, a: Arrangement) -> Result<(), CoreError> {
+        a.validate().map_err(|reason| CoreError::Invalid { reason })?;
+        let mut res = Ok(());
+        update_state(&self.state, |st, _| {
+            if !st.sidebar_live.contains(&token.0) {
+                res = Err(CoreError::Invalid { reason: "not loaded with the sidebar capability".into() });
+                return false;
+            }
+            match &st.arrangement {
+                Some((owner, t, _)) if owner != plugin_id && st.sidebar_live.contains(t) => {
+                    res = Err(CoreError::Invalid { reason: format!("the sidebar is arranged by {owner}") });
+                    false
+                }
+                Some((_, t, old)) if *t == token.0 && *old == a => false,
+                _ => {
+                    st.arrangement = Some((plugin_id.to_owned(), token.0, a));
+                    true
+                }
+            }
+        });
+        res
+    }
+
+    pub fn clear_arrangement(&self, token: SidebarToken) {
+        update_state(&self.state, |st, _| st.drop_arrangement(token.0));
+    }
+
+    /// Marks a plugin instance loaded with the sidebar capability; only its arrangement is applied.
+    pub fn attach_sidebar(&self) -> SidebarToken {
+        let mut st = lock(&self.state);
+        st.next_sidebar_token += 1;
+        let t = st.next_sidebar_token;
+        st.sidebar_live.insert(t);
+        SidebarToken(t)
+    }
+
+    /// The instance was disabled, reloaded or dropped: its arrangement goes with it.
+    pub fn detach_sidebar(&self, token: SidebarToken) {
+        update_state(&self.state, |st, _| {
+            st.sidebar_live.remove(&token.0);
+            st.drop_arrangement(token.0)
+        });
+    }
+
+    /// A plugin loaded without the sidebar capability loses any arrangement an earlier load left.
+    pub fn forget_arrangement_of(&self, plugin_id: &str) {
+        update_state(&self.state, |st, _| {
+            let stale = st.arrangement.as_ref().is_some_and(|(owner, t, _)| owner == plugin_id && !st.sidebar_live.contains(t));
+            if stale {
+                st.arrangement = None;
+            }
+            stale
+        });
+    }
+}
+
+#[cfg(test)]
+impl Core {
     pub(crate) fn with_state<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
         f(&mut lock(&self.state))
     }
@@ -613,6 +817,9 @@ mod tests {
                 c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &ran), Instant::now()));
             }
             assert_eq!(c.decisions("", 10).len(), 3);
+            assert!(c.handle().approvals(1).is_empty(), "{cmd}");
+            let raw: String = serde_json::from_str(&format!("\"{cmd}\"")).unwrap();
+            assert!(c.handle().propose_allow_rule("p", &project, &raw).is_err(), "{cmd}");
             assert!(c.allow_suggestions().is_empty(), "{cmd}");
         }
     }
@@ -632,7 +839,7 @@ mod tests {
     }
 
     #[test]
-    fn three_verified_approvals_suggest_an_exact_rule() {
+    fn only_verified_haunt_approvals_are_counted() {
         let (_project, project) = canonical_dir("allow");
         let c = core();
         let env = c.register_surface(&project).unwrap();
@@ -643,26 +850,134 @@ mod tests {
             send(None, &perm);
             send(None, ran);
         }
-        assert!(c.allow_suggestions().is_empty(), "unverified approvals never count");
+        assert!(c.handle().approvals(1).is_empty(), "unverified approvals never count");
         send(Some(&env.nonce), &perm);
         answer(&c, &env.surface_id, true).unwrap();
         for _ in 0..3 {
             send(Some(&env.nonce), &perm);
             send(Some(&env.nonce), ran);
         }
-        assert!(c.allow_suggestions().is_empty(), "answers in the terminal never count");
+        let counts = |min| c.handle().approvals(min).into_iter().map(|a| (a.command, a.count)).collect::<Vec<_>>();
+        assert_eq!(counts(1), [("cargo test".to_owned(), 1)], "answers in the terminal never count");
         for _ in 0..2 {
             send(Some(&env.nonce), &perm);
             answer(&c, &env.surface_id, true).unwrap();
         }
+        assert_eq!(counts(3), [("cargo test".to_owned(), 3)]);
+        assert!(c.allow_suggestions().is_empty(), "the core never suggests on its own");
+    }
+
+    /// One haunt approval of `command` in a fresh canonical project.
+    fn approved(tag: &str, command: &str) -> (Core, TempDir, String) {
+        let (dir, project) = canonical_dir(tag);
+        let c = core();
+        let env = c.register_surface(&project).unwrap();
+        let perm = format!(r#""event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"{command}"}}"#);
+        c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &perm), Instant::now()));
+        answer(&c, &env.surface_id, true).unwrap();
+        (c, dir, project)
+    }
+
+    #[test]
+    fn a_proposal_writes_nothing_until_accepted() {
+        let (c, _project, project) = approved("allow-propose", "cargo test");
+        let fired = Arc::new(AtomicUsize::new(0));
+        let f = fired.clone();
+        c.set_listener(Arc::new(move || {
+            f.fetch_add(1, Ordering::SeqCst);
+        }));
+        let h = c.handle();
+        h.propose_allow_rule("dev.haunt.allowlist", &project, "cargo test").unwrap();
+        h.propose_allow_rule("dev.haunt.allowlist", &project, "cargo test").unwrap();
+        assert_eq!(fired.load(Ordering::SeqCst), 1, "a repeat proposal changes nothing");
+        assert!(!std::path::Path::new(&project).join(".claude").exists(), "proposing never touches the project");
         let s = c.allow_suggestions();
-        assert_eq!((s.len(), s[0].rule.as_str(), s[0].approvals), (1, "Bash(cargo test)", 3));
+        assert_eq!(s.len(), 1);
+        assert_eq!((s[0].rule.as_str(), s[0].approvals, s[0].plugin_id.as_str()), ("Bash(cargo test)", 1, "dev.haunt.allowlist"));
 
         assert!(matches!(c.accept_allow_suggestion(&project, "cargo build"), Err(CoreError::Invalid { .. })));
         c.accept_allow_suggestion(&project, "cargo test").unwrap();
         let written = std::fs::read_to_string(format!("{project}/.claude/settings.local.json")).unwrap();
         assert!(written.contains("\"Bash(cargo test)\""), "{written}");
         assert!(c.allow_suggestions().is_empty(), "accepted once, never again");
+        assert!(h.propose_allow_rule("dev.haunt.allowlist", &project, "cargo test").is_err(), "nor proposed again");
+    }
+
+    #[test]
+    fn proposals_must_rest_on_an_exact_haunt_approval() {
+        let (c, _project, project) = approved("allow-floor", "cargo test");
+        let h = c.handle();
+        for (p, cmd) in [
+            (project.as_str(), "cargo build"),
+            (project.as_str(), "cargo *"),
+            ("/tmp", "cargo test"),
+            (&format!("{project}/"), "cargo test"),
+        ] {
+            assert!(h.propose_allow_rule("p", p, cmd).is_err(), "{p} {cmd}");
+        }
+        assert!(c.allow_suggestions().is_empty());
+        c.dismiss_allow_suggestion(&project, "cargo test");
+        assert!(h.propose_allow_rule("p", &project, "cargo test").is_err(), "dismissed");
+    }
+
+    #[test]
+    fn accepting_rechecks_the_project_and_never_follows_a_symlink() {
+        let (c, _project, project) = approved("allow-recheck", "cargo test");
+        c.handle().propose_allow_rule("p", &project, "cargo test").unwrap();
+        let (_outside, outside) = canonical_dir("allow-recheck-out");
+        std::os::unix::fs::symlink(&outside, format!("{project}/.claude")).unwrap();
+        assert!(matches!(c.accept_allow_suggestion(&project, "cargo test"), Err(CoreError::Insecure { .. })));
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "nothing written through the link");
+
+        std::fs::remove_file(format!("{project}/.claude")).unwrap();
+        let moved = format!("{project}-moved");
+        std::fs::rename(&project, &moved).unwrap();
+        std::os::unix::fs::symlink(&outside, &project).unwrap();
+        assert!(c.allow_suggestions().is_empty(), "a project that became a symlink is no longer offered");
+        assert!(matches!(c.accept_allow_suggestion(&project, "cargo test"), Err(CoreError::Invalid { .. })));
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        std::fs::remove_file(&project).unwrap();
+        std::fs::remove_dir_all(&moved).unwrap();
+    }
+
+    #[test]
+    fn an_arrangement_applies_only_while_its_instance_is_live() {
+        let c = core();
+        c.register_surface("/a").unwrap();
+        let flat = Arrangement { flat: true, ..Default::default() };
+        let h = c.handle();
+        let t = h.attach_sidebar();
+        h.set_arrangement("p", t, flat.clone()).unwrap();
+        assert_eq!(c.snapshot().groups[0].id, arrange::TABS_ID);
+
+        // An arrangement left by an instance that is gone is never applied, and a sidebar-less load drops it.
+        c.with_state(|st| {
+            st.sidebar_live.remove(&t.0);
+        });
+        assert_ne!(c.snapshot().groups[0].id, arrange::TABS_ID);
+        c.with_state(|st| st.arrangement = Some(("p".into(), t.0, flat.clone())));
+        h.forget_arrangement_of("p");
+        assert!(c.with_state(|st| st.arrangement.is_none()));
+        assert!(h.set_arrangement("p", t, flat).is_err(), "a detached token can't arrange");
+    }
+
+    #[test]
+    fn the_event_tap_sees_events_for_registered_surfaces_only() {
+        let c = core();
+        let env = c.register_surface("/w").unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s = seen.clone();
+        c.set_event_tap(Some(Arc::new(move |e: &AgentEvent, verified| s.lock().unwrap().push((e.kind.name().to_owned(), verified)))));
+        let (st, branches) = (c.state.clone(), c.branches.clone());
+        let nonces = lock(&st).nonces.clone();
+        let stranger = SurfaceEnv { surface_id: "nope".into(), ..env.clone() };
+        for (e, nonce) in [(&env, Some(env.nonce.as_str())), (&env, None), (&stranger, None)] {
+            if let Some(d) = crate::intake::decode(&line(e, nonce, r#""event":"stop""#), &nonces) {
+                deliver(&st, &branches, &d);
+            }
+        }
+        c.on_osc_notification(&env.surface_id, "haunt://cli-agent", r#"{"v":1,"event":"stop"}"#);
+        assert_eq!(*seen.lock().unwrap(), [("stop".to_owned(), true), ("stop".to_owned(), false), ("stop".to_owned(), false)]);
     }
 
     #[test]
@@ -781,6 +1096,8 @@ mod tests {
             send(ran);
         }
         assert_eq!(c.decisions("", 10).len(), 6);
+        assert!(c.handle().approvals(1).is_empty());
+        assert!(c.handle().propose_allow_rule("p", &project, "cargo test").is_err());
         assert!(c.allow_suggestions().is_empty());
     }
 

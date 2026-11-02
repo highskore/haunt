@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::arrange::{ColorStyle, TabColor};
 use crate::event::Agent;
 use crate::session::{Session, Status};
 
@@ -9,6 +10,8 @@ use crate::session::{Session, Status};
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct SidebarSnapshot {
     pub groups: Vec<SidebarGroup>,
+    /// How `Row.color` is drawn.
+    pub color_style: ColorStyle,
     /// Bumped on every change; `snapshot_if_newer` compares it.
     #[cfg_attr(feature = "ffi", uniffi(default = 0))]
     pub version: u64,
@@ -21,6 +24,8 @@ pub struct SidebarSnapshot {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct SidebarGroup {
+    /// `needs-you`, `running`, `idle`, `pinned`, `tabs` or `section:<id>`; drops report it back.
+    pub id: String,
     pub label: String,
     pub rows: Vec<Row>,
 }
@@ -48,6 +53,8 @@ pub struct Row {
     pub selected: bool,
     /// The verified request Allow/Deny may answer; its key goes back in `answer_permission`.
     pub pending: Option<PendingRequest>,
+    /// A colour the user picked for the tab, drawn as `SidebarSnapshot.color_style` says.
+    pub color: Option<TabColor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -77,6 +84,9 @@ pub struct Subrow {
 pub const NEEDS_YOU: &str = "NEEDS YOU";
 pub const RUNNING: &str = "RUNNING";
 pub const IDLE: &str = "IDLE";
+pub const NEEDS_YOU_ID: &str = "needs-you";
+pub const RUNNING_ID: &str = "running";
+pub const IDLE_ID: &str = "idle";
 
 /// What a row needs from its surface besides the session.
 pub struct SurfaceView<'a> {
@@ -91,7 +101,10 @@ pub struct SurfaceView<'a> {
 /// and a sidebar of shells alone has no label.
 /// `surfaces` come in tab order; within a group the latest status change comes first.
 pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, shell: Option<&str>, now: Instant) -> SidebarSnapshot {
-    let mut groups: Vec<SidebarGroup> = [NEEDS_YOU, RUNNING, IDLE].iter().map(|l| SidebarGroup { label: (*l).to_owned(), rows: vec![] }).collect();
+    let mut groups: Vec<SidebarGroup> = [(NEEDS_YOU_ID, NEEDS_YOU), (RUNNING_ID, RUNNING), (IDLE_ID, IDLE)]
+        .iter()
+        .map(|(id, l)| SidebarGroup { id: (*id).to_owned(), label: (*l).to_owned(), rows: vec![] })
+        .collect();
     let mut order: Vec<&SurfaceView> = surfaces.iter().collect();
     // Stable, so equal times keep tab order.
     order.sort_by_key(|s| std::cmp::Reverse(s.session.status_changed));
@@ -110,7 +123,7 @@ pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, shell: Option<&str
     {
         g.label.clear();
     }
-    SidebarSnapshot { groups, version: 0, next_tick_ms: next_tick(surfaces, now) }
+    SidebarSnapshot { groups, color_style: ColorStyle::Dot, version: 0, next_tick_ms: next_tick(surfaces, now) }
 }
 
 /// `precise` changes every second below an hour, every minute after.
@@ -148,6 +161,7 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
             subagents: vec![],
             selected: s.selected,
             pending: None,
+            color: None,
         };
     }
 
@@ -193,6 +207,7 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
             .live_permission()
             .filter(|p| p.agent.answer_bytes(true).is_some())
             .map(|p| PendingRequest { key: p.key(), tool: p.tool.clone(), preview: p.preview(), suspicious: session.terminal_only(p) }),
+        color: None,
     }
 }
 

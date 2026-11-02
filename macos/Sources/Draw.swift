@@ -71,14 +71,25 @@ enum Draw {
         path.fill()
     }
 
-    private static let codexLogo = Bundle.main.image(forResource: "codex-logo")
+    /// The OpenAI mark from Codex.app (see macos/Resources/README.md): 1x and 2x reps, a template image.
+    static let openAIMark: NSImage? = {
+        let img = Bundle.main.image(forResource: "openai-mark")
+        img?.isTemplate = true
+        return img
+    }()
 
-    /// The official Codex logo (see macos/Resources/README.md), drawn whole into `rect`.
-    static func codexMark(in rect: NSRect, ctx: CGContext) {
-        guard let img = codexLogo else { return }
+    /// The mark's native size; drawn at it on whole pixels, neither rep is resampled.
+    static var openAIMarkSize: CGFloat { openAIMark?.size.width ?? 18 }
+
+    /// The Codex icon: the OpenAI mark tinted `color`. `rect` should be backing-aligned and mark-sized.
+    static func codexMark(in rect: NSRect, color: NSColor, ctx: CGContext) {
+        guard let img = openAIMark else { return }
         ctx.saveGState()
-        ctx.interpolationQuality = .high
+        ctx.beginTransparencyLayer(in: rect, auxiliaryInfo: nil)
         img.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        color.setFill()
+        rect.fill(using: .sourceAtop)
+        ctx.endTransparencyLayer()
         ctx.restoreGState()
     }
 }

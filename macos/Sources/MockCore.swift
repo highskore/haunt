@@ -60,10 +60,6 @@ final class MockCore: CoreAPI {
 
     func onUserInput(surfaceId: String) {}
 
-    func decisions(query: String, limit: UInt32) -> [Decision] {
-        fixture == .palette || fixture == .codexLog ? Array((fixture?.decisions() ?? []).prefix(Int(limit))) : []
-    }
-
     func gatePluginRequest(request: HostRequest) -> PtyWrite? { nil }
 
     func snapshot() -> SidebarSnapshot {
@@ -72,9 +68,9 @@ final class MockCore: CoreAPI {
         let rows = surfaces.map { s in
             Row(surfaceId: s.id, kind: .shell, name: (s.cwd as NSString).lastPathComponent,
                 meta: "\((s.cwd as NSString).abbreviatingWithTildeInPath) · \(shell)",
-                statusText: "", needsYou: false, progress: nil, subagents: [], selected: s.id == selectedId, pending: nil)
+                statusText: "", needsYou: false, progress: nil, subagents: [], selected: s.id == selectedId, pending: nil, color: nil)
         }
-        return SidebarSnapshot(groups: rows.isEmpty ? [] : [SidebarGroup(label: "IDLE", rows: rows)])
+        return SidebarSnapshot(groups: rows.isEmpty ? [] : [SidebarGroup(id: "idle", label: "IDLE", rows: rows)], colorStyle: .dot)
     }
 
     private func notify() {

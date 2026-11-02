@@ -20,7 +20,7 @@ object HauntCore {
   fn on_user_input(surface_id: string)           // every keyDown routed to that surface
   fn decisions(query: string, limit: u32) -> sequence<Decision>     // newest first
   fn decisions_in(query: string, surface_id: Option<string>, limit: u32) -> sequence<Decision>   // one tab's, filtered before the limit
-  fn allow_suggestions() -> sequence<AllowSuggestion>
+  fn allow_suggestions() -> sequence<AllowSuggestion>              // plugin proposals that pass every check
   fn accept_allow_suggestion(project: string, command: string) -> Result<(), CoreError>
   fn dismiss_allow_suggestion(project: string, command: string)
 }
@@ -30,13 +30,15 @@ callback interface CoreListener { fn changed() }
 record SurfaceEnv { surface_id: string, nonce: string, socket_path: string }
 error  CoreError { Insecure { reason }, Io { reason }, Invalid { reason } }
 
-record SidebarSnapshot { groups: sequence<SidebarGroup> }
-record SidebarGroup { label: string, rows: sequence<Row> }
+record SidebarSnapshot { groups: sequence<SidebarGroup>, color_style: ColorStyle }
+record SidebarGroup { id: string, label: string, rows: sequence<Row> }   // id: needs-you, running, idle, pinned, tabs, section:<id>
 record Row {
   surface_id: string, kind: RowKind, name: string, meta: string, status_text: string,
   needs_you: bool, progress: Option<Progress>, subagents: sequence<Subrow>, selected: bool,
-  pending: Option<PendingRequest>
+  pending: Option<PendingRequest>, color: Option<TabColor>
 }
+enum   TabColor { Red, Orange, Yellow, Green, Blue, Purple, Gray }
+enum   ColorStyle { Dot, Tint }
 record PendingRequest { key: u64, tool: string, preview: string, suspicious: bool }
 enum   RowKind { Shell, Claude, Codex }     // an agent without a kind of its own is Claude
 record Progress { done: u64, total: u64 }
@@ -45,7 +47,7 @@ record Subrow { label: string, meta: string }
 record Decision { at_ms: u64, surface_id: string, tool: string, preview: string, command: Option<string>, cwd: Option<string>, outcome: Outcome, agent: Agent }
 enum   Agent { Claude, Codex, Other { id: string } }   // "claude", "codex" or the id in decisions.jsonl; absent is Claude
 enum   Outcome { AllowedInHaunt, DeniedInHaunt, AllowedByPlugin { plugin_id: string }, DeniedByPlugin { plugin_id: string }, AnsweredInTerminal, Superseded }
-record AllowSuggestion { project: string, command: string, rule: string, approvals: u32 }
+record AllowSuggestion { project: string, command: string, rule: string, approvals: u32, plugin_id: string }
 ```
 
 `select_surface` is an addition to the contract as first agreed, because `Row.selected` needs a source. `SidebarGroup` was renamed from `Group` because a Swift `struct Group` would shadow SwiftUI's `Group`.
@@ -71,7 +73,7 @@ In Swift, the generated `Progress` struct shadows `Foundation.Progress` inside t
 
 ### UI must call
 
-- `onUserInput(surfaceId)` on every keyDown routed to a surface (before or as it goes to the pty). Once the user types at the terminal, the prompt may already be answered and the tool running until `PostToolUse` arrives, so a late Allow (`1`) or Deny (Esc) from haunt would be typed into the running session. The call retires the surface's live request: `pending` disappears, `answerPermission` returns `nil`, and the request is logged when its outcome is known (`AnsweredInTerminal` if the matching tool runs, else `Superseded`). The macOS app makes its surfaces `HauntSurfaceView` (`macos/Sources/MainWindow.swift`), a subclass of the vendored `Ghostty.SurfaceView`. libghostty has no single write choke point the app can hook (clipboard reads also serve OSC 52), so the subclass calls it before `super` on each user write path: `keyDown`, the three paste actions, `insertText` (IME, Character Viewer, dictation), middle-click `otherMouseDown`, `performDragOperation`, `readSelection` (Services), and whenever a paste confirmation resolves. Ghostty's own bindings reach the surface through `keyDown` as well, menu shortcuts never do, and the vendored sources stay unpatched. Mouse clicks and scrolls that a TUI's mouse mode reports, and key-release events, are not counted: a click to focus the terminal shouldn't drop the request.
+- `onUserInput(surfaceId)` on every keyDown routed to a surface (before or as it goes to the pty). Once the user types at the terminal, the prompt may already be answered and the tool running until `PostToolUse` arrives, so a late Allow (`1`) or Deny (Esc) from haunt would be typed into the running session. The call retires the surface's live request: `pending` disappears, `answerPermission` returns `nil`, and the request is logged when its outcome is known (`AnsweredInTerminal` if the matching tool runs, else `Superseded`). The macOS app makes its surfaces `HauntSurfaceView` (`macos/Sources/MainWindow.swift`), a subclass of the vendored `Ghostty.SurfaceView`. libghostty has no single write choke point the app can hook (clipboard reads also serve OSC 52), so the subclass calls it before `super` on each user write path: `keyDown`, the three paste actions, `insertText` (IME, Character Viewer, dictation), middle-click `otherMouseDown`, `performDragOperation`, `readSelection` (Services), and whenever a paste confirmation resolves. Ghostty's own bindings reach the surface through `keyDown` as well, menu shortcuts never do, and the vendored sources stay unpatched. Mouse clicks and scrolls that a TUI's mouse mode reports, and key-release events, are not counted: a click to focus the terminal shouldn't drop the request. The same paste paths (the paste actions, middle click, drag and drop, Services) also check the text first: one with an escape, another control or a hidden character gets Haunt's own confirmation sheet before Ghostty sees it, because Ghostty counts any bracketed paste as safe, even one carrying `ESC[201~`.
 - `try registerSurface(cwd:)`: it throws now (past 512 surfaces), so `CoreAPI.registerSurface` must be `throws` and its callers need `try`.
 - `gatePluginRequest(request:)` for every `.ptyAnswer` from `HauntPlugins.takeRequests()`, writing only the bytes it returns (see Plugins).
 
@@ -90,17 +92,21 @@ Every verified permission request is recorded once, when it ends, with its outco
 
 Requests only exist for verified events, so unverified events never add an entry; they can only end a verified request, which is then logged as `Superseded`. Entries live in memory (the last 10,000) and in `<config_dir>/decisions.jsonl`, one JSON object per line, appended. `start` opens it with `O_NOFOLLOW`, refuses a symlink or a file of another uid, keeps it 0600, and loads the existing lines. Loading is strict: a line with an unknown field or outcome, an empty surface id or tool, or a `command` that isn't a Bash command whose `preview` shows exactly that command is skipped. Before `start` the log is memory-only.
 
-`decisions(query, limit)` is for the ⌘K `log` mode: newest first, `query` is a case-insensitive substring of tool, preview, cwd, outcome (`allowed_in_haunt`, …), surface id, agent id (`codex`) or plugin id; empty matches all. `decisions_in` keeps only one surface's, before the limit, so a tab filter never misses its older decisions behind other tabs' newer ones; the palette's tab filter should call it instead of filtering `decisions` itself. Lines reach `decisions.jsonl` after the state lock is released, in order; a line that fails to write stays in memory and is counted in `haunt dump`.
+`decisions(query, limit)` returns them newest first; `query` is a case-insensitive substring of tool, preview, cwd, outcome (`allowed_in_haunt`, …), surface id, agent id (`codex`) or plugin id, and empty matches all. `decisions_in` keeps only one surface's, before the limit, so a tab filter never misses its older decisions behind other tabs' newer ones. The ⌘K `log` mode is not built in: it is the first-party plugin `dev.haunt.decision-log` (`~/code/haunt-plugins/haunt-decision-log`), which reads the same records through the `decisions` import (see Plugins). Lines reach `decisions.jsonl` after the state lock is released, in order; a line that fails to write stays in memory and is counted in `haunt dump`.
 
 ## Allowlist suggestions
 
-Nothing is allowed by default; the core only suggests, and only for Claude Code, the one agent that reads `.claude/settings.local.json`: decisions of any other agent never count. After 3 approvals in haunt (`AllowedInHaunt`; `AllowedByPlugin` and `AnsweredInTerminal` never count, see the nonce limit below) of the same Bash command with the same hook cwd, `allow_suggestions()` lists it with the exact rule `Bash(<command>)`, most recently approved first.
+Nothing is allowed by default. The core keeps the safety primitives: it counts approvals, holds the proposals and is the only thing that writes a rule. When to offer a rule is a plugin's call: the first-party `dev.haunt.allowlist` (`~/code/haunt-plugins/haunt-allowlist`) proposes one after 3 identical approvals. The core never suggests anything on its own.
 
+A plugin with `allowlist_suggest` reads the counts (`allowlist.approvals(min-count)`) and calls `allowlist.propose(project, command)`. That only records a pending suggestion and fires `changed()`; it writes no file. `allow_suggestions()` lists the proposals that still pass every check, with the exact rule `Bash(<command>)`, the current count and the proposing `plugin_id`, most recently approved first. Every proposal is checked when it is made, whenever suggestions are listed, and again on accept:
+
+- It needs at least one counted approval of exactly that command in exactly that project. Only Claude Code approvals count, because Claude Code is the one agent that reads `.claude/settings.local.json`, and only clicks in haunt (`AllowedInHaunt`). `AllowedByPlugin` and `AnsweredInTerminal` never count; see the nonce limit below. A plugin can't propose a command you never approved.
 - Counting uses `Decision.command`, the command exactly as the hook sent it (`ToolCall.raw_command`), not the shown `preview`. An approval counts only if the two are equal, so a command with invisible characters, tabs or newlines (which the preview shows as markers) never counts, and a rule can't allow a variant of what was approved. Log lines without `command` (written before it existed) don't count.
-- Wildcards are never suggested: a command containing `*`, `(` or `)`, anything outside printable ASCII, leading or trailing spaces, or over 1024 bytes gets no suggestion.
-- The project (the hook cwd) must be absolute with no `.` or `..` components, equal byte for byte to its canonical path (so no symlink anywhere in it, and no trailing or doubled slash), and a directory owned by the current uid. This is checked when suggesting and again when accepting (`Invalid` or `Insecure` if it fails).
+- Wildcards are never suggested: a command containing `*`, `(` or `)`, anything outside printable ASCII, leading or trailing spaces, or over 1024 bytes can't be proposed.
+- The project (the hook cwd) must be absolute with no `.` or `..` components, equal byte for byte to its canonical path (so no symlink anywhere in it, and no trailing or doubled slash), and a directory owned by the current uid (`Invalid` or `Insecure` if it fails).
+- A rule the user accepted or dismissed in this run can't be proposed again. At most 256 proposals are kept.
 
-`accept_allow_suggestion(project, command)` only accepts a current suggestion (`Invalid` otherwise) and adds the rule to `<project>/.claude/settings.local.json` under `permissions.allow`, keeping every other key and their order (the file is re-indented). A file that isn't a JSON object, or a non-object `permissions` or non-array `allow`, is an `Invalid` error and is never overwritten. It refuses (`Insecure`) a symlinked `.claude` or settings file and never follows one: the directory is opened with `O_NOFOLLOW`, and the new content goes to a temp file (`O_EXCL | O_NOFOLLOW`) in it that is renamed over the old one. The file keeps its mode, or gets 0600 if new. Accepted and dismissed suggestions are not offered again in this run; that memory isn't persisted yet, so a dismissed one comes back after a restart.
+`accept_allow_suggestion(project, command)` only accepts a current suggestion (`Invalid` otherwise) and adds the rule to `<project>/.claude/settings.local.json` under `permissions.allow`, keeping every other key and their order (the file is re-indented). A file that isn't a JSON object, or a non-object `permissions` or non-array `allow`, is an `Invalid` error and is never overwritten. It refuses (`Insecure`) a symlinked `.claude` or settings file and never follows one: the directory is opened with `O_NOFOLLOW`, and the new content goes to a temp file (`O_EXCL | O_NOFOLLOW`) in it that is renamed over the old one. The file keeps its mode, or gets 0600 if new. Accepted and dismissed suggestions are not offered again in this run. Neither that memory nor the proposals are persisted yet, so after a restart the plugin proposes again, and a dismissed rule comes back.
 
 ## Snapshot format (mockup layout 06, grouped flat)
 
@@ -124,6 +130,31 @@ The task part of `meta`:
 - failed: `Failed`
 
 A surface becomes an agent row with its first agent event and stays one until it is unregistered. Its kind follows the `agent` of the latest verified event (`Claude` until one arrives). Phase 1 hooks send no session-end event.
+
+### Arrangement (`core/src/arrange.rs`)
+
+A plugin granted `sidebar` (the first-party one is `dev.haunt.tabs`) can push an arrangement: pinned tabs, named sections, a manual order, a flat list, and colours. The core merges it over its own grouping on every `snapshot()`:
+
+1. `NEEDS YOU` (`needs-you`) first: every row that needs you, in the core's order, whatever the arrangement says. When a pinned or sectioned row stops needing you, it goes back to its place.
+2. `PINNED` (`pinned`): the pinned rows, in the plugin's order.
+3. The plugin's sections (`section:<id>`), before or after step 4 as the arrangement's `placement` says. A row listed in more than one place goes to the first: pinned, then sections in order.
+4. `RUNNING` (`running`) and `IDLE` (`idle`) with the rest, or one `TABS` group (`tabs`) when `flat` is set. Rows the plugin ranked in `order` come first, in that order, and the rest follow in the core's order. One global order means a tab that leaves RUNNING and comes back keeps its place. A group of shells only still has no label.
+
+Every row shows exactly once. Unknown and repeated surface ids are ignored, and empty groups are left out. A section title is 1 to 32 ASCII letters, digits, spaces and basic punctuation (`-_.,:;!?'&()/+#`), so no lookalike letters from other scripts; it is single-spaced and uppercased like the core's labels. Its letters and digits may not spell `NEEDS YOU`, `RUNNING`, `IDLE`, `PINNED` or `TABS`, so `N-E-E-D-S YOU` is refused too. Section ids are lowercase letters, digits and `-`. At most 32 sections and 1024 ids per list; `sidebar.arrange` refuses anything else.
+
+The first plugin to arrange owns the sidebar until it calls `clear` or goes away; others get an error. An arrangement belongs to the loaded instance that set it. It is dropped when that plugin is disabled (a trap or timeout), reloaded or removed, and the snapshot applies only an arrangement whose instance is still loaded with `sidebar`. `Row.color` is set only for rows the plugin coloured. `SidebarSnapshot.color_style` says how to draw it: `Dot`, a small dot beside the name, or `Tint`, a faint background. Without an arrangement every row has no colour and the style is `Dot`.
+
+The colours are names, so the app picks shades that sit in the black-and-white design. `design/tokens.json` is generated from the mockups, so they belong in Swift (or a hand-kept token file), not there. A starting point: dot at full value, tint at about 12% over `color.sidebar.bg`.
+
+| colour | dot |
+|---|---|
+| Red | `#b07a7a` |
+| Orange | `#b08f72` |
+| Yellow | `#ada27a` |
+| Green | `#84a083` |
+| Blue | `#7f93ad` |
+| Purple | `#9a87ad` |
+| Gray | `#8a8a8a` |
 
 ## Transport and security
 
@@ -162,15 +193,45 @@ Installed with `haunt plugin install <path>` (cli/), which shows the capabilitie
 
 | call | what |
 |---|---|
-| `HauntPlugins.load(hauntDir:)` | loads every pinned plugin from `<hauntDir>/plugins` with only its granted imports; runs `init` |
+| `HauntPlugins.load(hauntDir:core:bundledDir:)` | first installs or updates the app's own plugins from `bundledDir` (see Bundled plugins), then loads every pinned plugin from `<hauntDir>/plugins` with only its granted imports; runs `init`. `core` (the `HauntCore`) backs the `decisions` and `allowlist` imports, and from then on every event for a registered surface reaches the plugins whose `events` grant covers it, with `verified` set as below. Call it after `core.start()` so the decision log is loaded. |
 | `loadErrors()` | plugins skipped, with the reason (hash mismatch, link error, trap) |
 | `paletteItems(mode: nil, query:)` | registered commands and modes (`isMode`), title-filtered by `query` |
-| `paletteItems(mode: "word", query:)` | the items that mode's plugin returns for `query` |
+| `paletteItems(mode: "word", query:)` | the items that mode's plugin returns for `query`, each with optional `atMs` (time column), `mark` (`open`, `filled`, `round`) and `surfaceId` (Enter jumps to that tab, if it is open, instead of invoking the item) |
 | `invokePaletteItem(pluginId:itemId:)` | calls the plugin's `on-action(itemId, "")` |
 | `takeRequests()` | `HostRequest.notify` / `.ptyAnswer` queued by plugins |
+| `rowMenuItems(surfaceId:)` | every plugin's entries for that row's context menu, built when it opens: `RowMenuItem { pluginId, id, title, checked, parent }`. An entry whose `parent` is another entry's id goes in that entry's submenu (one level). |
+| `invokeRowMenuItem(pluginId:itemId:surfaceId:)` | calls the plugin's `on-action(itemId, surfaceId)` |
+| `rowMoved(surfaceId:groupId:beforeSurfaceId:)` | a sidebar drag ended: the row was dropped into the `SidebarGroup.id` `groupId`, above `beforeSurfaceId` (`nil`: at the end). It goes to plugins granted `sidebar`, whose new arrangement then fires `changed()`. Don't offer drops into `needs-you`; they are ignored. |
 | `HauntCore.gatePluginRequest(request:)` | the only way to turn a `.ptyAnswer` into bytes (`core/src/ptygate.rs`); returns `PtyWrite { surfaceId, bytes }` or `nil` |
 
 Each call runs under a 50 ms CPU budget and 64 MB of memory; a trap or timeout disables that plugin until the next load.
+
+Events reach plugins on the thread that delivered them (usually the socket thread), after the core has released its lock. A plugin call holds the plugins' lock and may then take the core's, through `decisions` or `allowlist`; the core never calls a plugin while holding its own. `propose` and `arrange` fire `changed()` from inside a plugin call, so the listener must hop to the main actor and not call `HauntPlugins` synchronously. Row decorations from `on-event` are dropped for now: the snapshot has no field for them yet.
+
+**Verified events**: `agent-event.verified` is true when the event came over the socket with the surface's nonce (see Nonce gating). An unverified one (OSC 777, wrong or no nonce) can be forged by anything that prints into the terminal, so treat its fields as untrusted. A plugin granted `pty_write`, `allowlist_suggest` or `decisions_read` gets verified events only. Only a verified event's `cwd` widens a `${cwd}` grant.
+
+**API version**: `haunt:plugin@0.3.0`; manifests say `api = "0.3"`. Older plugins no longer install or load; rebuild them against the 0.3 WIT.
+
+- 0.2 added the `decisions` and `allowlist` imports (below), and `at-ms`, `mark` and `surface` on `palette-item`, plus the `mark` enum.
+- 0.3 added `verified` on `agent-event`, the `sidebar` import (below), and two exports every plugin implements. `row-menu(surface) -> list<menu-item>` builds context-menu entries; a chosen entry calls `on-action(id, surface)`. `on-row-moved(surface, group, before)` is called only for plugins granted `sidebar`.
+
+**sidebar** (`sidebar`):
+
+- `rows()` returns the rows in the core's order with surface id, name, kind (`shell`, `claude`, `codex`), state group and selection. It includes no meta, task, prompt or command text.
+- `arrange(arrangement)` sets this plugin's arrangement, merged as described under Arrangement, and `clear()` gives the sidebar back.
+- Surface ids last as long as their tab and are new after a restart, so per-tab state keyed by them starts over with every launch.
+
+**decisions** (`decisions_read`): `query(text, limit)` returns the same records as `HauntCore.decisions`, at most 1000, without the raw `command` (the preview shows it with nothing hidden). It is read only: nothing a plugin can call adds, changes or removes a decision.
+
+**allowlist** (`allowlist_suggest`): `approvals(min-count)` returns the counted approvals (Claude Code, clicked in haunt, the raw command equal to its preview) per project and exact command, newest first. The host raises `min-count` to at least 2 (`APPROVALS_MIN`), so a one-off approval, such as an `export TOKEN=…`, never reaches a plugin. `propose(project, command)` adds a pending suggestion; it errors if the proposal fails a check (see Allowlist suggestions). No import writes a settings file, and none can accept a suggestion. Only `HauntCore.acceptAllowSuggestion` does, after the user accepts it in the UI.
+
+An ungranted import is absent: a component that imports it fails to link at install and at load.
+
+**Bundled plugins**: `macos/make-app.sh` builds the decision-log and allowlist plugins (or the repos in `HAUNT_FIRST_PARTY_PLUGINS`) and puts each in `haunt.app/Contents/Resources/plugins/<id>/` as `haunt-plugin.toml` and `plugin.wasm`, inside the signature. `Store::install_bundled` installs them on launch without a prompt, pinned with `source = "bundled"`:
+
+- A new bundled plugin is installed with the capabilities its manifest asks for.
+- When the app ships a different build of one, it is updated in place, unless it asks for a capability the pinned one wasn't granted. Then the new files go on disk unpinned, the plugin stops loading ("does not match the lockfile"), and `haunt plugin approve <id>` shows the full prompt.
+- A copy installed from another source is never replaced. `haunt plugin remove` of a bundled plugin adds its id to the lockfile's `removed_bundled`, and it is never installed again.
 
 **fs grants**: `${cwd}` in an `fs_read`/`fs_write` glob expands only to cwds of verified events. A cwd that is `$HOME`, an ancestor of it, inside the haunt dir or containing it is ignored, and if `$HOME` can't be resolved `${cwd}` expands to nothing. No path inside the haunt dir is ever readable, writable or listable, whatever the globs say.
 

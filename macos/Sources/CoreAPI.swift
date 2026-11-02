@@ -12,11 +12,10 @@ protocol CoreAPI: AnyObject {
     func setListener(listener: CoreListener)
     func answerPermission(surfaceId: String, requestKey: UInt64, allow: Bool) -> Data?
     func onUserInput(surfaceId: String)
-    func decisions(query: String, limit: UInt32) -> [Decision]
     func gatePluginRequest(request: HostRequest) -> PtyWrite?
 }
 
-/// `HauntPlugins` as the UI uses it; the mock build has no plugin host.
+/// `HauntPlugins` as the UI uses it.
 protocol PluginsAPI: AnyObject {
     func loadErrors() -> [String]
     func paletteItems(mode: String?, query: String) -> [PaletteItem]
@@ -28,15 +27,114 @@ protocol PluginsAPI: AnyObject {
 extension HauntCore: CoreAPI {}
 extension HauntPlugins: PluginsAPI {}
 
-func loadPlugins(hauntDir: String) throws -> PluginsAPI { try HauntPlugins.load(hauntDir: hauntDir) }
+/// Installs the app's own plugins from `bundledDir`, then loads them all over `core`; call after `core.start()`.
+func loadPlugins(hauntDir: String, core: CoreAPI, bundledDir: String?) throws -> PluginsAPI? {
+    guard let core = core as? HauntCore else { return nil }
+    return try HauntPlugins.load(hauntDir: hauntDir, core: core, bundledDir: bundledDir)
+}
+
+private var fixtureCore: HauntCore?
+
+/// The log palettes in the real build: the bundled decision-log plugin over a throwaway core that holds
+/// the fixture's decisions, so the rows come through the real plugin host.
+func fixturePlugins(_ fixture: Fixture, bundledDir: String?) throws -> PluginsAPI? {
+    guard fixture.hasLog else { return nil }
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("haunt-fixture-plugins-\(getpid())")
+    try? fm.removeItem(at: dir)
+    try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    // The log file is oldest first.
+    let lines = try fixture.decisions().reversed().map { d in
+        var o: [String: Any] = ["at_ms": d.atMs, "surface_id": d.surfaceId, "tool": d.tool, "preview": d.preview]
+        o["command"] = d.command
+        o["cwd"] = d.cwd
+        switch d.agent {
+        case .claude: o["agent"] = "claude"
+        case .codex: o["agent"] = "codex"
+        case let .other(id): o["agent"] = id
+        }
+        switch d.outcome {
+        case .allowedInHaunt: o["outcome"] = "allowed_in_haunt"
+        case .deniedInHaunt: o["outcome"] = "denied_in_haunt"
+        case let .allowedByPlugin(id): o["outcome"] = ["allowed_by_plugin": ["plugin_id": id]]
+        case let .deniedByPlugin(id): o["outcome"] = ["denied_by_plugin": ["plugin_id": id]]
+        case .answeredInTerminal: o["outcome"] = "answered_in_terminal"
+        case .superseded: o["outcome"] = "superseded"
+        }
+        return String(decoding: try JSONSerialization.data(withJSONObject: o), as: UTF8.self)
+    }
+    fm.createFile(atPath: dir.appendingPathComponent("decisions.jsonl").path,
+                  contents: Data((lines.joined(separator: "\n") + "\n").utf8), attributes: [.posixPermissions: 0o600])
+    let core = HauntCore(configDir: dir.path)
+    try core.start()
+    fixtureCore = core
+    return try HauntPlugins.load(hauntDir: dir.path, core: core, bundledDir: bundledDir)
+}
 #else
-func loadPlugins(hauntDir: String) throws -> PluginsAPI { NoPlugins() }
+func loadPlugins(hauntDir: String, core: CoreAPI, bundledDir: String?) throws -> PluginsAPI? { NoPlugins() }
+
+func fixturePlugins(_ fixture: Fixture, bundledDir: String?) throws -> PluginsAPI? {
+    fixture.hasLog ? FixturePlugins(fixture: fixture) : nil
+}
 
 final class NoPlugins: PluginsAPI {
     func loadErrors() -> [String] { [] }
     func paletteItems(mode: String?, query: String) -> [PaletteItem] { [] }
     func invokePaletteItem(pluginId: String, itemId: String) throws {}
     func takeRequests() -> [HostRequest] { [] }
+}
+
+/// The decision-log plugin's `log` mode over the fixture's decisions, worded as the plugin words them.
+final class FixturePlugins: PluginsAPI {
+    private static let id = "dev.haunt.decision-log"
+    private let fixture: Fixture
+
+    init(fixture: Fixture) {
+        self.fixture = fixture
+    }
+
+    func loadErrors() -> [String] { [] }
+    func invokePaletteItem(pluginId: String, itemId: String) throws {}
+    func takeRequests() -> [HostRequest] { [] }
+
+    func paletteItems(mode: String?, query: String) -> [PaletteItem] {
+        guard let mode else {
+            return [PaletteItem(pluginId: Self.id, id: "log", title: "log", subtitle: "Search the decision log",
+                                defaultKey: nil, isMode: true, atMs: nil, mark: nil, surfaceId: nil)]
+        }
+        guard mode == "log" else { return [] }
+        return fixture.decisions().enumerated().map { i, d in
+            let what = d.tool == "Bash" ? d.preview : "\(d.tool) \(d.preview)"
+            let agent: String? = switch d.agent {
+            case .claude: nil
+            case .codex: "Codex"
+            case let .other(id): id
+            }
+            let place = [d.cwd.map { ($0 as NSString).lastPathComponent }, agent].compactMap { $0 }.joined(separator: " · ")
+            return PaletteItem(pluginId: Self.id, id: "\(d.atMs)-\(i)", title: "\(Self.phrase(d.outcome)) \(what)",
+                               subtitle: place.isEmpty ? nil : place, defaultKey: nil, isMode: false,
+                               atMs: d.atMs, mark: Self.mark(d.outcome), surfaceId: d.surfaceId)
+        }
+    }
+
+    private static func phrase(_ o: Outcome) -> String {
+        switch o {
+        case .allowedInHaunt: return "You approved"
+        case .deniedInHaunt: return "You denied"
+        case let .allowedByPlugin(id): return "\(id) approved"
+        case let .deniedByPlugin(id): return "\(id) denied"
+        case .answeredInTerminal: return "Allowed in terminal:"
+        case .superseded: return "Superseded:"
+        }
+    }
+
+    private static func mark(_ o: Outcome) -> Mark {
+        switch o {
+        case .allowedInHaunt, .deniedInHaunt, .answeredInTerminal: return .open
+        case .allowedByPlugin, .deniedByPlugin: return .filled
+        case .superseded: return .round
+        }
+    }
 }
 
 // Mirrors of the records UniFFI generates from the shared contract; the real bindings replace them.
@@ -55,9 +153,11 @@ enum CoreError: Error {
 
 struct SidebarSnapshot: Equatable, Hashable {
     var groups: [SidebarGroup]
+    var colorStyle: ColorStyle
 }
 
 struct SidebarGroup: Equatable, Hashable {
+    var id: String
     var label: String
     var rows: [Row]
 }
@@ -95,6 +195,15 @@ struct Row: Equatable, Hashable {
     var subagents: [Subrow]
     var selected: Bool
     var pending: PendingRequest?
+    var color: TabColor?
+}
+
+enum TabColor: Equatable, Hashable {
+    case red, orange, yellow, green, blue, purple, gray
+}
+
+enum ColorStyle: Equatable, Hashable {
+    case dot, tint
 }
 
 struct PendingRequest: Equatable, Hashable {
@@ -131,6 +240,13 @@ struct PaletteItem: Equatable, Hashable {
     var subtitle: String?
     var defaultKey: String?
     var isMode: Bool
+    var atMs: UInt64?
+    var mark: Mark?
+    var surfaceId: String?
+}
+
+enum Mark: Equatable, Hashable {
+    case open, filled, round
 }
 
 struct NotifyAction: Equatable, Hashable {
