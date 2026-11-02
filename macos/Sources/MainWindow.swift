@@ -3,9 +3,10 @@ import Combine
 import GhosttyKit
 import UserNotifications
 
-/// Our surface: it reports each keyDown and paste that reaches it, so the core can retire a request the user
+/// Our surface: it reports every user write path into the pty, so the core can retire a request the user
 /// may already have answered at the terminal. A subclass, so the vendored Ghostty sources stay unpatched;
 /// Ghostty's own bindings that it handles in performKeyEquivalent also arrive here through keyDown.
+/// libghostty has no single write choke point the app can hook, so each entry is overridden; see docs/core-api.md.
 final class HauntSurfaceView: Ghostty.SurfaceView {
     var onInput: (() -> Void)?
 
@@ -27,6 +28,37 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
     override func pasteSelection(_ sender: Any?) {
         onInput?()
         super.pasteSelection(sender)
+    }
+
+    /// IME commits, the Character Viewer and dictation can insert text without a keyDown.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        onInput?()
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    /// Middle click pastes the selection clipboard.
+    override func otherMouseDown(with event: NSEvent) {
+        if event.buttonNumber == 2 { onInput?() }
+        super.otherMouseDown(with: event)
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        onInput?()
+        return super.performDragOperation(sender)
+    }
+
+    /// Services such as "Send to Terminal" write the pasteboard straight into the pty.
+    override func readSelection(from pboard: NSPasteboard) -> Bool {
+        onInput?()
+        return super.readSelection(from: pboard)
+    }
+
+    /// A confirmed paste writes when its request resolves, possibly long after the paste action itself.
+    /// The request's outcome is private, so retire on every resolution, including a cancel.
+    override var pendingClipboardConfirmation: Ghostty.ClipboardConfirmationRequest? {
+        didSet {
+            if let old = oldValue, old !== pendingClipboardConfirmation, old.kind == .paste { onInput?() }
+        }
     }
 }
 
@@ -145,6 +177,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         root.sidebarHidden = fixture?.sidebarHidden ?? config.loadState().sidebarHidden
         updateKeys(config.keys)
         root.sidebar.onSelect = { [weak self] id in self?.select(id) }
+        root.sidebar.onClose = { [weak self] id in self?.closeTab(id) }
         core.setListener(listener: listener)
         // Subagent elapsed times are computed in snapshot(), so poll once a second to keep them ticking.
         ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -252,7 +285,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func closeSelectedTab() {
-        guard let surface = tabs.first(where: { $0.env.surfaceId == selectedId })?.view.surface else { return }
+        if let id = selectedId { closeTab(id) }
+    }
+
+    /// Like ⌘W on that tab: Ghostty asks for confirmation when a process is running.
+    func closeTab(_ id: String) {
+        guard let surface = tabs.first(where: { $0.env.surfaceId == id })?.view.surface else { return }
         ghostty.requestClose(surface: surface)
     }
 
