@@ -105,6 +105,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             }
             c.drainPluginRequests()
         }
+        // HAUNT_RENAME=<n>:<text> opens the rename editor on the nth row with <text>; <n>=<text> names it.
+        if let spec = ProcessInfo.processInfo.environment["HAUNT_RENAME"],
+           let sep = spec.firstIndex(where: { $0 == ":" || $0 == "=" }), let n = Int(spec[..<sep]) {
+            let text = String(spec[spec.index(after: sep)...])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak c] in
+                guard let c else { return }
+                if spec[sep] == "=" { return c.setCustomName(text, at: n - 1) }
+                c.select(index: n - 1)
+                c.renameSelectedTab(text: text)
+            }
+        }
         if fixture == .pasteConfirm {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak c] in c?.showPasteFixture() }
         }
@@ -140,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc func selectTab(_ sender: NSMenuItem) { controller?.select(index: sender.tag) }
     // Not selectNextTab(_:)/selectPreviousTab(_:): NSWindow answers those for its own window tabs.
     @objc func selectNextHauntTab(_ sender: Any?) { controller?.selectAdjacent(1) }
+    @objc func renameHauntTab(_ sender: Any?) { controller?.renameSelectedTab() }
     @objc func selectPreviousHauntTab(_ sender: Any?) { controller?.selectAdjacent(-1) }
     // Not toggleSidebar(_:): NSWindow answers that selector and sits ahead of us in the responder chain,
     // so the menu item validated (and kept its title) against the window instead of us.
@@ -148,8 +160,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleHauntSidebar(_:)) { item.title = Self.sidebarTitle(hidden: sidebarHidden) }
-        return true
+        // While a tab name is being edited, Haunt's own shortcuts stay out of the way; disabled items
+        // don't take their key equivalents, so the keys reach the text field.
+        return !(controller?.isRenaming == true && Self.renameBlocked.contains(item.action))
     }
+
+    private static let renameBlocked: Set<Selector?> = [
+        #selector(newTab(_:)), #selector(closeTab(_:)), #selector(selectTab(_:)), #selector(selectNextHauntTab(_:)),
+        #selector(selectPreviousHauntTab(_:)), #selector(renameHauntTab(_:)), #selector(toggleHauntSidebar(_:)),
+        #selector(togglePalette(_:)), #selector(openConfig(_:)), #selector(NSWindow.toggleFullScreen(_:)),
+    ]
 
     private var sidebarHidden: Bool { controller?.isSidebarHidden ?? false }
 
@@ -247,6 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             .separator(),
             item("Next Tab", #selector(selectNextHauntTab(_:)), .nextTab),
             item("Previous Tab", #selector(selectPreviousHauntTab(_:)), .previousTab),
+            item("Rename Tab…", #selector(renameHauntTab(_:)), .renameTab),
         ] + tabs + [
             .separator(),
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), .minimize),
