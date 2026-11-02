@@ -131,6 +131,18 @@ check(withPlugins.plugin["dev.x.y/steal"] == nil && withPlugins[.newTab] == Shor
 check(pluginLogs.contains { $0.contains("dev.x.y/steal") }, "the refused default is logged")
 let taken = KeyMap(table: TOML.parse("[keys]\n\"dev.haunt.tabs/move-up\" = \"cmd+k\"\n")["keys"] ?? [:], pluginDefaults: pluginDefaults) { _ in }
 check(taken.plugin[up] == Shortcut.parse("cmd+k") && taken[.palette] == nil, "a configured plugin chord beats a Haunt default, as for actions")
+// Plugin defaults need cmd and stay off reserved chords; a chord the user sets in [keys] is unrestricted.
+var guardLogs: [String] = []
+let guarded = KeyMap(table: TOML.parse("[keys]\n\"dev.x.y/user\" = \"ctrl+r\"\ncopy = \"cmd+shift+c\"\n")["keys"] ?? [:],
+                     pluginDefaults: ["dev.x.y/c": "ctrl+c", "dev.x.y/b": "opt+b", "dev.x.y/copy": "cmd+c",
+                                      "dev.x.y/home": "cmd+left", "dev.x.y/up": "cmd+opt+up", "dev.x.y/user": "cmd+j"]) { guardLogs.append($0) }
+check(guarded.plugin["dev.x.y/c"] == nil, "a plugin default of ctrl+c is refused")
+check(guarded.plugin["dev.x.y/b"] == nil, "a plugin default of opt+b is refused")
+check(guarded.plugin["dev.x.y/copy"] == nil && guarded[.copy] == Shortcut.parse("cmd+shift+c"), "a plugin default can't take a Haunt default chord the user moved")
+check(guarded.plugin["dev.x.y/home"] == nil, "a plugin default can't take terminal line editing")
+check(guarded.plugin["dev.x.y/up"] == Shortcut.parse("cmd+opt+up"), "cmd+opt+up is accepted")
+check(guarded.plugin["dev.x.y/user"] == Shortcut.parse("ctrl+r"), "a user-configured ctrl chord is honoured")
+check(guardLogs.filter { $0.contains("needs cmd") }.count == 4, "each refused default is logged")
 let pg = HauntConfig.ghosttyConfig([:], defaultSize: 11, keys: withPlugins)
 check(pg.contains("keybind = alt+super+arrow_up=unbind\n"), "plugin chords are unbound in Ghostty")
 

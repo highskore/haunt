@@ -186,6 +186,17 @@ struct KeyMap: Equatable {
     /// "<plugin id>/<item id>", as `[keys]` names a plugin command.
     static func pluginName(_ pluginId: String, _ itemId: String) -> String { "\(pluginId)/\(itemId)" }
 
+    /// Chords a plugin default may never take, even when unbound: Haunt's defaults, the terminal's line
+    /// editing and macOS's own. A chord without cmd is refused before this, being terminal input.
+    static let reserved: Set<Shortcut> = Set(
+        (Action.allCases.compactMap(\.defaultKey) + [
+            "cmd+x", "cmd+z", "cmd+shift+z", "cmd+n", "cmd+f", "cmd+g", "cmd+shift+g", "cmd+equal", "cmd+shift+equal",
+            "cmd+minus", "cmd+0", "cmd+space", "cmd+tab", "cmd+shift+tab", "cmd+backquote", "cmd+ctrl+q",
+            "cmd+ctrl+space", "cmd+shift+3", "cmd+shift+4", "cmd+shift+5", "cmd+opt+escape", "cmd+opt+d",
+            "cmd+left", "cmd+right", "cmd+up", "cmd+down", "cmd+backspace", "cmd+delete", "cmd+enter",
+        ]).map { Shortcut.parse($0)! }
+    )
+
     /// Invalid, unknown or clashing entries are dropped through `log`, never thrown. `order` is the
     /// table's keys as written, so of two entries with one chord the earlier wins. `pluginDefaults` are the
     /// loaded plugins' commands with a default key; a plugin's default never takes a Haunt chord.
@@ -228,6 +239,10 @@ struct KeyMap: Equatable {
         }
         for (name, d) in pluginDefaults.sorted(by: { $0.key < $1.key }) where configuredPlugin[name] == nil {
             guard let s = Shortcut.parse(d) else { continue }
+            guard s.mods.contains(.command), !Self.reserved.contains(s) else {
+                log("[keys] \(name): its default \(d) needs cmd and must not be a chord the terminal or macOS uses, so it has no shortcut")
+                continue
+            }
             if let other = bindings.first(where: { $0.value == s })?.key.rawValue ?? plugin.first(where: { $0.value == s })?.key {
                 log("[keys] \(name): its default \(d) is already \(other), so it has no shortcut")
                 continue
