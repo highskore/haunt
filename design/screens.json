@@ -1374,9 +1374,7 @@
       "right-4",
       "cy"
      ],
-     "token": "color.palette.sel",
-     "tol": 1.0,
-     "_why": "A blue-tinted grey: the 8-bit round trip through the display profile moves it one step (#2a2a2f -> #2a2a30, dE 0.7)."
+     "token": "color.palette.sel"
     },
     {
      "name": "palette.sel.bar",

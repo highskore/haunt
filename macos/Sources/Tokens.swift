@@ -44,21 +44,21 @@ enum Tok {
         /// color.needs
         static let needs: NSColor = NSColor(srgbRed: 255.0 / 255, green: 255.0 / 255, blue: 255.0 / 255, alpha: 1)
         /// color.palette.bg
-        static let paletteBg: NSColor = NSColor(srgbRed: 28.0 / 255, green: 28.0 / 255, blue: 31.0 / 255, alpha: 1)
+        static let paletteBg: NSColor = NSColor(srgbRed: 27.0 / 255, green: 27.0 / 255, blue: 27.0 / 255, alpha: 1)
         /// color.palette.border
-        static let paletteBorder: NSColor = NSColor(srgbRed: 58.0 / 255, green: 58.0 / 255, blue: 63.0 / 255, alpha: 1)
+        static let paletteBorder: NSColor = NSColor(srgbRed: 58.0 / 255, green: 58.0 / 255, blue: 58.0 / 255, alpha: 1)
         /// color.palette.chip.fg
-        static let paletteChipFg: NSColor = NSColor(srgbRed: 11.0 / 255, green: 11.0 / 255, blue: 12.0 / 255, alpha: 1)
+        static let paletteChipFg: NSColor = NSColor(srgbRed: 11.0 / 255, green: 11.0 / 255, blue: 11.0 / 255, alpha: 1)
         /// color.palette.entry.rule
-        static let paletteEntryRule: NSColor = NSColor(srgbRed: 31.0 / 255, green: 31.0 / 255, blue: 34.0 / 255, alpha: 1)
+        static let paletteEntryRule: NSColor = NSColor(srgbRed: 31.0 / 255, green: 31.0 / 255, blue: 31.0 / 255, alpha: 1)
         /// color.palette.ink
-        static let paletteInk: NSColor = NSColor(srgbRed: 237.0 / 255, green: 237.0 / 255, blue: 238.0 / 255, alpha: 1)
+        static let paletteInk: NSColor = NSColor(srgbRed: 232.0 / 255, green: 232.0 / 255, blue: 232.0 / 255, alpha: 1)
         /// color.palette.mute
-        static let paletteMute: NSColor = NSColor(srgbRed: 139.0 / 255, green: 139.0 / 255, blue: 146.0 / 255, alpha: 1)
+        static let paletteMute: NSColor = NSColor(srgbRed: 138.0 / 255, green: 138.0 / 255, blue: 138.0 / 255, alpha: 1)
         /// color.palette.rule
-        static let paletteRule: NSColor = NSColor(srgbRed: 42.0 / 255, green: 42.0 / 255, blue: 46.0 / 255, alpha: 1)
+        static let paletteRule: NSColor = NSColor(srgbRed: 42.0 / 255, green: 42.0 / 255, blue: 42.0 / 255, alpha: 1)
         /// color.palette.sel
-        static let paletteSel: NSColor = NSColor(srgbRed: 42.0 / 255, green: 42.0 / 255, blue: 47.0 / 255, alpha: 1)
+        static let paletteSel: NSColor = NSColor(srgbRed: 42.0 / 255, green: 42.0 / 255, blue: 42.0 / 255, alpha: 1)
         /// color.row.selected
         static let rowSelected: NSColor = NSColor(srgbRed: 26.0 / 255, green: 26.0 / 255, blue: 26.0 / 255, alpha: 1)
         /// color.sidebar.bg

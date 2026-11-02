@@ -11,6 +11,27 @@ FILES = {"ui": MOCKUPS / "pawr-ui/index.html", "av": MOCKUPS / "pawr-agents-view
          "dl": MOCKUPS / "pawr-declog/index.html"}
 OUT = DESIGN / "tokens.json"
 
+# The declog palette is used for layout only, recoloured to haunt's neutral greys (decision 2026-11-02):
+# each declog colour maps to the nearest existing haunt token.
+RECOLOUR = {"dl": {
+    "#1c1c1f": "#1b1b1b",  # panel -> color.icon.bg
+    "#3a3a3f": "#3a3a3a",  # border -> color.lights
+    "#2a2a2e": "#2a2a2a",  # divider -> color.bar.track
+    "#2a2a2f": "#2a2a2a",  # selection -> color.bar.track
+    "#ededee": "#e8e8e8",  # ink -> color.text.primary
+    "#8b8b92": "#8a8a8a",  # mute -> color.text.sub
+    "#0b0b0c": "#0b0b0b",  # chip text -> color.window.bg
+    "#1f1f22": "#1f1f1f",  # entry rule -> color.card.border
+}}
+
+
+def source_html(key):
+    html = FILES[key].read_text()
+    for old, new in RECOLOUR.get(key, {}).items():
+        html = re.sub(re.escape(old), new, html, flags=re.I)
+    return html
+
+
 # Page chrome around the mockups, not part of the app.
 PAGE_ONLY = re.compile(r"^(\*|header\.top.*|main|\.item.*)$")
 HEX = re.compile(r"#[0-9a-fA-F]{3,8}\b")
@@ -191,8 +212,8 @@ def parse_value(v):
     return v
 
 
-def style_rules(path):
-    html = path.read_text()
+def style_rules(key):
+    html = source_html(key)
     css = "\n".join(re.findall(r"<style>(.*?)</style>", html, re.S))
     css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     rules = {}
@@ -236,7 +257,7 @@ def resolve(src, files):
 
 
 def build():
-    files = {k: style_rules(p) for k, p in FILES.items()}
+    files = {k: style_rules(k) for k in FILES}
     tokens, errors = {}, []
     for name, srcs in SEMANTIC.items():
         vals = []

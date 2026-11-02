@@ -10,7 +10,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent))
 from fid import DESIGN, SCALE, delta_e, hex_rgb, ink, rgb_hex, sample, scan  # noqa: E402
-from tokens import FILES  # noqa: E402
+from tokens import FILES, source_html  # noqa: E402
 
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 REF = DESIGN / "reference"
@@ -124,7 +124,7 @@ def render(name, spec, groups, tokens):
     selectors = sorted({a["sel"] for a in anchors} | {e["sel"] for e in edges} | {e["expect_sel"] for e in edges if "expect_sel" in e})
     js = json.dumps({"index": spec["index"], "crop": spec["crop"], "fill": spec.get("fill", False), "width": spec.get("width", 900), "selectors": selectors})
     inject = INJECT.replace("__ISOLATE__", ISOLATE[spec["file"]]).replace("__SPEC__", js)
-    html = FILES[spec["file"]].read_text().replace("</body>", inject + "</body>")
+    html = source_html(spec["file"]).replace("</body>", inject + "</body>")
     with tempfile.TemporaryDirectory() as tmp:
         page = Path(tmp) / "page.html"
         page.write_text(html)
