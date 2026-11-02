@@ -80,6 +80,15 @@ final class AgentsView: NSView {
         return mods + plain
     }
 
+    /// The frame to restore, if it still meets one of `screens` (visible frames); otherwise its size,
+    /// capped to `current`, centred there. Screens can go away while the view is on.
+    static func restoredFrame(_ frame: NSRect, screens: [NSRect], current: NSRect?) -> NSRect {
+        if screens.contains(where: { $0.intersects(frame) }) { return frame }
+        guard let area = current ?? screens.first else { return frame }
+        let w = min(frame.width, area.width), h = min(frame.height, area.height)
+        return NSRect(x: area.midX - w / 2, y: area.midY - h / 2, width: w, height: h)
+    }
+
     /// A strip of the mockup's width, the full height of the screen's visible area, docked to its right edge.
     /// The mockup's 280 is its border box; the window draws its own border, so the content is 278.
     static func dockedFrame(on screen: NSScreen?, height: CGFloat? = nil) -> NSRect {
