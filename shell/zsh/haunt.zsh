@@ -16,6 +16,12 @@ alias claude="command claude --settings '{\"theme\":\"custom:haunt\",\"statusLin
 # zsh-syntax-highlighting resets an empty list to (main) when sourced, so clear it once the first prompt is about to draw.
 _haunt_plain_commands() {
   ZSH_HIGHLIGHT_HIGHLIGHTERS=()
+  # p10k rebuilds PROMPT in its own precmd, overriding starship; drop it and keep starship's prompt.
+  if (( $+functions[_p9k_precmd] )); then
+    (( $+functions[prompt_powerlevel10k_teardown] )) && prompt_powerlevel10k_teardown
+    _p9k_precmd() { : }
+    (( $+commands[starship] )) && eval "$(starship init zsh)"
+  fi
   add-zsh-hook -d precmd _haunt_plain_commands
 }
 autoload -Uz add-zsh-hook
