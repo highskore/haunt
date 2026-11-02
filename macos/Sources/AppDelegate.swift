@@ -118,6 +118,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 c.renameSelectedTab(text: text)
             }
         }
+        if fixture?.isReview == true {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak c] in c?.toggleReview() }
+        }
         if fixture == .pasteConfirm {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak c] in c?.showPasteFixture() }
         }
@@ -183,6 +186,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc func togglePalette(_ sender: Any?) { controller?.togglePalette() }
     // Checked with responds(to:): no NSWindow/NSApplication/NSResponder method of this name (cf. toggleSidebar:).
     @objc func toggleAgentsOnlyView(_ sender: Any?) { controller?.toggleAgentsView() }
+    // Checked with responds(to:) like the one above: nothing in AppKit answers toggleReviewScreen:.
+    @objc func toggleReviewScreen(_ sender: Any?) { controller?.toggleReview() }
 
     @objc func openSettings(_ sender: Any?) {
         let s = settings ?? SettingsWindowController(sheets: setup, configPath: config.tomlURL.path) { [weak self] in
@@ -199,6 +204,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if item.action == #selector(toggleAgentsOnlyView(_:)) {
             item.state = controller?.isAgentsViewOn == true ? .on : .off
         }
+        if item.action == #selector(toggleReviewScreen(_:)) {
+            item.state = controller?.isReviewOn == true ? .on : .off
+        }
         // While a tab name is being edited, Haunt's own shortcuts stay out of the way; disabled items
         // don't take their key equivalents, so the keys reach the text field.
         return !(controller?.isRenaming == true && Self.renameBlocked.contains(item.action))
@@ -208,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         #selector(newTab(_:)), #selector(closeTab(_:)), #selector(selectTab(_:)), #selector(selectNextHauntTab(_:)),
         #selector(selectPreviousHauntTab(_:)), #selector(renameHauntTab(_:)), #selector(toggleHauntSidebar(_:)),
         #selector(togglePalette(_:)), #selector(openConfig(_:)), #selector(NSWindow.toggleFullScreen(_:)),
-        #selector(toggleAgentsOnlyView(_:)),
+        #selector(toggleAgentsOnlyView(_:)), #selector(toggleReviewScreen(_:)),
     ]
 
     private var sidebarHidden: Bool { controller?.isSidebarHidden ?? false }
@@ -296,6 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             item("Command Palette", #selector(togglePalette(_:)), .palette),
             item(Self.sidebarTitle(hidden: sidebarHidden), #selector(toggleHauntSidebar(_:)), .toggleSidebar),
             item("Agents Only", #selector(toggleAgentsOnlyView(_:)), .agentsView),
+            item("Review Changes", #selector(toggleReviewScreen(_:)), .review),
             .separator(),
             item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), .fullScreen),
         ])

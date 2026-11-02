@@ -21,6 +21,7 @@ object HauntCore {
   fn allow_suggestions() -> sequence<AllowSuggestion>
   fn accept_allow_suggestion(project: string, command: string) -> Result<(), CoreError>
   fn dismiss_allow_suggestion(project: string, command: string)
+  fn review_turn(surface_id: string) -> Option<ReviewTurn>          // the latest turn, for the review screen (docs/review.md)
 }
 
 callback interface CoreListener { fn changed() }
@@ -44,6 +45,16 @@ record Decision { at_ms: u64, surface_id: string, tool: string, preview: string,
 enum   Agent { Claude, Codex, Other { id: string } }   // "claude", "codex" or the id in decisions.jsonl; absent is Claude
 enum   Outcome { AllowedInHaunt, DeniedInHaunt, AllowedByPlugin { plugin_id: string }, DeniedByPlugin { plugin_id: string }, AnsweredInTerminal, Superseded }
 record AllowSuggestion { project: string, command: string, rule: string, approvals: u32 }
+
+record ReviewTurn {
+  agent: Agent, number: u32, prompt: Option<string>, cwd: Option<string>, started_ms: Option<u64>, finished_ms: Option<u64>, failed: bool,
+  head_at_start: Option<string>, tool_count: u32, edit_count: u32, tasks: sequence<TurnTask>,
+  commands: sequence<TurnCommand>, files: sequence<string>, subagents: sequence<TurnSubagent>
+}
+record TurnTask { subject: string, status: string }
+record TurnCommand { command: string, outcome: CommandOutcome }
+enum   CommandOutcome { Running, Passed, Failed, Unknown }
+record TurnSubagent { label: string, tool_count: Option<u64>, duration_ms: Option<u64> }
 ```
 
 `select_surface` is an addition to the contract as first agreed, because `Row.selected` needs a source. `SidebarGroup` was renamed from `Group` because a Swift `struct Group` would shadow SwiftUI's `Group`.

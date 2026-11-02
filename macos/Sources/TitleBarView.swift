@@ -6,6 +6,8 @@ final class TitleBarView: NSView {
     enum Accessory {
         case icons
         case kbd
+        /// Nothing on the right (review version 01).
+        case empty
     }
 
     enum Icon: CaseIterable {
@@ -29,6 +31,9 @@ final class TitleBarView: NSView {
     /// The `.kbd` accessory's shortcut.
     var kbdLabel = "⌘K" { didSet { needsDisplay = true } }
     var onIcon: ((Icon) -> Void)?
+    /// A centred breadcrumb (review versions 01 and 09); the last part is the current place.
+    var crumb: [String] = [] { didSet { needsDisplay = true } }
+    var onCrumb: (() -> Void)?
     var onHint: ((Hint) -> Void)?
 
     /// Mockup 10's layout, used while the sidebar is hidden.
@@ -217,7 +222,27 @@ final class TitleBarView: NSView {
             }
         case .kbd:
             drawKbd(kbdLabel, in: ctx)
+        case .empty:
+            break
         }
+        if let (line, r) = crumbLayout() {
+            Draw.text(line, font: Draw.ui(Tok.Size.crumbFont), x: r.minX, top: r.minY, lineHeight: r.height, in: ctx)
+        }
+    }
+
+    /// `a › b › c`: parts in the sub grey, separators muted, the last part in the primary ink.
+    private func crumbLayout() -> (CTLine, NSRect)? {
+        guard !crumb.isEmpty, !zen else { return nil }
+        let font = Draw.ui(Tok.Size.crumbFont)
+        let s = NSMutableAttributedString()
+        for (i, part) in crumb.enumerated() {
+            if i > 0 { s.append(NSAttributedString(string: " › ", attributes: [.font: font, .foregroundColor: Tok.Color.textLabel])) }
+            let color = i == crumb.count - 1 ? Tok.Color.textPrimary : Tok.Color.textSub
+            s.append(NSAttributedString(string: part, attributes: [.font: font, .foregroundColor: color]))
+        }
+        let line = CTLineCreateWithAttributedString(s)
+        let w = Draw.width(line), lh = Tok.Size.crumbFont * Tok.Font.baseLine
+        return (line, NSRect(x: (bounds.width - w) / 2, y: rowTop + (rowH - lh) / 2, width: w, height: lh))
     }
 
     private func drawSidebarGlyph(centeredIn r: NSRect) {
@@ -256,6 +281,10 @@ final class TitleBarView: NSView {
         }
         if zen, let hit = hintLayout().parts.first(where: { $0.2.insetBy(dx: -4, dy: -4).contains(p) }) {
             onHint?(hit.0)
+            return
+        }
+        if let (_, r) = crumbLayout(), r.insetBy(dx: -4, dy: -4).contains(p), let onCrumb {
+            onCrumb()
             return
         }
         if !zen, accessory == .icons, let hit = iconLayout().first(where: { $0.2.insetBy(dx: -4, dy: -4).contains(p) }) {

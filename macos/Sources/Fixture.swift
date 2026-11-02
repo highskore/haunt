@@ -24,6 +24,10 @@ enum Fixture: String {
     case setupChange = "setup-change"
     /// No mockup: ui-03 with the Settings window open, Claude Code set up.
     case settings = "settings"
+    /// Review screen versions 01, 06 and 09 (haunt-review) on that mockup's turn; see ReviewFixture.swift.
+    case reviewFiles = "rv-01-files"
+    case reviewSend = "rv-06-comment"
+    case reviewOverview = "rv-09-overview"
 
     static var current: Fixture? {
         ProcessInfo.processInfo.environment["HAUNT_FIXTURE"].flatMap(Fixture.init(rawValue:))
@@ -33,8 +37,19 @@ enum Fixture: String {
     static let windowSize = NSSize(width: 900, height: Tok.Size.windowH)
 
     var titleAccessory: TitleBarView.Accessory {
-        self == .iconOnly || self == .zen || isSheet ? .icons : .kbd
+        if self == .reviewFiles { return .empty }
+        return self == .iconOnly || self == .zen || self == .reviewSend || isSheet ? .icons : .kbd
     }
+
+    var isReview: Bool { [.reviewFiles, .reviewSend, .reviewOverview].contains(self) }
+
+    /// The review mockup's window: 1100 × 600 less the `.win`'s 1 px border.
+    var size: NSSize {
+        isReview ? NSSize(width: Tok.Size.reviewWindowW, height: Tok.Size.reviewWindowH - 2) : Self.windowSize
+    }
+
+    /// Version 06 draws its flat sidebar 230 pt wide; the app's is 250 everywhere else.
+    var sidebarWidth: CGFloat { self == .reviewSend ? Tok.Size.reviewSidebarSendW : Tok.Size.sidebarW }
 
     var sidebarHidden: Bool { self == .zen }
 
@@ -78,7 +93,16 @@ enum Fixture: String {
         uiTabs[2],
     ]
 
-    private var tabs: [Tab] { self == .narrowList ? Self.agentTabs : Self.uiTabs }
+    // haunt-review/index.html's TABS, the reviewed tab first so it starts selected.
+    private static let reviewTabs: [Tab] = [
+        Tab(kind: .claude, name: "haunt", meta: "notify-quiet · 5 files to review", status: "review", needs: true, progress: nil, subs: []),
+        uiTabs[1],
+        Tab(kind: .codex, name: "haunt-ui2", meta: "sidebar-rail · Running tests", status: "3/5", needs: false,
+            progress: Progress(done: 3, total: 5), subs: []),
+        uiTabs[2],
+    ]
+
+    private var tabs: [Tab] { self == .narrowList ? Self.agentTabs : isReview ? Self.reviewTabs : Self.uiTabs }
 
     var tabCount: Int { tabs.count }
 
@@ -93,8 +117,15 @@ enum Fixture: String {
         }
         guard rows.count == tabs.count else { return SidebarSnapshot(groups: []) }
         switch self {
-        case .iconOnly, .zen, .pasteConfirm, .narrowList, .setupPicker, .setupChange, .settings:
+        case .iconOnly, .zen, .pasteConfirm, .narrowList, .setupPicker, .setupChange, .settings, .reviewSend:
             return SidebarSnapshot(groups: [SidebarGroup(label: "", rows: rows)])
+        case .reviewFiles, .reviewOverview:
+            return SidebarSnapshot(groups: [
+                SidebarGroup(label: "NEEDS YOU", rows: [rows[1]]),
+                SidebarGroup(label: "REVIEW", rows: [rows[0]]),
+                SidebarGroup(label: "RUNNING", rows: [rows[2]]),
+                SidebarGroup(label: "IDLE", rows: [rows[3]]),
+            ])
         case .groupedFlat, .palette, .suspicious, .codex, .codexLog:
             return SidebarSnapshot(groups: [
                 SidebarGroup(label: "NEEDS YOU", rows: [rows[1]]),

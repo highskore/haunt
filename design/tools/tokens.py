@@ -8,7 +8,7 @@ from pathlib import Path
 DESIGN = Path(__file__).resolve().parent.parent
 MOCKUPS = Path(os.environ.get("HAUNT_MOCKUPS", Path.home() / "code/haunt-reference/mockups"))
 FILES = {"ui": MOCKUPS / "pawr-ui/index.html", "av": MOCKUPS / "pawr-agents-view/index.html",
-         "dl": MOCKUPS / "pawr-declog/index.html"}
+         "dl": MOCKUPS / "pawr-declog/index.html", "rv": MOCKUPS / "haunt-review/index.html"}
 OUT = DESIGN / "tokens.json"
 
 # The declog palette is used for layout only, recoloured to haunt's neutral greys (decision 2026-11-02):
@@ -153,6 +153,134 @@ SEMANTIC = {
     "size.table.th.font": ["av|.tbl .th|font-size"],
     "size.zen.bar": [("ui|inline|height:2px;background:#1e1e1e", 2)],
     "size.zen.hint.font": [("ui|inline|<span class=\"muted\" style=\"font-size:11px\">⌘B agents", 11)],
+    # Review screen: haunt-review versions 01 (files and diff), 06 (comment, then send back), 09 (PR overview).
+    "color.diff.text": ["rv|.diff|color"],
+    "color.diff.add.bg": ["rv|:root|--add-bg@over#0b0b0b"],
+    "color.diff.add.ink": ["rv|:root|--add-ink", "rv|.dl.add .c|color"],
+    "color.diff.add.mark": ["rv|.dl.add .m|color"],
+    "color.diff.add.num": ["rv|.dl.add .n|color", "rv|.hh|color"],
+    "color.diff.del.bg": ["rv|:root|--del-bg@over#0b0b0b"],
+    "color.diff.del.ink": ["rv|:root|--del-ink"],
+    "color.diff.num": ["rv|.dl .n|color"],
+    "color.diff.mark": ["rv|.dl .m|color"],
+    "color.diff.hunk.bg": ["rv|.hh|background"],
+    "color.diff.rule": ["rv|.hh|border-top@color", ("rv|inline|padding:7px 0;border-top:1px solid #161616", "#161616")],
+    "color.diff.sel": ["rv|.dl.sel|outline@color", ("rv|inline|class=\"note\" style=\"border-color:#3a3a3a\"", "#3a3a3a")],
+    "color.diff.sq.add": ["rv|.sq i.a|background"],
+    "color.review.mark.off": ["rv|.chk|border@color", "rv|.sq i.d|background", ("rv|inline|'border:1px solid #555'", "#555555")],
+    "color.review.note.border": ["rv|.note|border@color", ("rv|inline|margin:0 14px;border:1px solid #262626", "#262626")],
+    "color.review.note.bg": ["rv|.note|background"],
+    "color.review.avatar.bg": ["rv|.av|background"],
+    "color.review.body": ["rv|.av|color", ("rv|inline|font-size:12.5px;color:#cfcfcf;line-height:1.55", "#cfcfcf")],
+    "color.review.panel.bg": [("rv|inline|width:310px;border-left:1px solid var(--line);flex:none;background:#0d0d0d", "#0d0d0d")],
+    "color.review.input.border": [("rv|inline|border:1px solid #2a2a2a;border-radius:7px", "#2a2a2a")],
+    "size.review.window.w": [("rv|inline|.win { height: 600px; min-width: 1100px", 1100)],
+    "size.review.window.h": [("rv|inline|.win { height: 600px; min-width: 1100px", 600)],
+    "size.review.sidebar.w": ["rv|.side|width"],
+    "size.review.sidebar.send.w": [("rv|inline|${sideFlat(230)}", 230)],
+    "size.review.tree.w": [("rv|inline|width:262px;border-right:1px solid var(--line);flex:none", 262)],
+    "size.review.tree.indent": [("rv|inline|padding-left:${14 + d * 14}px", 14)],
+    "size.review.tree.caret.font": [("rv|inline|<span style=\"font-size:9px\">▾</span>", 9)],
+    "size.review.tree.foot.pad": [("rv|inline|padding:10px 14px;border-top:1px solid var(--line);font-size:11px;color:var(--mute);display:grid;gap:3px", [10, 14])],
+    "size.review.tree.foot.gap": [("rv|inline|padding:10px 14px;border-top:1px solid var(--line);font-size:11px;color:var(--mute);display:grid;gap:3px", 3)],
+    "size.review.tree.foot.font": [("rv|inline|padding:10px 14px;border-top:1px solid var(--line);font-size:11px;color:var(--mute);display:grid;gap:3px", 11)],
+    "size.review.row.pad": ["rv|.row|padding"],
+    "size.review.row.gap": ["rv|.row|gap"],
+    "size.review.row.font": ["rv|.row|font-size"],
+    "size.review.fn.font": ["rv|.row .fn|font-size"],
+    "size.review.fh.h": ["rv|.fh|height"],
+    "size.review.fh.padx": ["rv|.fh|padding@1"],
+    "size.review.fh.gap": ["rv|.fh|gap"],
+    "size.review.fh.font": ["rv|.fh|font-size", "rv|.fh .path|font-size"],
+    "size.review.fh.mt": [("rv|inline|'border-top:1px solid var(--line);margin-top:8px'", 8)],
+    "size.review.st.font": ["rv|.st|font@0"],
+    "size.review.sq.size": ["rv|.sq i|width", "rv|.sq i|height"],
+    "size.review.sq.gap": ["rv|.sq|gap"],
+    "size.review.tag.font": ["rv|.tag|font@0"],
+    "size.review.tag.pad": ["rv|.tag|padding"],
+    "size.review.tag.radius": ["rv|.tag|border-radius"],
+    "size.review.tag.line": ["rv|.tag|line-height"],
+    "size.review.tag.tracking_em": ["rv|.tag|letter-spacing"],
+    "size.review.chk.size": ["rv|.chk|width", "rv|.chk|height"],
+    "size.review.chk.radius": ["rv|.chk|border-radius"],
+    "size.review.chk.font": ["rv|.chk|font-size"],
+    "size.review.diff.font": ["rv|.diff|font@0"],
+    "size.review.diff.line": ["rv|.diff|font@1"],
+    "size.review.diff.num.w": ["rv|.dl|grid-template-columns@0", "rv|.dl|grid-template-columns@1"],
+    "size.review.diff.mark.w": ["rv|.dl|grid-template-columns@2"],
+    "size.review.diff.num.padr": ["rv|.dl .n|padding-right"],
+    "size.review.hunk.pad": ["rv|.hh|padding"],
+    "size.review.hunk.font": ["rv|.hh|font@0"],
+    "size.review.hunk.line": ["rv|.hh|font@1"],
+    "size.review.note.margin": ["rv|.note|margin"],
+    "size.review.note.radius": ["rv|.note|border-radius"],
+    "size.review.note.font": ["rv|.note|font@0"],
+    "size.review.note.line": ["rv|.note|font@1"],
+    "size.review.note.head.pad": ["rv|.note .nh|padding"],
+    "size.review.note.head.gap": ["rv|.note .nh|gap"],
+    "size.review.note.head.font": ["rv|.note .nh|font-size"],
+    "size.review.note.body.pad": ["rv|.note .nb|padding"],
+    "size.review.note.foot.pad": ["rv|.note .nf|padding"],
+    "size.review.note.foot.gap": ["rv|.note .nf|gap"],
+    "size.review.avatar.size": ["rv|.av|width", "rv|.av|height"],
+    "size.review.avatar.font": ["rv|.av|font-size"],
+    "size.review.bar.h": [("rv|inline|height:46px;flex:none;border-top:1px solid var(--line)", 46)],
+    "size.review.bar.padx": [("rv|inline|gap:10px;padding:0 14px;font-size:12px;color:var(--mute)", 14)],
+    "size.review.bar.gap": [("rv|inline|gap:10px;padding:0 14px;font-size:12px;color:var(--mute)", 10)],
+    "size.review.btn.gap": ["rv|.btn|gap"],
+    "size.review.btn.font": ["rv|.btn|font@0"],
+    "size.review.btn.pad": ["rv|.btn|padding"],
+    "size.review.btn.radius": ["rv|.btn|border-radius"],
+    "size.review.sec.font": ["rv|.sec|font-size"],
+    "size.review.sec.tracking_em": ["rv|.sec|letter-spacing"],
+    "size.review.send.w": [("rv|inline|width:310px;border-left:1px solid var(--line)", 310)],
+    "size.review.send.head.pad": [("rv|inline|padding:12px 14px 8px;display:flex;align-items:center;gap:8px;font-size:12.5px", [12, 14, 8])],
+    "size.review.send.head.gap": [("rv|inline|padding:12px 14px 8px;display:flex;align-items:center;gap:8px;font-size:12.5px", 8)],
+    "size.review.send.head.font": [("rv|inline|padding:12px 14px 8px;display:flex;align-items:center;gap:8px;font-size:12.5px", 12.5)],
+    "size.review.claude.small": [("rv|inline|'width=\"13\" height=\"13\"'", 13)],
+    "size.review.draft.margin": [("rv|inline|margin:0 14px;border:1px solid #262626;border-radius:8px", 14)],
+    "size.review.draft.radius": [("rv|inline|margin:0 14px;border:1px solid #262626;border-radius:8px", 8)],
+    "size.review.draft.pad": [("rv|inline|background:#0b0b0b;padding:10px 12px;font:11.5px/1.6 var(--mono)", [10, 12])],
+    "size.review.draft.font": [("rv|inline|background:#0b0b0b;padding:10px 12px;font:11.5px/1.6 var(--mono)", 11.5)],
+    "size.review.draft.line": [("rv|inline|background:#0b0b0b;padding:10px 12px;font:11.5px/1.6 var(--mono)", 1.6)],
+    "size.review.draft.gap": [("rv|inline|color:#cfcfcf;display:grid;gap:8px", 8)],
+    "size.review.hint.pad": [("rv|inline|padding:10px 14px;font-size:11px;color:var(--mute);line-height:1.5", [10, 14])],
+    "size.review.hint.font": [("rv|inline|padding:10px 14px;font-size:11px;color:var(--mute);line-height:1.5", 11)],
+    "size.review.panel.foot.pad": [("rv|inline|padding:12px 14px;border-top:1px solid var(--line);display:grid;gap:8px", [12, 14])],
+    "size.review.panel.foot.gap": [("rv|inline|padding:12px 14px;border-top:1px solid var(--line);display:grid;gap:8px", 8)],
+    "size.review.ov.w": [("rv|inline|width:270px;border-left:1px solid var(--line)", 270)],
+    "size.review.ov.pad": [("rv|inline|padding:16px 22px 0;overflow:hidden", [16, 22])],
+    "size.review.ov.meta.font": [("rv|inline|gap:8px;align-items:center;font-size:11.5px;color:var(--mute)\">${CL14}", 11.5)],
+    "size.review.ov.title.font": [("rv|inline|font-size:19px;font-weight:600;letter-spacing:-.01em;margin:6px 0 4px", 19)],
+    "size.review.ov.title.tracking_em": [("rv|inline|font-size:19px;font-weight:600;letter-spacing:-.01em;margin:6px 0 4px", -0.01)],
+    "size.review.ov.title.margin": [("rv|inline|font-size:19px;font-weight:600;letter-spacing:-.01em;margin:6px 0 4px", [6, 4])],
+    "size.review.ov.sub.font": [("rv|inline|font-size:12px;color:var(--sub);display:flex;gap:8px;align-items:center\"><code>", 12)],
+    "size.review.ov.tabs.gap": [("rv|inline|display:flex;gap:18px;margin:14px 0 0;border-bottom:1px solid var(--line);font-size:12.5px", 18)],
+    "size.review.ov.tabs.mt": [("rv|inline|display:flex;gap:18px;margin:14px 0 0;border-bottom:1px solid var(--line);font-size:12.5px", 14)],
+    "size.review.ov.tabs.font": [("rv|inline|display:flex;gap:18px;margin:14px 0 0;border-bottom:1px solid var(--line);font-size:12.5px", 12.5)],
+    "size.review.ov.tabs.pb": [("rv|inline|padding:0 0 8px;box-shadow:inset 0 -1px 0 #e8e8e8", 8)],
+    "size.review.ov.grid.gap": [("rv|inline|grid-template-columns:1.25fr 1fr;gap:24px;margin-top:14px", 24)],
+    "size.review.ov.grid.mt": [("rv|inline|grid-template-columns:1.25fr 1fr;gap:24px;margin-top:14px", 14)],
+    "size.review.ov.grid.ratio": [("rv|inline|grid-template-columns:1.25fr 1fr;gap:24px;margin-top:14px", 1.25)],
+    "size.review.ov.summary.font": [("rv|inline|font-size:12.5px;color:#cfcfcf;line-height:1.55", 12.5)],
+    "size.review.ov.summary.line": [("rv|inline|font-size:12.5px;color:#cfcfcf;line-height:1.55", 1.55)],
+    "size.review.ov.sec.mb": [("rv|inline|<div class=\"sec\" style=\"margin-bottom:6px\">", 6)],
+    "size.review.ov.sec.mt": [("rv|inline|<div class=\"sec\" style=\"margin:16px 0 4px\">", [16, 4])],
+    "size.review.ov.turn.mb": [("rv|inline|<div class=\"sec\" style=\"margin:16px 0 6px\">", 6)],
+    "size.review.ov.turn.gap": [("rv|inline|font-size:12px;color:var(--sub);display:grid;gap:3px", 3)],
+    "size.review.ov.check.cols": [("rv|inline|grid-template-columns:16px 1fr auto;gap:10px;align-items:center;padding:7px 0", [16, 10, 7])],
+    "size.review.ov.check.font": [("rv|inline|padding:7px 0;border-top:1px solid #161616;font-size:12.5px", 12.5)],
+    "size.review.ov.check.res.font": [("rv|inline|<span style=\"font-size:11.5px;color:", 11.5)],
+    "size.review.ov.file.cols": [("rv|inline|grid-template-columns:1fr auto auto;gap:12px;align-items:center;padding:6px 0", [12, 6])],
+    "size.review.ov.side.pad": [("rv|inline|flex:none;padding:16px 14px;gap:12px;background:#0d0d0d", [16, 14])],
+    "size.review.ov.side.gap": [("rv|inline|flex:none;padding:16px 14px;gap:12px;background:#0d0d0d", 12)],
+    "size.review.ov.gap": [("rv|inline|display:flex;gap:8px;align-items:center;${on ? '' : 'color:var(--sub)'}", 8),
+                           ("rv|inline|font-size:12px;color:var(--sub);display:flex;gap:8px;align-items:center", 8)],
+    "size.review.ov.radio.gap": [("rv|inline|display:grid;gap:7px;font-size:12.5px", 7)],
+    "size.review.ov.radio.size": [("rv|inline|width:12px;height:12px;border-radius:50%;${on ? 'border:4px solid #e8e8e8'", [12, 4])],
+    "size.review.ov.input.radius": [("rv|inline|border:1px solid #2a2a2a;border-radius:7px;min-height:70px;padding:8px 10px;font-size:12px", 7)],
+    "size.review.ov.input.h": [("rv|inline|border:1px solid #2a2a2a;border-radius:7px;min-height:70px;padding:8px 10px;font-size:12px", 70)],
+    "size.review.ov.input.pad": [("rv|inline|border:1px solid #2a2a2a;border-radius:7px;min-height:70px;padding:8px 10px;font-size:12px", [8, 10])],
     # ⌘K palette: pawr-declog placement 04, the one mockup with a palette.
     "color.palette.bg": ["dl|.pal|background"],
     "color.palette.border": ["dl|.pal|border@color"],
@@ -230,6 +358,13 @@ def style_rules(key):
     return html, rules
 
 
+def over(rgba, base):
+    """An rgba() colour composited over the opaque `base`, as the browser paints it."""
+    *rgb, a = (float(x) for x in re.fullmatch(r"rgba\(([^)]*)\)", rgba.strip()).group(1).split(","))
+    b = [int(base[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(c * a + d * (1 - a)):02x}" for c, d in zip(rgb, b))
+
+
 def resolve(src, files):
     if isinstance(src, tuple):
         spec, value = src
@@ -239,7 +374,7 @@ def resolve(src, files):
         norm = HEX.sub(lambda m: norm_color(m.group()), sub).lower()
         vals = value if isinstance(value, list) else [value]
         for x in vals:
-            if str(x).lower() not in norm:
+            if str(x).lower() not in norm and str(x).replace("0.", ".", 1) not in norm:
                 raise ValueError(f"value {x} not in inline source: {spec}")
         return value
     f, sel, prop = src.split("|")
@@ -250,6 +385,8 @@ def resolve(src, files):
     raw = VAR.sub(lambda m: files[f][1].get(":root", {}).get("--" + m.group(1), m.group()), raw)
     if pick == "color":
         return norm_color(HEX.search(raw).group())
+    if pick.startswith("over"):
+        return over(raw, pick[4:])
     if pick:
         n = NUM.findall(HEX.sub("", raw))[int(pick)]
         return float(n) if "." in n else int(n)

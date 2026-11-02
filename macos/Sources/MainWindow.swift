@@ -92,6 +92,16 @@ private final class RootView: NSView {
     /// The palette mockup's scrim over everything below the title bar.
     let scrim = NSView()
     let agents = AgentsView()
+    var sidebarW = Tok.Size.sidebarW
+    /// The review screen, over the terminal pane; the pane hides so no surface takes keys under it.
+    var review: NSView? {
+        didSet {
+            oldValue?.removeFromSuperview()
+            if let review { addSubview(review, positioned: .below, relativeTo: scrim) }
+            pane.isHidden = review != nil || agentsOn
+            needsLayout = true
+        }
+    }
 
     var sidebarHidden = false {
         didSet {
@@ -131,10 +141,11 @@ private final class RootView: NSView {
         super.layout()
         agents.frame = bounds
         if agentsOn { return }
-        let top = TitleBarView.height(zen: sidebarHidden), w = sidebarHidden ? 0 : Tok.Size.sidebarW
+        let top = TitleBarView.height(zen: sidebarHidden), w = sidebarHidden ? 0 : sidebarW
         titleBar.frame = NSRect(x: 0, y: 0, width: bounds.width, height: top)
-        sidebar.frame = NSRect(x: 0, y: top, width: Tok.Size.sidebarW, height: bounds.height - top)
+        sidebar.frame = NSRect(x: 0, y: top, width: sidebarW, height: bounds.height - top)
         pane.frame = NSRect(x: w, y: top, width: bounds.width - w, height: bounds.height - top)
+        review?.frame = pane.frame
         scrim.frame = NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top)
         for v in pane.subviews { v.frame = pane.bounds }
     }
@@ -160,6 +171,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// Applied in showWindow, once the window has its launch position to restore to.
     private var agentsViewAtLaunch = false
     private lazy var listener = MainQueueListener { [weak self] in self?.coalescedRefresh() }
+    private lazy var reviewer = ReviewCoordinator(host: self)
 
     init(core: CoreAPI, ghostty: Ghostty.App, fixture: Fixture?, config: HauntConfig, plugins: PluginsAPI?) {
         self.core = core
@@ -167,7 +179,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.fixture = fixture
         self.config = config
         self.plugins = plugins
-        let size = Fixture.windowSize
+        let size = fixture?.size ?? Fixture.windowSize
         let win = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                            backing: .buffered, defer: false)
@@ -188,6 +200,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         win.delegate = self
 
         root.titleBar.accessory = fixture?.titleAccessory ?? .icons
+        root.sidebarW = fixture?.sidebarWidth ?? Tok.Size.sidebarW
         root.titleBar.onIcon = { [weak self] icon in self?.titleIcon(icon) }
         root.titleBar.onHint = { [weak self] hint in
             switch hint {
@@ -355,6 +368,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     func select(_ id: String) {
         guard let tab = tabs.first(where: { $0.env.surfaceId == id }) else { return }
+        if id != selectedId { reviewer.close() }
         selectedId = id
         core.selectSurface(surfaceId: id)
         // Every surface stays in the window (hidden when not selected) so its size and display stay current.
@@ -615,6 +629,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         guard let window, on != root.agentsOn else { return }
         if window.styleMask.contains(.fullScreen) { return NSSound.beep() }
         if on {
+            reviewer.close()
             if palette.isOpen { palette.close() }
             root.agents.restore = (window.frame, window.minSize)
             root.agentsOn = true
@@ -707,7 +722,59 @@ extension MainWindowController: PaletteHost {
 
     private func focusSelectedSurface() {
         guard let window else { return }
+        if let review = root.review {
+            window.makeFirstResponder(review)
+            return
+        }
         if let tab = tabs.first(where: { $0.env.surfaceId == selectedId }) { window.makeFirstResponder(tab.view) }
         syncFocus()
     }
+}
+
+// MARK: Review screen
+
+extension MainWindowController: ReviewHost {
+    var isReviewOn: Bool { reviewer.isOpen }
+
+    func toggleReview() {
+        if root.agentsOn { return NSSound.beep() }
+        reviewer.toggle()
+    }
+
+    var reviewCore: CoreAPI { core }
+    var reviewFixture: Fixture? { fixture }
+    var reviewWindow: NSWindow? { window }
+
+    var reviewSelection: (surfaceId: String, row: Row?)? {
+        guard let id = selectedId else { return nil }
+        return (id, root.sidebar.snapshot.groups.lazy.flatMap(\.rows).first { $0.surfaceId == id })
+    }
+
+    func showReviewView(_ view: NSView?) {
+        root.review = view
+        root.layoutSubtreeIfNeeded()
+    }
+
+    private static var savedAccessory: TitleBarView.Accessory?
+
+    func setReviewTitle(crumb: [String], accessory: TitleBarView.Accessory?) {
+        root.titleBar.crumb = crumb
+        if let accessory {
+            if Self.savedAccessory == nil { Self.savedAccessory = root.titleBar.accessory }
+            root.titleBar.accessory = accessory
+        } else if crumb.isEmpty, let saved = Self.savedAccessory {
+            root.titleBar.accessory = saved
+            Self.savedAccessory = nil
+        }
+    }
+
+    func pasteIntoSurface(_ text: String, surfaceId: String) -> Bool {
+        guard tabs.contains(where: { $0.env.surfaceId == surfaceId }) else { return false }
+        // It counts as typing: a pending permission request is retired before the text lands.
+        core.onUserInput(surfaceId: surfaceId)
+        write(Data(text.utf8), to: surfaceId)
+        return true
+    }
+
+    func focusTerminal() { focusSelectedSurface() }
 }

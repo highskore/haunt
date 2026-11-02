@@ -220,6 +220,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
         // menu each lives in.
         let commands: [(KeyMap.Action, String, String)] = [
             (.toggleSidebar, host.isSidebarHidden ? "Show Sidebar" : "Hide Sidebar", "View"),
+            (.review, "Review Changes", "View · the selected tab's latest turn"),
             (.newTab, "New Tab", "Window"),
             (.closeTab, "Close Tab", "Window"),
             (.nextTab, "Next Tab", "Window"),

@@ -64,6 +64,8 @@ final class MockCore: CoreAPI {
         fixture == .palette || fixture == .codexLog ? Array((fixture?.decisions() ?? []).prefix(Int(limit))) : []
     }
 
+    func reviewTurn(surfaceId: String) -> ReviewTurn? { fixture?.reviewTurn }
+
     func gatePluginRequest(request: HostRequest) -> PtyWrite? { nil }
 
     func snapshot() -> SidebarSnapshot {
