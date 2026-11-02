@@ -71,11 +71,16 @@ check(DiffParser.hunkStarts("@@ -5 +7,2 @@") ?? (0, 0) == (5, 7), "hunk without 
 let crlf = DiffParser.parse("diff --git a/w b/w\r\n--- a/w\r\n+++ b/w\r\n@@ -1 +1 @@\r\n-a\r\n+b\r\n")
 check(crlf.first?.hunks.first?.lines.map(\.text) == ["a", "b"] && crlf.first?.hiddenChars == false, "CRLF lines split cleanly")
 let trojan = DiffParser.parse("diff --git a/t\u{200B}.rs b/t\u{200B}.rs\n--- a/t\u{200B}.rs\n+++ b/t\u{200B}.rs\n@@ -1 +1 @@ fn \u{202E}x\n-a\n+if ok {\u{202E} }\u{1B}[2J\n")[0]
-check(trojan.path == "t⟨U+200B⟩.rs" && trojan.hiddenChars, "hidden characters in a path are spelled out and flagged")
+check(trojan.path == "t\u{200B}.rs" && trojan.shown == "t⟨U+200B⟩.rs" && trojan.hiddenChars, "a path keeps its raw key, is drawn spelled out, flagged")
 check(trojan.hunks[0].header.contains("⟨U+202E⟩"), "and in a hunk header")
 check(trojan.hunks[0].lines.map { "\($0.hidden)" } == ["false", "true"], "only the line with them is flagged")
 check(trojan.hunks[0].lines[1].text == "if ok {⟨U+202E⟩ }⟨U+001B⟩[2J", "bidi and escape spelled out")
 check(Visible.text("a\u{2067}b\u{00AD}c\u{FEFF}") == "a⟨U+2067⟩b⟨U+00AD⟩c⟨U+FEFF⟩", "isolates, soft hyphen, BOM")
+check(Visible.text("a\u{2028}b\u{3164}c\u{FE0F}d\u{E0100}") == "a⟨U+2028⟩b⟨U+3164⟩c⟨U+FE0F⟩d⟨U+E0100⟩", "separators, fillers, variation selectors")
+// A literal placeholder can't pass for a real one: every ⟨ drawn starts an escape.
+check(Visible.text("⟨U+202E⟩") == "⟨U+27E8⟩U+202E⟩" && Visible.text("⟨U+202E⟩") != Visible.text("\u{202E}"), "literal ⟨ escaped")
+let fake = DiffParser.parse("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+see ⟨U+202E⟩ here\n")[0]
+check(!fake.hiddenChars && fake.hunks[0].lines.allSatisfy { !$0.hidden }, "a literal ⟨ isn't flagged as hidden")
 
 // MARK: Tree
 
@@ -356,13 +361,36 @@ if GitRunner.supportsAttrSource {
         let bad = t?.hunks.flatMap(\.lines).filter(\.hidden).map(\.text)
         check(bad == ["if (admin) {⟨U+202E⟩ } ⟨U+2066⟩// check"], "bidi spelled out \(bad ?? [])")
         check(t?.hunks.flatMap(\.lines).filter { !$0.hidden }.map(\.text) == ["ok"], "clean lines aren't flagged")
-        let z = byPath["zero⟨U+200B⟩width.txt"]
-        check(z?.hiddenChars == true && z?.hunks.first?.lines.map(\.text) == ["x"], "zero-width name spelled out \(byPath.keys.sorted())")
+        let z = byPath["zero\u{200B}width.txt"]
+        check(z?.hiddenChars == true && z?.shown == "zero⟨U+200B⟩width.txt" && z?.hunks.first?.lines.map(\.text) == ["x"],
+              "zero-width name spelled out \(byPath.keys.sorted())")
     } else {
         check(false, "load with a FIFO failed")
     }
 } else {
     print("review: git < 2.40, skipping the untracked-file checks")
+}
+try? FileManager.default.removeItem(atPath: repo)
+
+// A file named with a literal placeholder next to one with the real character: two files, two keys.
+fresh()
+let literal = "a⟨U+202E⟩b.txt", real = "a\u{202E}b.txt"
+write(literal, "one\n")
+sh(["git", "init", "-q", "-b", "main"], repo)
+sh(["git", "add", "-A"], repo)
+sh(["git", "commit", "-q", "-m", "one"], repo)
+write(literal, "one\ntwo\n")
+write(real, "impostor\n")
+if GitRunner.supportsAttrSource, case let .success(d) = ReviewLoader.load(cwd: repo, headAtStart: nil) {
+    let lit = d.files.first { $0.path == literal }, imp = d.files.first { $0.path == real }
+    check(d.files.count == 2 && lit?.status == .modified && imp?.status == .added, "both listed \(d.files.map(\.path))")
+    check(lit?.shown == "a⟨U+27E8⟩U+202E⟩b.txt" && imp?.shown == "a⟨U+202E⟩b.txt", "drawn differently")
+    check(lit?.hiddenChars == false && imp?.hiddenChars == true, "only the real one is flagged")
+    let st = ReviewState(surfaceId: "s")
+    st.viewed.insert(literal)
+    check(!st.viewed.contains(real), "viewed state doesn't carry over")
+} else {
+    check(GitRunner.supportsAttrSource == false, "load with look-alike names failed")
 }
 try? FileManager.default.removeItem(atPath: repo)
 

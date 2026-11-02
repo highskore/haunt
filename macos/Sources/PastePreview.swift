@@ -68,10 +68,13 @@ struct PastePreview: Equatable {
         self.hasControls = controls
     }
 
-    /// The core's `is_hidden`: controls, format characters (bidi overrides, zero-width) and any whitespace
-    /// but the plain space (U+2028/2029, NBSP, ideographic space…), all of which can disguise text.
+    /// The core's `is_hidden` and more: controls, format characters (bidi overrides, zero-width), any
+    /// whitespace but the plain space (U+2028/2029, NBSP…), and default-ignorables that draw as nothing
+    /// (Hangul fillers, variation selectors), all of which can disguise text or carry it unseen.
     static func hidden(_ c: Unicode.Scalar) -> Bool {
-        c != " " && (c.properties.generalCategory == .control || c.properties.generalCategory == .format
-            || c.properties.isWhitespace)
+        let p = c.properties
+        return c != " " && (p.generalCategory == .control || p.generalCategory == .format || p.isWhitespace
+            || p.generalCategory == .lineSeparator || p.generalCategory == .paragraphSeparator
+            || p.isDefaultIgnorableCodePoint)
     }
 }

@@ -22,6 +22,7 @@ struct Hunk: Equatable {
 /// One file of a unified diff.
 struct FileDiff: Equatable {
     enum Status: Equatable { case added, deleted, modified, renamed(from: String) }
+    /// As git gave it: the key for viewed state, comments and de-duplication. Draw `shown` instead.
     var path: String
     var status: Status = .modified
     var binary = false
@@ -30,15 +31,16 @@ struct FileDiff: Equatable {
     var deletions = 0
     /// Diff lines past the per-file limit, counted but not kept.
     var droppedLines = 0
-    /// Some path or line had control or format characters (Trojan Source), now spelled out.
+    /// The path or a line had control or format characters (Trojan Source), spelled out where drawn.
     var hiddenChars = false
     /// A FIFO, socket or device among the untracked files: listed, never read.
     var special = false
 
-    var name: String { (path as NSString).lastPathComponent }
+    var shown: String { Visible.text(path) }
+    var name: String { (shown as NSString).lastPathComponent }
     /// "Sources/Haunt/Notify/", or "" at the top level.
     var dir: String {
-        let d = (path as NSString).deletingLastPathComponent
+        let d = (shown as NSString).deletingLastPathComponent
         return d.isEmpty ? "" : d + "/"
     }
 }
@@ -128,25 +130,23 @@ enum DiffParser {
         return files.map(visible)
     }
 
-    /// Paths, hunk headers and lines with control and format characters spelled out and flagged.
+    /// Hunk headers and lines with control and format characters spelled out; those and paths flagged.
+    /// Paths stay raw, so two files never merge into one display name's state.
     static func visible(_ f: FileDiff) -> FileDiff {
         var f = f
-        let path = Visible.text(f.path)
-        if path != f.path { f.path = path; f.hiddenChars = true }
-        if case let .renamed(from) = f.status, Visible.text(from) != from {
-            f.status = .renamed(from: Visible.text(from))
-            f.hiddenChars = true
-        }
+        if Visible.hasHidden(f.path) { f.hiddenChars = true }
+        if case let .renamed(from) = f.status, Visible.hasHidden(from) { f.hiddenChars = true }
         for h in f.hunks.indices {
             let header = Visible.text(f.hunks[h].header)
-            if header != f.hunks[h].header { f.hunks[h].header = header; f.hiddenChars = true }
+            if Visible.hasHidden(f.hunks[h].header) { f.hiddenChars = true }
+            f.hunks[h].header = header
             for l in f.hunks[h].lines.indices {
                 let t = Visible.text(f.hunks[h].lines[l].text)
-                if t != f.hunks[h].lines[l].text {
-                    f.hunks[h].lines[l].text = t
+                if Visible.hasHidden(f.hunks[h].lines[l].text) {
                     f.hunks[h].lines[l].hidden = true
                     f.hiddenChars = true
                 }
+                f.hunks[h].lines[l].text = t
             }
         }
         return f
@@ -414,7 +414,7 @@ enum ReviewLoader {
         let dirty = readTree ? (head.map { git(["diff", "--quiet", "--no-ext-diff", "--no-textconv", $0, "--"])?.status == 1 } ?? !files.isEmpty) : false
 
         if readTree, let u = git(["ls-files", "--others", "--exclude-standard", "-z"]), u.status == 0 {
-            let paths = u.data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }.filter { !tracked.contains(Visible.text($0)) }
+            let paths = u.data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }.filter { !tracked.contains($0) }
             for (i, p) in paths.enumerated() {
                 if i >= maxUntracked {
                     notes.append("\(paths.count - maxUntracked) more untracked files aren't shown.")
@@ -449,7 +449,7 @@ enum ReviewLoader {
                 guard let d = git(["diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",
                                    "--dst-prefix=b/", "--", "/dev/null", p]), d.status <= 1 else { continue }
                 var parsed = DiffParser.parse(d.text)
-                for k in parsed.indices { parsed[k].status = .added; parsed[k].path = shown; parsed[k].hiddenChars = parsed[k].hiddenChars || shown != p }
+                for k in parsed.indices { parsed[k].status = .added; parsed[k].path = p; parsed[k].hiddenChars = parsed[k].hiddenChars || Visible.hasHidden(p) }
                 files += parsed.isEmpty ? [DiffParser.visible(FileDiff(path: p, status: .added))] : parsed
             }
         }

@@ -51,7 +51,7 @@ Diffs also pass `--no-ext-diff --no-textconv --no-color`, so `diff.<driver>.comm
 
 **Untracked files.** Each path from `git ls-files --others` is `lstat`ed first. Only regular files are diffed with `git diff --no-index`. A symlink shows its target, read without git and without following it. Anything else (a FIFO, socket or device) is listed as "special" with a note and never handed to git, which would block reading it. git's own listing already skips FIFOs; the check covers one that replaces a file after the listing.
 
-**Hidden characters (Trojan Source).** Every repo-derived string drawn on screen goes through `Visible.text`: paths, rename sources, hunk headers, diff lines, branch, upstream and repo names, and the turn's prompt, commands, tasks and files. It replaces C0/C1 controls, DEL and format characters (bidi overrides and isolates, zero-width characters, the BOM, soft hyphens) with a visible `⟨U+202E⟩`, using the same test as `PastePreview`. A file containing any is tagged "hidden chars" in its header and "hidden" in the file lists. Each line that holds one shows the placeholder in place.
+**Hidden characters (Trojan Source).** Every repo-derived string drawn on screen goes through `Visible.text`: paths, hunk headers, diff lines, branch, upstream and repo names, and the turn's prompt, commands, tasks and files. It replaces each character `PastePreview.hidden` flags with a visible `⟨U+202E⟩`. That covers C0/C1 controls, format characters (bidi overrides and isolates, zero-width characters, the BOM, soft hyphens), any whitespace but the space (U+2028/2029, NBSP) and default-ignorables that draw as nothing (Hangul fillers, variation selectors). A literal `⟨` is escaped too, as `⟨U+27E8⟩`, so every `⟨` on screen starts a placeholder and a filename can't fake one. A file whose path or lines hold a hidden character is tagged "hidden chars" in its header and "hidden" in the file lists, and those lines are flagged. Paths are only escaped where drawn: viewed state, comments and de-duplication use the raw path, so two files never share state through a look-alike name.
 
 `/usr/bin/git` is used only when the developer tools are installed, so it never triggers the install prompt. `macos/tests/review.sh` covers the following. Each hostile fixture is first run through plain git to show it really fires, so the test is live.
 
@@ -61,7 +61,8 @@ Diffs also pass `--no-ext-diff --no-textconv --no-color`, so `diff.<driver>.comm
 - With the filters still configured, a direct working-tree diff runs none of them, because `GIT_ATTR_SOURCE` is set. This simulates a filter that appears after the check.
 - A partial clone with a deleted blob and an `ext::` promisor remote fetches nothing, and loads promptly.
 - A FIFO among the untracked files doesn't stall loading. A symlink shows its target.
-- Bidi, zero-width and escape characters in lines, names and hunk headers are spelled out and flagged.
+- Bidi, zero-width and escape characters in lines, names and hunk headers are spelled out and flagged. So are separators, Hangul fillers and variation selectors.
+- A file named with a literal `⟨U+202E⟩` next to one holding a real U+202E: both are listed, drawn differently, flagged correctly, and don't share viewed state.
 - CRLF lines split cleanly.
 
 ## Sending a follow-up (06)

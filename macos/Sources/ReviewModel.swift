@@ -175,7 +175,7 @@ enum Draft {
             parts.append("\(count) change\(n == 1 ? "" : "s") from review:")
             for (i, c) in comments.enumerated() {
                 let side = c.deleted ? " (removed line)" : ""
-                parts.append("\(i + 1). \((c.path as NSString).lastPathComponent):\(c.line)\(side)\n\(c.text.trimmingCharacters(in: .whitespacesAndNewlines))")
+                parts.append("\(i + 1). \(Visible.text((c.path as NSString).lastPathComponent)):\(c.line)\(side)\n\(c.text.trimmingCharacters(in: .whitespacesAndNewlines))")
             }
         }
         let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -279,7 +279,7 @@ final class ReviewState {
     }
 
     var files: [FileDiff] { diff?.files ?? [] }
-    var tree: FileTree { FileTree(paths: files.map(\.path)) }
+    var tree: FileTree { FileTree(paths: files.map(\.shown)) }
 
     var totals: (Int, Int) { files.reduce((0, 0)) { ($0.0 + $1.additions, $0.1 + $1.deletions) } }
 
@@ -437,7 +437,8 @@ enum Highlight {
 /// spelled out as ⟨U+202E⟩, so a change can't disguise what it does when drawn.
 enum Visible {
     static func text(_ s: String, keepNewlines: Bool = false) -> String {
-        func hide(_ c: Unicode.Scalar) -> Bool { PastePreview.hidden(c) && !(keepNewlines && c == "\n") }
+        // A literal ⟨ is escaped too, so every ⟨ drawn starts a placeholder and none can be faked.
+        func hide(_ c: Unicode.Scalar) -> Bool { c == "⟨" || PastePreview.hidden(c) && !(keepNewlines && c == "\n") }
         guard s.unicodeScalars.contains(where: hide) else { return s }
         var out = ""
         for c in s.unicodeScalars {
@@ -445,6 +446,8 @@ enum Visible {
         }
         return out
     }
+
+    static func hasHidden(_ s: String) -> Bool { s.unicodeScalars.contains(where: PastePreview.hidden) }
 
     /// The turn as the review shows it: prompt, commands, tasks, files and subagents spelled out.
     static func turn(_ t: ReviewTurn) -> ReviewTurn {

@@ -497,7 +497,7 @@ private final class InboxFiles: NSView {
             let flag = f.hiddenChars ? "hidden " : ""
             let word = f.special ? "special" : f.binary ? "binary" : nil
             let right = RV.width(flag, sf) + (word.map { RV.width($0, sf) } ?? IB.statWidth(f.additions, f.deletions))
-            row(IB.statusLetter(f), IB.shortPath(f.path), ink: sel ? Tok.Color.inboxFileSel : Tok.Color.inboxFileInk, top: y, width: w,
+            row(IB.statusLetter(f), IB.shortPath(f.shown), ink: sel ? Tok.Color.inboxFileSel : Tok.Color.inboxFileInk, top: y, width: w,
                 rightW: right, ctx: ctx) { x, mid in
                 let fx = x + (flag.isEmpty ? 0 : RV.text(flag, sf, Tok.Color.textPrimary, x: x, top: mid - sl / 2, lineHeight: sl, in: ctx))
                 if let word {
