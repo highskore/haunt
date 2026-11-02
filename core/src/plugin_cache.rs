@@ -46,10 +46,10 @@ impl Hasher for ShaHasher {
     }
 }
 
-/// SHA-256 over the wasm bytes and the engine's compatibility hash, hex encoded.
-pub fn cache_name(engine: &wasmtime::Engine, wasm: &[u8]) -> String {
+/// SHA-256 over the wasm's SHA-256 and the engine's compatibility hash, hex encoded.
+pub fn cache_name(engine: &wasmtime::Engine, wasm_sha256: &[u8; 32]) -> String {
     let mut h = ShaHasher(Sha256::new());
-    h.write(&Sha256::digest(wasm));
+    h.write(wasm_sha256);
     std::hash::Hash::hash(&engine.precompile_compatibility_hash(), &mut h);
     hex(&h.0.finalize())
 }

@@ -7,13 +7,14 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use wasmtime::component::Linker;
 
 use crate::event::AgentEvent;
 use crate::ids::hex;
 use crate::model::CoreHandle;
 use crate::plugin_cache::{CwasmCache, check_dir, write_atomic};
 use crate::plugin_manifest::{ALWAYS, Capabilities, MANIFEST, Manifest, valid_id};
-use crate::plugins::{Decoration, HostRequest, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost, RowMenuItem};
+use crate::plugins::{Decoration, HostRequest, HostState, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost, RowMenuItem};
 
 pub const LOCKFILE: &str = "plugins.lock";
 pub const WASM: &str = "plugin.wasm";
@@ -105,8 +106,12 @@ pub struct Store {
     home: PathBuf,
 }
 
+fn digest(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
 fn sha(bytes: &[u8]) -> String {
-    hex(&Sha256::digest(bytes))
+    hex(&digest(bytes))
 }
 
 fn mkdir_private(dir: &Path) -> Result<(), StoreError> {
@@ -205,8 +210,9 @@ impl Store {
         let caps = &manifest.capabilities;
         let id = manifest.plugin.id.clone();
 
+        let wasm_digest = digest(&wasm);
         let cache = CwasmCache::open(&self.cache_dir())?;
-        let (component, _) = host.compile_cached(&wasm, &cache).map_err(|e| StoreError::Invalid(format!("entry is not a valid component: {e}")))?;
+        let (component, _) = host.compile_cached(&wasm, &wasm_digest, &cache).map_err(|e| StoreError::Invalid(format!("entry is not a valid component: {e}")))?;
         host.check_links(&component, caps)
             .map_err(|e| StoreError::Invalid(format!("plugin uses an import its manifest does not request: {e}")))?;
 
@@ -246,7 +252,7 @@ impl Store {
             version: manifest.plugin.version.clone(),
             source,
             commit: None,
-            sha256_wasm: sha(&wasm),
+            sha256_wasm: hex(&wasm_digest),
             sha256_manifest: sha(&manifest_bytes),
             granted: caps.clone(),
         };
@@ -316,8 +322,9 @@ impl Store {
         }
         let manifest_bytes = read_capped(&src.join(MANIFEST))?;
         let wasm = read_capped(&src.join(WASM))?;
-        let pinned = |e: &LockEntry| e.sha256_wasm == sha(&wasm) && e.sha256_manifest == sha(&manifest_bytes);
-        if old.is_some_and(|i| pinned(&lock.plugins[i])) {
+        let wasm_digest = digest(&wasm);
+        let (wasm_sha, manifest_sha) = (hex(&wasm_digest), sha(&manifest_bytes));
+        if old.is_some_and(|i| lock.plugins[i].sha256_wasm == wasm_sha && lock.plugins[i].sha256_manifest == manifest_sha) {
             return Ok(false);
         }
         let manifest = Manifest::parse(&String::from_utf8_lossy(&manifest_bytes))?;
@@ -332,7 +339,7 @@ impl Store {
             return Ok(false);
         }
         let cache = CwasmCache::open(&self.cache_dir())?;
-        let (component, _) = host.compile_cached(&wasm, &cache)?;
+        let (component, _) = host.compile_cached(&wasm, &wasm_digest, &cache)?;
         host.check_links(&component, &manifest.capabilities)?;
         self.put(id, &manifest_bytes, &wasm)?;
         if grew {
@@ -343,8 +350,8 @@ impl Store {
             version: manifest.plugin.version.clone(),
             source: BUNDLED.into(),
             commit: None,
-            sha256_wasm: sha(&wasm),
-            sha256_manifest: sha(&manifest_bytes),
+            sha256_wasm: wasm_sha,
+            sha256_manifest: manifest_sha,
             granted: manifest.capabilities,
         };
         match old {
@@ -367,8 +374,10 @@ impl Store {
         if manifest.plugin.id != id {
             return Err(StoreError::Invalid(format!("installed manifest is for {}, not {id}", manifest.plugin.id)));
         }
+        let wasm_digest = digest(&wasm);
+        let (wasm_sha, manifest_sha) = (hex(&wasm_digest), sha(&manifest_bytes));
         let cache = CwasmCache::open(&self.cache_dir())?;
-        let (component, _) = host.compile_cached(&wasm, &cache)?;
+        let (component, _) = host.compile_cached(&wasm, &wasm_digest, &cache)?;
         host.check_links(&component, &manifest.capabilities)?;
         let e = &mut lock.plugins[pos];
         let prompt = Prompt {
@@ -378,15 +387,15 @@ impl Store {
             lines: manifest.capabilities.describe(),
             always: ALWAYS,
             update_from: None,
-            changed_on_disk: e.sha256_wasm != sha(&wasm) || e.sha256_manifest != sha(&manifest_bytes),
+            changed_on_disk: e.sha256_wasm != wasm_sha || e.sha256_manifest != manifest_sha,
             replaces: None,
         };
         if !approve(&prompt) {
             return Err(StoreError::Declined);
         }
         e.version = manifest.plugin.version;
-        e.sha256_wasm = sha(&wasm);
-        e.sha256_manifest = sha(&manifest_bytes);
+        e.sha256_wasm = wasm_sha;
+        e.sha256_manifest = manifest_sha;
         e.granted = manifest.capabilities;
         self.write_lock(&lock)
     }
@@ -413,26 +422,31 @@ impl Store {
     }
 
     /// The installed manifest and wasm, only if both still hash to what was approved.
-    fn verify(&self, e: &LockEntry) -> Result<(Manifest, Vec<u8>), StoreError> {
+    fn verify(&self, e: &LockEntry) -> Result<(Manifest, Vec<u8>, [u8; 32]), StoreError> {
         let dir = self.plugin_dir(&e.id)?;
         let manifest_bytes = read_capped(&dir.join(MANIFEST))?;
         let wasm = read_capped(&dir.join(WASM))?;
-        if sha(&wasm) != e.sha256_wasm {
+        let wasm_digest = digest(&wasm);
+        if hex(&wasm_digest) != e.sha256_wasm {
             return Err(StoreError::Invalid(format!("{}: plugin.wasm does not match the lockfile; run `haunt plugin approve {}`", e.id, e.id)));
         }
         if sha(&manifest_bytes) != e.sha256_manifest {
             return Err(StoreError::Invalid(format!("{}: manifest does not match the lockfile; run `haunt plugin approve {}`", e.id, e.id)));
         }
         let manifest = Manifest::parse(&String::from_utf8_lossy(&manifest_bytes))?;
-        Ok((manifest, wasm))
+        Ok((manifest, wasm, wasm_digest))
     }
 
     /// Loads every pinned plugin with exactly the capabilities the user granted; `core` backs the
     /// `decisions` and `allowlist` imports.
     pub fn load_all(&self, host: &PluginHost, core: Option<&CoreHandle>) -> Result<PluginSet, StoreError> {
         let mut set = PluginSet { plugins: Vec::new(), errors: Vec::new() };
+        let cache = CwasmCache::open(&self.cache_dir());
+        // Plugins with the same grants share a linker.
+        let mut linkers: Vec<(Capabilities, Linker<HostState>)> = Vec::new();
         for e in self.read_lock()?.plugins {
-            let loaded = self.verify(&e).and_then(|(manifest, wasm)| {
+            let loaded = self.verify(&e).and_then(|(manifest, wasm, wasm_digest)| {
+                let cache = cache.as_ref().map_err(|err| StoreError::Invalid(err.to_string()))?;
                 let data = self.data_dir(&e.id);
                 mkdir_private(&data)?;
                 let spec = LoadSpec {
@@ -443,7 +457,15 @@ impl Store {
                     haunt_dir: Some(self.home.clone()),
                     core: core.cloned(),
                 };
-                Ok(host.load_bytes(&wasm, &self.cache_dir(), &spec)?.0)
+                let (component, _) = host.compile_cached(&wasm, &wasm_digest, cache)?;
+                let i = match linkers.iter().position(|(c, _)| *c == e.granted) {
+                    Some(i) => i,
+                    None => {
+                        linkers.push((e.granted.clone(), host.linker(&e.granted)?));
+                        linkers.len() - 1
+                    }
+                };
+                Ok(host.instantiate_with(&component, &spec, &linkers[i].1)?)
             });
             match loaded {
                 Ok(p) => set.plugins.push((e.granted, p)),

@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Config, Engine, EngineWeak, Store, StoreContextMut, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxView, WasiView};
@@ -705,9 +706,10 @@ impl PluginHost {
         Ok(Self { engine, epoch })
     }
 
-    /// Compiles `wasm`, or loads it from `cache` when an HMAC-verified artefact exists.
-    pub fn compile_cached(&self, wasm: &[u8], cache: &CwasmCache) -> Result<(Component, bool), PluginError> {
-        let name = cache_name(&self.engine, wasm);
+    /// Compiles `wasm`, or loads it from `cache` when an HMAC-verified artefact exists. The caller
+    /// passes the SHA-256 it already took of `wasm`, so the bytes are hashed once.
+    pub fn compile_cached(&self, wasm: &[u8], wasm_sha256: &[u8; 32], cache: &CwasmCache) -> Result<(Component, bool), PluginError> {
+        let name = cache_name(&self.engine, wasm_sha256);
         if let Some(art) = cache.get(&name) {
             // Safety: the bytes verified under our per-install key, so we serialised them.
             if let Ok(c) = unsafe { Component::deserialize(&self.engine, &art) } {
@@ -766,12 +768,16 @@ impl PluginHost {
 
     /// Instantiates a compiled component with `spec`'s grants and runs its `init`.
     pub fn instantiate(&self, component: &Component, spec: &LoadSpec) -> Result<LoadedPlugin, PluginError> {
-        let linker = self.linker(&spec.caps)?;
+        self.instantiate_with(component, spec, &self.linker(&spec.caps)?)
+    }
+
+    /// `instantiate` with a linker for `spec.caps` the caller may share between loads.
+    pub fn instantiate_with(&self, component: &Component, spec: &LoadSpec, linker: &Linker<HostState>) -> Result<LoadedPlugin, PluginError> {
         let mut store = Store::new(&self.engine, HostState::new(&spec.id, &spec.caps, spec.kv_path.clone(), spec.haunt_dir.as_deref(), spec.core.clone()));
         store.limiter(|s| &mut s.limits);
         // Instantiation runs the component's start functions, which get the same budget as a call.
         store.set_epoch_deadline(CALL_TICKS);
-        let bindings = self.epoch.ticking(|| Plugin::instantiate(&mut store, component, &linker))?;
+        let bindings = self.epoch.ticking(|| Plugin::instantiate(&mut store, component, linker))?;
         let mut plugin = LoadedPlugin { store, bindings, epoch: self.epoch.clone(), disabled: None };
         plugin.init(&spec.settings_json)?;
         Ok(plugin)
@@ -780,7 +786,7 @@ impl PluginHost {
     pub fn load_bytes(&self, bytes: &[u8], cache_dir: &Path, spec: &LoadSpec) -> Result<(LoadedPlugin, LoadStats), PluginError> {
         let cache = CwasmCache::open(cache_dir)?;
         let t = Instant::now();
-        let (component, from_cache) = self.compile_cached(bytes, &cache)?;
+        let (component, from_cache) = self.compile_cached(bytes, &Sha256::digest(bytes).into(), &cache)?;
         let compile_ms = t.elapsed().as_secs_f64() * 1e3;
         let t = Instant::now();
         let plugin = self.instantiate(&component, spec)?;
@@ -814,18 +820,19 @@ mod tests {
         // Text form; the dev-only `wat` feature lets Component::new parse it.
         let wasm = b"(component)".to_vec();
 
-        assert!(!host.compile_cached(&wasm, &cache).unwrap().1);
-        assert!(host.compile_cached(&wasm, &cache).unwrap().1);
+        let sha = Sha256::digest(&wasm).into();
+        assert!(!host.compile_cached(&wasm, &sha, &cache).unwrap().1);
+        assert!(host.compile_cached(&wasm, &sha, &cache).unwrap().1);
 
-        let name = cache_name(&host.engine, &wasm);
+        let name = cache_name(&host.engine, &sha);
         let art = dir.join(format!("{name}.cwasm"));
         let mut bytes = std::fs::read(&art).unwrap();
         let last = bytes.len() - 1;
         bytes[last] ^= 0xff;
         std::fs::write(&art, bytes).unwrap();
 
-        assert!(!host.compile_cached(&wasm, &cache).unwrap().1, "tampered artefact must not load");
-        assert!(host.compile_cached(&wasm, &cache).unwrap().1, "recompiled artefact is cached again");
+        assert!(!host.compile_cached(&wasm, &sha, &cache).unwrap().1, "tampered artefact must not load");
+        assert!(host.compile_cached(&wasm, &sha, &cache).unwrap().1, "recompiled artefact is cached again");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
