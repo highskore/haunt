@@ -295,7 +295,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         tab.host.frame = root.pane.bounds
         tab.host.isHidden = true
         root.pane.addSubview(tab.host)
-        if selectIt || selectedId == nil { select(env.surfaceId) }
+        if selectIt || selectedId == nil { select(env.surfaceId) } else { syncFocus() }
     }
 
     // MARK: Paste confirmation
@@ -444,13 +444,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     /// Like Ghostty's own controller: only the selected surface of the key window has focus. Ghostty learns
     /// the display only on screen changes, so it is told up front for its vsync display link.
+    /// Only the selected surface of a visible window renders; the rest are occluded.
     private func syncFocus() {
         let key = window?.isKeyWindow ?? false
         let display = window?.screen?.displayID
+        let paneShown = (window?.occlusionState.contains(.visible) ?? false) && !root.agentsOn
         for t in tabs {
             let selected = t.env.surfaceId == selectedId
             t.view.focusDidChange(key && selected && t.view.isFirstResponder)
             guard let surface = t.view.surface else { continue }
+            ghostty_surface_set_occlusion(surface, paneShown && selected)
             if let display { ghostty_surface_set_display_id(surface, display) }
             if selected { ghostty_surface_refresh(surface) }
         }
@@ -758,7 +761,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func windowDidBecomeKey(_ notification: Notification) { syncFocus() }
     func windowDidResignKey(_ notification: Notification) { syncFocus() }
     func windowDidChangeScreen(_ notification: Notification) { syncFocus() }
-    func windowDidChangeOcclusionState(_ notification: Notification) { updateTicker() }
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        updateTicker()
+        syncFocus()
+    }
 
     func windowDidResize(_ notification: Notification) {
         guard palette.isOpen, let window else { return }
