@@ -6,6 +6,8 @@ pub mod decisions;
 pub mod event;
 pub mod git;
 mod ids;
+#[cfg(test)]
+mod testdir;
 pub mod intake;
 pub mod layout;
 pub mod model;
@@ -23,6 +25,8 @@ pub mod progress;
 #[cfg(feature = "plugins")]
 pub mod ptygate;
 pub mod session;
+#[doc(hidden)]
+pub mod sync;
 
 pub use allowlist::AllowSuggestion;
 pub use decisions::Decision;

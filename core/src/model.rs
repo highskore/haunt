@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde_json::{Value, json};
@@ -15,6 +15,7 @@ use crate::ids::{hex, random, uuid_v4};
 use crate::intake::{Delivery, Intake, IntakeError, Limits, Nonces, SOCKET_NAME};
 use crate::layout::{self, SidebarSnapshot, SurfaceView};
 use crate::session::{Outcome, Session};
+use crate::sync::{lock, write};
 
 const MAX_SURFACES: usize = 512;
 
@@ -109,7 +110,7 @@ impl State {
 
     /// A hook line checked against the registered nonces, as the intake does.
     fn decode(&self, line: &str) -> Delivery {
-        crate::intake::decode(line, &self.nonces.read().unwrap_or_else(|e| e.into_inner()))
+        crate::intake::decode(line, &crate::sync::read(&self.nonces))
     }
 
     /// A socket line as the intake would deliver it, minus the socket and the rate limit.
@@ -166,10 +167,6 @@ pub struct Core {
     dir: PathBuf,
     state: Arc<Mutex<State>>,
     servers: Mutex<Option<Servers>>,
-}
-
-fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Runs `f` on the state and fires the listener, outside the lock, if it reports a change.
@@ -240,7 +237,7 @@ impl Core {
     /// Binds the hook socket and the ctl socket, opens the decision log, and registers every
     /// surface's nonce with the intake; a second call is a no-op.
     pub fn start(&self) -> Result<(), CoreError> {
-        let mut servers = self.servers.lock().unwrap_or_else(|e| e.into_inner());
+        let mut servers = lock(&self.servers);
         if servers.is_some() {
             return Ok(());
         }
@@ -265,7 +262,7 @@ impl Core {
     }
 
     fn with_intake(&self, f: impl FnOnce(&Intake)) {
-        if let Some(s) = self.servers.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if let Some(s) = lock(&self.servers).as_ref() {
             f(&s.intake);
         }
     }
@@ -287,7 +284,7 @@ impl Core {
             }
             let (id, cwd) = (env.surface_id.clone(), cwd.to_owned());
             st.surfaces.push(Surface { id, cwd, branch: None, agent_branch: None, session: Session::new(now) });
-            st.nonces.write().unwrap_or_else(|e| e.into_inner()).insert(env.surface_id.clone(), env.nonce.clone());
+            write(&st.nonces).insert(env.surface_id.clone(), env.nonce.clone());
             true
         });
         if !added {
@@ -299,7 +296,7 @@ impl Core {
     pub fn unregister_surface(&self, surface_id: &str) {
         self.with_intake(|i| i.forget_surface(surface_id));
         self.update(|st, _| {
-            st.nonces.write().unwrap_or_else(|e| e.into_inner()).remove(surface_id);
+            write(&st.nonces).remove(surface_id);
             let before = st.surfaces.len();
             if let Some(s) = st.surface(surface_id) {
                 s.session.close();
@@ -416,6 +413,7 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testdir::TempDir;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -459,7 +457,7 @@ mod tests {
 
     #[test]
     fn claude_rows_follow_the_verified_hook_cwd() {
-        let repo = std::env::temp_dir().join(format!("haunt-model-cwd-{}", std::process::id()));
+        let repo = TempDir::new("model-cwd");
         let specs = repo.join("specs");
         std::fs::create_dir_all(repo.join(".git")).unwrap();
         std::fs::create_dir_all(&specs).unwrap();
@@ -481,7 +479,6 @@ mod tests {
         std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/next\n").unwrap();
         c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &body), Instant::now()));
         assert!(only_row(&c).meta.starts_with("next · "), "a checkout shows on the next event");
-        let _ = std::fs::remove_dir_all(&repo);
 
         let body = r#""event":"stop","cwd":"/Users/me/code/vibes/specs""#;
         c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), body), Instant::now()));
@@ -528,11 +525,11 @@ mod tests {
         assert_eq!((d.len(), d[0].outcome.clone(), d[0].surface_id.as_str()), (1, crate::Outcome::Superseded, env.surface_id.as_str()));
     }
 
-    fn canonical_dir(tag: &str) -> String {
-        let d = format!("/tmp/haunt-{tag}-{}", std::process::id());
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        std::fs::canonicalize(d).unwrap().to_str().unwrap().to_owned()
+    /// A created, canonical project dir, as a string, and the guard that removes it.
+    fn canonical_dir(tag: &str) -> (TempDir, String) {
+        let d = TempDir::created(tag);
+        let s = d.to_str().unwrap().to_owned();
+        (d, s)
     }
 
     #[test]
@@ -554,7 +551,7 @@ mod tests {
 
     #[test]
     fn invisible_or_multiline_commands_are_never_suggested() {
-        let project = canonical_dir("allow-raw");
+        let (_project, project) = canonical_dir("allow-raw");
         for cmd in [r"git\u200b push", r"ls\nrm -rf x", r"ls\t-la"] {
             let c = core();
             let env = c.register_surface(&project).unwrap();
@@ -568,7 +565,6 @@ mod tests {
             assert_eq!(c.decisions("", 10).len(), 3);
             assert!(c.allow_suggestions().is_empty(), "{cmd}");
         }
-        std::fs::remove_dir_all(&project).unwrap();
     }
 
     #[test]
@@ -587,7 +583,7 @@ mod tests {
 
     #[test]
     fn three_verified_approvals_suggest_an_exact_rule() {
-        let project = canonical_dir("allow");
+        let (_project, project) = canonical_dir("allow");
         let c = core();
         let env = c.register_surface(&project).unwrap();
         let perm = format!(r#""event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"cargo test"}}"#);
@@ -617,15 +613,13 @@ mod tests {
         let written = std::fs::read_to_string(format!("{project}/.claude/settings.local.json")).unwrap();
         assert!(written.contains("\"Bash(cargo test)\""), "{written}");
         assert!(c.allow_suggestions().is_empty(), "accepted once, never again");
-        std::fs::remove_dir_all(&project).unwrap();
     }
 
     #[test]
     fn ctl_dumps_injects_and_queries() {
         use std::io::{BufRead, BufReader, Write};
         use std::os::unix::net::UnixStream;
-        let dir = format!("/tmp/haunt-ctl-{}", std::process::id());
-        let _ = std::fs::remove_dir_all(&dir);
+        let (_dir, dir) = canonical_dir("ctl");
         let c = Core::new(&dir);
         c.start().unwrap();
         let env = c.register_surface("/w").unwrap();
@@ -654,7 +648,6 @@ mod tests {
         let log = std::fs::read_to_string(format!("{dir}/decisions.jsonl")).unwrap();
         assert_eq!(log.lines().count(), 1);
         drop(c);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -722,7 +715,7 @@ mod tests {
 
     #[test]
     fn codex_approvals_are_never_suggested() {
-        let project = canonical_dir("allow-codex");
+        let (_project, project) = canonical_dir("allow-codex");
         let c = core();
         let env = c.register_surface(&project).unwrap();
         let perm = format!(r#""agent":"codex","event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"cargo test"}}"#);
@@ -736,7 +729,6 @@ mod tests {
         }
         assert_eq!(c.decisions("", 10).len(), 6);
         assert!(c.allow_suggestions().is_empty());
-        std::fs::remove_dir_all(&project).unwrap();
     }
 
     #[test]
@@ -850,8 +842,7 @@ mod tests {
     fn socket_end_to_end() {
         use std::io::Write;
         use std::os::unix::net::UnixStream;
-        let dir = format!("/tmp/haunt-e2e-{}", std::process::id());
-        let _ = std::fs::remove_dir_all(&dir);
+        let (_dir, dir) = canonical_dir("e2e");
         let c = Core::new(&dir);
         c.start().unwrap();
         c.start().unwrap();
@@ -868,6 +859,5 @@ mod tests {
         rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(answer(&c, &env.surface_id, true), Some(b"1".to_vec()));
         drop(c);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

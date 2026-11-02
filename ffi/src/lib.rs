@@ -147,20 +147,20 @@ impl HauntPlugins {
     }
 
     pub fn load_errors(&self) -> Vec<String> {
-        self.set.lock().unwrap().errors().to_vec()
+        haunt_core::sync::lock(&self.set).errors().to_vec()
     }
 
     /// No mode: registered commands and modes. A mode word: that mode's items for `query`.
     pub fn palette_items(&self, mode: Option<String>, query: String) -> Vec<PaletteItem> {
-        self.set.lock().unwrap().palette_items(mode.as_deref(), &query)
+        haunt_core::sync::lock(&self.set).palette_items(mode.as_deref(), &query)
     }
 
     pub fn invoke_palette_item(&self, plugin_id: String, item_id: String) -> Result<(), HostError> {
-        Ok(self.set.lock().unwrap().invoke(&plugin_id, &item_id)?)
+        Ok(haunt_core::sync::lock(&self.set).invoke(&plugin_id, &item_id)?)
     }
 
     /// Notifications and pty writes plugins asked for since the last call.
     pub fn take_requests(&self) -> Vec<HostRequest> {
-        self.set.lock().unwrap().take_requests()
+        haunt_core::sync::lock(&self.set).take_requests()
     }
 }

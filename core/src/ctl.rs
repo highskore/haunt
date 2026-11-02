@@ -121,10 +121,11 @@ mod tests {
     use std::io::Read;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
+    use crate::testdir::TempDir;
+
     #[test]
     fn answers_line_by_line_on_a_private_socket() {
-        let d = PathBuf::from(format!("/tmp/hc-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
+        let d = TempDir::new("hc");
         let ctl = Ctl::bind(&d, Arc::new(|l: &str| format!("got {l}"))).unwrap();
         assert_eq!(fs::symlink_metadata(ctl.path()).unwrap().mode() & 0o777, 0o600);
         assert_eq!(fs::metadata(&d).unwrap().permissions().mode() & 0o777, 0o700);
@@ -136,7 +137,6 @@ mod tests {
         assert_eq!(got, "got a\ngot b\n");
         drop(ctl);
         assert!(!d.join(CTL_NAME).exists());
-        fs::remove_dir_all(d).unwrap();
     }
 
     fn closed_within(s: &mut UnixStream, limit: Duration) -> bool {
@@ -149,8 +149,7 @@ mod tests {
 
     #[test]
     fn slow_peers_are_cut_off_by_line_and_connection_deadlines() {
-        let d = PathBuf::from(format!("/tmp/hc-slow-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
+        let d = TempDir::new("hc-slow");
         let limits = Deadlines { line: Duration::from_millis(300), conn: Duration::from_millis(800) };
         let ctl = Ctl::bind_with(&d, Arc::new(|l: &str| format!("got {l}")), limits).unwrap();
 
@@ -180,6 +179,5 @@ mod tests {
         assert!(closed_within(&mut steady, Duration::from_millis(1500)), "whole lines still stop at the connection deadline");
         th.join().unwrap();
         drop(ctl);
-        fs::remove_dir_all(d).unwrap();
     }
 }

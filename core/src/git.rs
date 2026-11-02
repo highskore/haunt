@@ -47,10 +47,10 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    fn temp(name: &str) -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!("haunt-git-test-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        root
+    use crate::testdir::TempDir;
+
+    fn temp(name: &str) -> TempDir {
+        TempDir::new(name)
     }
 
     #[test]
@@ -69,7 +69,6 @@ mod tests {
 
         fs::create_dir_all(root.join("plain")).unwrap();
         assert_eq!(branch(root.join("plain").to_str().unwrap()), None);
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -94,6 +93,5 @@ mod tests {
         fs::create_dir_all(root.join("big/.git")).unwrap();
         fs::write(root.join("big/.git/HEAD"), format!("ref: refs/heads/{}", "x".repeat(10_000))).unwrap();
         assert_eq!(branch(&at("big")).map(|b| b.len() + 16), Some(MAX_READ as usize));
-        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -149,13 +149,11 @@ fn write_line(f: &mut File, d: &Decision) {
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
 
-    fn dir(tag: &str) -> PathBuf {
-        let d = PathBuf::from(format!("/tmp/hd-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
+    use crate::testdir::TempDir;
+
+    fn dir(tag: &str) -> TempDir {
+        TempDir::created(tag)
     }
 
     fn decision(preview: &str, outcome: Outcome) -> Decision {
@@ -180,7 +178,6 @@ mod tests {
         again.open(&d).unwrap();
         let got: Vec<_> = again.query("", 10).into_iter().map(|x| x.preview).collect();
         assert_eq!(got, ["git push", "before open"], "newest first, bad lines skipped");
-        fs::remove_dir_all(d).unwrap();
     }
 
     #[test]
@@ -203,7 +200,6 @@ mod tests {
         let mut log = DecisionLog::default();
         log.open(&d).unwrap();
         assert_eq!(log.iter().count(), 1);
-        fs::remove_dir_all(d).unwrap();
     }
 
     #[test]
@@ -226,7 +222,6 @@ mod tests {
         std::os::unix::fs::symlink(&target, d.join(FILE_NAME)).unwrap();
         assert!(DecisionLog::default().open(&d).is_err());
         assert_eq!(fs::read(&target).unwrap(), b"");
-        fs::remove_dir_all(d).unwrap();
     }
 
     #[test]
