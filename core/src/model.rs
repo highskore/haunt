@@ -752,7 +752,10 @@ mod tests {
     #[test]
     fn a_stale_request_key_writes_nothing() {
         let c = core();
-        let env = blocked(&c, true);
+        let env = c.register_surface("/Users/me/code/orchestrator").unwrap();
+        for body in [r#""event":"prompt_submit","query":"release""#, r#""event":"tool_start","tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"git push"}"#, PERM] {
+            c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), body), Instant::now()));
+        }
         let old = pending(&c).expect("a live request");
         assert_eq!(old.preview, "git push");
         let changed = r#""event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm -rf build"}"#;
@@ -762,7 +765,7 @@ mod tests {
         assert_eq!(new.preview, "rm -rf build");
         assert!(new.suspicious, "the git push prompt may still be on screen ahead of it");
         assert_eq!(c.answer_permission(&env.surface_id, new.key, false), None);
-        let ran = r#""event":"tool_ran","tool_name":"Bash","tool_input":{"command":"git push"}"#;
+        let ran = r#""event":"tool_ran","tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"git push"}"#;
         c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), ran), Instant::now()));
         let new = pending(&c).expect("the new request is still live");
         assert!(!new.suspicious, "the only one left");
