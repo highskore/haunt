@@ -186,15 +186,15 @@ impl HauntPlugins {
 
     /// Plugin entries for a row's context menu, built when the menu opens.
     pub fn row_menu_items(&self, surface_id: String) -> Vec<RowMenuItem> {
-        self.set.lock().unwrap().row_menu(&surface_id)
+        haunt_core::sync::lock(&self.set).row_menu(&surface_id)
     }
 
     pub fn invoke_row_menu_item(&self, plugin_id: String, item_id: String, surface_id: String) -> Result<(), HostError> {
-        Ok(self.set.lock().unwrap().invoke_row_item(&plugin_id, &item_id, &surface_id)?)
+        Ok(haunt_core::sync::lock(&self.set).invoke_row_item(&plugin_id, &item_id, &surface_id)?)
     }
 
     /// A drag dropped `surface_id` into `SidebarGroup.id` `group_id`, above `before_surface_id` (nil: at the end).
     pub fn row_moved(&self, surface_id: String, group_id: String, before_surface_id: Option<String>) {
-        self.set.lock().unwrap().row_moved(&surface_id, &group_id, before_surface_id.as_deref());
+        haunt_core::sync::lock(&self.set).row_moved(&surface_id, &group_id, before_surface_id.as_deref());
     }
 }

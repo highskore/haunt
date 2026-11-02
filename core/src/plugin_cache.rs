@@ -163,12 +163,11 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), CacheError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testdir::TempDir;
     use std::os::unix::fs::PermissionsExt;
 
-    fn tempdir(tag: &str) -> PathBuf {
-        let mut n = [0u8; 8];
-        getrandom::fill(&mut n).unwrap();
-        std::env::temp_dir().join(format!("haunt-cache-{tag}-{}", hex(&n)))
+    fn tempdir(tag: &str) -> TempDir {
+        TempDir::new(&format!("cache-{tag}"))
     }
 
     #[test]
@@ -183,7 +182,6 @@ mod tests {
         }
         // A second open reuses the key, so old entries still verify.
         assert!(CwasmCache::open(&dir).unwrap().get("a").is_some());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -194,7 +192,6 @@ mod tests {
         fs::write(dir.join("a.cwasm"), b"evil code!!").unwrap();
         assert!(c.get("a").is_none());
         assert!(!dir.join("a.cwasm").exists() && !dir.join("a.cwasm.mac").exists());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -203,7 +200,6 @@ mod tests {
         let c = CwasmCache::open(&dir).unwrap();
         fs::write(dir.join("a.cwasm"), b"planted").unwrap();
         assert!(c.get("a").is_none());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -214,7 +210,6 @@ mod tests {
         assert!(matches!(CwasmCache::open(&dir), Err(CacheError::UnsafeDir(_, "group or world writable"))));
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o720)).unwrap();
         assert!(matches!(CwasmCache::open(&dir), Err(CacheError::UnsafeDir(..))));
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -223,6 +218,5 @@ mod tests {
         CwasmCache::open(&dir).unwrap();
         fs::set_permissions(dir.join(KEY_FILE), fs::Permissions::from_mode(0o644)).unwrap();
         assert!(matches!(CwasmCache::open(&dir), Err(CacheError::UnsafeKey(..))));
-        fs::remove_dir_all(dir).unwrap();
     }
 }

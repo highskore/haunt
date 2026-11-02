@@ -582,7 +582,7 @@ pub fn attach(core: &crate::Core, set: &Arc<Mutex<PluginSet>>) {
     let weak = Arc::downgrade(set);
     core.set_event_tap(Some(Arc::new(move |event, verified| {
         if let Some(set) = weak.upgrade() {
-            set.lock().unwrap_or_else(|e| e.into_inner()).on_event(event, verified);
+            crate::sync::lock(&set).on_event(event, verified);
         }
     })));
 }
@@ -590,12 +590,10 @@ pub fn attach(core: &crate::Core, set: &Arc<Mutex<PluginSet>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testdir::TempDir;
 
-    fn tempdir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("haunt-store-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
+    fn tempdir(tag: &str) -> TempDir {
+        TempDir::created(&format!("store-{tag}"))
     }
 
     fn src(dir: &Path, caps: &str) -> PathBuf {
@@ -643,7 +641,6 @@ mod tests {
         store.remove("dev.haunt.t").unwrap();
         assert!(store.list().unwrap().is_empty());
         assert!(!home.join("plugins/dev.haunt.t").exists());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -672,7 +669,6 @@ mod tests {
         let r = store.install(&other, &host, &mut |_| true).unwrap();
         assert_eq!(r, Installed::Replaced { old_source });
         assert_eq!(store.list().unwrap()[0].entry.source, other.canonicalize().unwrap().display().to_string());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -689,7 +685,6 @@ mod tests {
         store.approve("dev.haunt.t", &host, &mut |p| { changed = p.changed_on_disk; true }).unwrap();
         assert!(changed);
         assert!(store.list().unwrap()[0].problem.is_none());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -702,7 +697,6 @@ mod tests {
         let e = store.install(Path::new("https://github.com/x/y"), &host, &mut |_| true).unwrap_err().to_string();
         assert!(e.contains("only local paths"), "{e}");
         assert!(store.list().unwrap().is_empty());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -722,7 +716,6 @@ mod tests {
         fs::create_dir(store.plugins_dir().join("dev.haunt.stray")).unwrap();
         assert!(matches!(store.remove("dev.haunt.stray"), Err(StoreError::NotInstalled(_))), "only lockfile entries");
         assert!(store.plugins_dir().join("dev.haunt.stray").exists());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -740,7 +733,6 @@ mod tests {
         assert!(matches!(store.approve("dev.haunt.t", &host, &mut |_| true), Err(StoreError::Invalid(_))));
         assert!(store.list().unwrap()[0].problem.as_deref().unwrap().contains("symlink"));
         assert!(victim.join(WASM).exists(), "the link target is untouched");
-        fs::remove_dir_all(dir).unwrap();
     }
 
     fn bundle(dir: &Path, id: &str, version: &str, caps: &str) -> PathBuf {
@@ -786,7 +778,6 @@ mod tests {
         store.remove("dev.haunt.t").unwrap();
         store.install_bundled(&b, &host).unwrap();
         assert!(store.list().unwrap().is_empty(), "a removed bundled plugin stays removed");
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -807,7 +798,6 @@ mod tests {
         assert!(e.iter().any(|l| l.contains("dev.haunt.other") && l.contains("manifest is for dev.haunt.t")), "{e:?}");
         assert!(!dir.join("home/plugins/dev.haunt.other").exists());
         assert!(store.install_bundled(&dir.join("missing"), &host).unwrap().is_empty());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -819,6 +809,5 @@ mod tests {
         fs::write(home.join(LOCKFILE), "").unwrap();
         fs::set_permissions(home.join(LOCKFILE), fs::Permissions::from_mode(0o666)).unwrap();
         assert!(store.list().is_err());
-        fs::remove_dir_all(dir).unwrap();
     }
 }

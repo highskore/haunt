@@ -805,11 +805,10 @@ impl PluginHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testdir::TempDir;
 
-    fn tempdir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("haunt-host-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
+    fn tempdir(tag: &str) -> TempDir {
+        TempDir::new(&format!("host-{tag}"))
     }
 
     #[test]
@@ -833,7 +832,6 @@ mod tests {
 
         assert!(!host.compile_cached(&wasm, &sha, &cache).unwrap().1, "tampered artefact must not load");
         assert!(host.compile_cached(&wasm, &sha, &cache).unwrap().1, "recompiled artefact is cached again");
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     const FS_WRITE_IMPORT: &str = r#"(component
@@ -949,7 +947,7 @@ mod tests {
     #[test]
     fn a_plugin_arrangement_keeps_needs_you_first() {
         use wside::Host as _;
-        let core = crate::Core::new(tempdir("arrange-core"));
+        let core = crate::Core::new(&*tempdir("arrange-core"));
         let a = core.register_surface("/a").unwrap();
         let b = core.register_surface("/b").unwrap();
         let line = |env: &crate::SurfaceEnv, body: &str| {
@@ -1010,7 +1008,7 @@ mod tests {
         let project = tempdir("propose");
         std::fs::create_dir_all(&project).unwrap();
         let project = project.canonicalize().unwrap();
-        let core = crate::Core::new(tempdir("propose-core"));
+        let core = crate::Core::new(&*tempdir("propose-core"));
         let mut st = HostState::new("dev.haunt.allowlist", &Capabilities::default(), None, None, Some(core.handle()));
         let p = project.to_str().unwrap().to_owned();
         assert!(st.propose(p.clone(), "cargo test".into()).unwrap_err().contains("never approved"));
@@ -1019,14 +1017,13 @@ mod tests {
         assert!(!project.join(".claude").exists());
         let mut detached = HostState::new("x", &Capabilities::default(), None, None, None);
         assert!(detached.propose(p, "cargo test".into()).is_err());
-        std::fs::remove_dir_all(project).unwrap();
     }
 
     #[test]
     fn the_approvals_import_hides_one_offs_other_agents_and_cleaned_commands() {
         use crate::{decisions::Decision, event::Agent, session::Outcome};
         use wallow::Host as _;
-        let core = crate::Core::new(tempdir("approvals-floor"));
+        let core = crate::Core::new(&*tempdir("approvals-floor"));
         let d = |cmd: &str, preview: &str, outcome, agent| Decision {
             at_ms: 1,
             surface_id: "s".into(),
@@ -1140,6 +1137,5 @@ mod tests {
         let again = Kv::open(Some(path));
         assert_eq!(again.map.get("b").map(String::as_str), Some("yy"));
         assert_eq!((again.map.get("c").map(String::as_str), again.bytes), (Some("z"), 5), "dropping flushes");
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }
