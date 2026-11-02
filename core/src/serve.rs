@@ -12,6 +12,11 @@ use std::time::{Duration, Instant};
 
 use crate::intake::{peer_allowed, uid};
 
+/// Replies one read may queue: one chunk of short lines could otherwise ask for many large replies.
+const MAX_OUT: usize = 1 << 20;
+/// Out of fds, a pending connection keeps the listener readable, so accepting pauses this long.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Limits {
     pub max_line: usize,
@@ -125,7 +130,7 @@ impl Conn {
             None if line.is_empty() => true,
             None => handler(Input::Line(line), &mut self.out),
         };
-        self.closing |= !keep;
+        self.closing |= !keep || self.out.len() > MAX_OUT;
         self.line.clear();
         self.seen = 0;
         self.line_due = Instant::now() + limits.line_timeout;
@@ -172,14 +177,16 @@ fn run(listener: UnixListener, stop: &AtomicBool, limits: Limits, mut handler: H
     let mut conns: Vec<Conn> = Vec::new();
     let mut fds: Vec<libc::pollfd> = Vec::new();
     let mut chunk = vec![0u8; 16 * 1024];
+    let mut paused = None;
     loop {
         let now = Instant::now();
         conns.retain(|c| !c.finished(now));
+        paused = paused.filter(|&t| now < t);
         fds.clear();
-        fds.push(pollfd(listener.as_raw_fd(), libc::POLLIN));
+        fds.push(pollfd(listener.as_raw_fd(), if paused.is_some() { 0 } else { libc::POLLIN }));
         // A peer with a reply still unsent isn't read from, so it can't pile replies up.
         fds.extend(conns.iter().map(|c| pollfd(c.stream.as_raw_fd(), if c.out.is_empty() { libc::POLLIN } else { libc::POLLOUT })));
-        let timeout = conns.iter().map(|c| c.due().saturating_duration_since(now).as_millis().saturating_add(1)).min();
+        let timeout = conns.iter().map(Conn::due).chain(paused).map(|t| t.saturating_duration_since(now).as_millis().saturating_add(1)).min();
         let timeout = timeout.map_or(-1, |ms| ms.min(i32::MAX as u128) as i32);
         // SAFETY: `fds` is a valid array of `fds.len()` pollfds.
         if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) } < 0 {
@@ -200,14 +207,19 @@ fn run(listener: UnixListener, stop: &AtomicBool, limits: Limits, mut handler: H
             }
             c.flush();
         }
-        if fds[0].revents != 0 {
-            accept(&listener, &mut conns, me, &limits);
+        if fds[0].revents != 0 && paused.is_none() && !accept(&listener, &mut conns, me, &limits) {
+            paused = Some(Instant::now() + ACCEPT_BACKOFF);
         }
     }
 }
 
-fn accept(listener: &UnixListener, conns: &mut Vec<Conn>, me: u32, limits: &Limits) {
-    while let Ok((stream, _)) = listener.accept() {
+/// Accepts every pending connection; false when out of fds.
+fn accept(listener: &UnixListener, conns: &mut Vec<Conn>, me: u32, limits: &Limits) -> bool {
+    loop {
+        let stream = match listener.accept() {
+            Ok((stream, _)) => stream,
+            Err(e) => return !matches!(e.raw_os_error(), Some(libc::EMFILE | libc::ENFILE)),
+        };
         if !peer_allowed(&stream, me) || conns.len() >= limits.max_conns || stream.set_nonblocking(true).is_err() {
             continue;
         }
