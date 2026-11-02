@@ -9,12 +9,14 @@ final class HauntConfig {
     var tomlURL: URL { dir.appendingPathComponent("config.toml") }
     var ghosttyURL: URL { dir.appendingPathComponent("ghostty.generated.conf") }
     private(set) var keys = KeyMap.defaults
+    private(set) var agentsView = AgentsViewStyle.narrowList
 
     private var source: DispatchSourceFileSystemObject?
     private var fileSource: DispatchSourceFileSystemObject?
     private var onChange: ((_ ghostty: Bool, _ keys: Bool) -> Void)?
     private var lastWritten: String?
     private var lastKeyProblems: [String] = []
+    private var lastLayoutProblem: String?
 
     /// ~/.haunt unless HAUNT_CONFIG_DIR points elsewhere.
     init(dir: URL? = nil) {
@@ -36,6 +38,10 @@ final class HauntConfig {
         }
         let keysChanged = newKeys != keys
         keys = newKeys
+        var layoutProblem: String?
+        agentsView = AgentsViewStyle.parse(toml["layout"]?["agents_view"]) { layoutProblem = $0 }
+        if let p = layoutProblem, p != lastLayoutProblem { Self.logger.warning("\(p, privacy: .public)") }
+        lastLayoutProblem = layoutProblem
         let text = Self.ghosttyConfig(toml, defaultSize: useUserConfig ? Self.defaultFontSize : Tok.Size.paneFont, keys: keys)
         guard text != lastWritten else { return (false, keysChanged) }
         try? text.write(to: ghosttyURL, atomically: true, encoding: .utf8)
@@ -87,8 +93,21 @@ final class HauntConfig {
     /// UI state kept across launches in `<dir>/state.json`, beside the config it belongs to.
     struct State: Codable {
         var sidebarHidden = false
+        var agentsView = false
 
-        enum CodingKeys: String, CodingKey { case sidebarHidden = "sidebar_hidden" }
+        enum CodingKeys: String, CodingKey {
+            case sidebarHidden = "sidebar_hidden"
+            case agentsView = "agents_view"
+        }
+
+        init() {}
+
+        /// Keys missing from an older state.json keep their defaults.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            sidebarHidden = try c.decodeIfPresent(Bool.self, forKey: .sidebarHidden) ?? false
+            agentsView = try c.decodeIfPresent(Bool.self, forKey: .agentsView) ?? false
+        }
     }
 
     var stateURL: URL { dir.appendingPathComponent("state.json") }
@@ -131,6 +150,19 @@ final class HauntConfig {
         src.setCancelHandler { close(fd) }
         src.resume()
         return src
+    }
+}
+
+/// `[layout] agents_view`: the view ⌘⇧A toggles. Views 02–09 arrive later as plugins.
+enum AgentsViewStyle: String {
+    case narrowList = "narrow-list"
+
+    /// Unknown values fall back to the narrow list through `log`.
+    static func parse(_ value: TOML.Value?, log: (String) -> Void) -> AgentsViewStyle {
+        guard let value else { return .narrowList }
+        if case let .scalar(s) = value, let style = AgentsViewStyle(rawValue: s) { return style }
+        log("[layout] agents_view = \(value.strings.joined(separator: ",")): unknown view, using \"narrow-list\"")
+        return .narrowList
     }
 }
 

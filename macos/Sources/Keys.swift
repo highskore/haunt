@@ -120,6 +120,7 @@ struct KeyMap: Equatable {
         case selectTab7 = "select_tab_7", selectTab8 = "select_tab_8", selectTab9 = "select_tab_9"
         case palette
         case toggleSidebar = "toggle_sidebar"
+        case agentsView = "agents_view"
         case settings
         case fullScreen = "full_screen"
         case hide
@@ -136,6 +137,7 @@ struct KeyMap: Equatable {
             case .closeTab: return "cmd+w"
             case .palette: return "cmd+k"
             case .toggleSidebar: return "cmd+shift+b"
+            case .agentsView: return "cmd+shift+a"
             case .settings: return "cmd+comma"
             case .fullScreen: return "cmd+ctrl+f"
             case .hide: return "cmd+h"

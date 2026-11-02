@@ -5,6 +5,8 @@ final class SidebarView: NSView {
     var snapshot = SidebarSnapshot(groups: []) { didSet { relayout() } }
     var onSelect: ((String) -> Void)?
     var onClose: ((String) -> Void)?
+    /// Agents view 01's list: the window's background and no right hairline.
+    var panel = false { didSet { needsDisplay = true } }
 
     // No mockup has row hover: a × in the status slot, meta grey, primary while the pointer is on it.
     // HAUNT_ROW_HOVER=<n> pins hover on the nth row (1-based); <n>x also pins it on the ×.
@@ -36,7 +38,7 @@ final class SidebarView: NSView {
     private let lh = Tok.Font.baseLine
     private var rowLine1: CGFloat { max(Tok.Size.iconSize, Tok.Size.rowName * lh, Tok.Size.rowRight * lh) }
     private var labelHeight: CGFloat { Tok.Size.labelPad[0] + Tok.Size.labelFont * lh + Tok.Size.labelPad[2] }
-    private var contentWidth: CGFloat { bounds.width - 1 }
+    private var contentWidth: CGFloat { panel ? bounds.width : bounds.width - 1 }
 
     private func rowHeight(_ r: Row) -> CGFloat {
         let gap = Tok.Size.rowGap[0]
@@ -123,8 +125,8 @@ final class SidebarView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        Draw.fill(bounds, Tok.Color.sidebarBg)
-        Draw.fill(NSRect(x: bounds.width - 1, y: 0, width: 1, height: bounds.height), Tok.Color.hairline)
+        Draw.fill(bounds, panel ? Tok.Color.windowBg : Tok.Color.sidebarBg)
+        if !panel { Draw.fill(NSRect(x: bounds.width - 1, y: 0, width: 1, height: bounds.height), Tok.Color.hairline) }
         for item in items {
             switch item {
             case let .label(text, top):
