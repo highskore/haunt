@@ -2,6 +2,35 @@ import AppKit
 import Combine
 import GhosttyKit
 
+/// Each send makes the core walk for a git branch: a cwd change goes at once, a title-only change
+/// (a spinner, a clock) at most once a second, the latest title winning.
+private final class SurfaceInfoThrottle {
+    private static let interval = DispatchTimeInterval.seconds(1)
+    private let send: (String, String) -> Void
+    private var sentCwd: String?
+    private var sentAt = DispatchTime(uptimeNanoseconds: 0)
+    private var pending: DispatchWorkItem?
+
+    init(_ send: @escaping (_ title: String, _ cwd: String) -> Void) { self.send = send }
+
+    func update(title: String, cwd: String) {
+        pending?.cancel()
+        pending = nil
+        let due = sentAt + Self.interval
+        if cwd != sentCwd || DispatchTime.now() >= due { return fire(title, cwd) }
+        let work = DispatchWorkItem { [weak self] in self?.fire(title, cwd) }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: due, execute: work)
+    }
+
+    private func fire(_ title: String, _ cwd: String) {
+        pending = nil
+        sentCwd = cwd
+        sentAt = .now()
+        send(title, cwd)
+    }
+}
+
 /// Lays out title bar, sidebar and pane at fixed mockup sizes; without the sidebar, mockup 10's.
 private final class RootView: NSView {
     let titleBar = TitleBarView()
@@ -195,12 +224,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         // So the surface starts at the pane's real size.
         root.layoutSubtreeIfNeeded()
         let tab = Tab(env: env, view: view, size: root.pane.bounds.size)
+        let info = SurfaceInfoThrottle { [core, infoQueue] title, cwd in
+            // The core finds the branch itself.
+            infoQueue.async { core.setSurfaceInfo(surfaceId: env.surfaceId, title: title, cwd: cwd, gitBranch: nil) }
+        }
         tab.subscriptions.append(view.$title.combineLatest(view.$pwd)
             .debounce(for: .milliseconds(50), scheduler: DispatchQueue.main)
-            .sink { [core, infoQueue] title, pwd in
-                // The core finds the branch itself.
-                infoQueue.async { core.setSurfaceInfo(surfaceId: env.surfaceId, title: title, cwd: pwd ?? dir, gitBranch: nil) }
-            })
+            .sink { title, pwd in info.update(title: title, cwd: pwd ?? dir) })
         store.add(tab)
         tab.host.frame = root.pane.bounds
         tab.host.autoresizingMask = [.width, .height]
