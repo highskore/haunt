@@ -578,6 +578,12 @@ extension MainWindowController: PaletteHost {
         drainPluginRequests()
     }
 
+    var paletteKeys: KeyMap { config.keys }
+
+    var isFullScreen: Bool { window?.styleMask.contains(.fullScreen) ?? false }
+
+    func paletteRun(_ action: KeyMap.Action) { (NSApp.delegate as? AppDelegate)?.performMenuItem(action) }
+
     func paletteDidClose() {
         root.scrim.isHidden = true
         guard let window else { return }

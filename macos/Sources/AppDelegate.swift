@@ -182,6 +182,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The menu items by the `[keys]` action they carry, so the palette can run exactly what the menu runs.
     private var menuItems: [KeyMap.Action: NSMenuItem] = [:]
 
+    /// Runs the menu item for `action` the way choosing it would, validation included.
+    func performMenuItem(_ action: KeyMap.Action) {
+        guard let item = menuItems[action], let menu = item.menu else { return }
+        menu.update()
+        guard item.isEnabled else { return NSSound.beep() }
+        menu.performActionForItem(at: menu.index(of: item))
+    }
+
     private func buildMenu() {
         let keys = config.keys
         menuItems = [:]
