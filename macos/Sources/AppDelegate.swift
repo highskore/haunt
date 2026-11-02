@@ -317,6 +317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         submenu("Edit", [
             item("Copy", #selector(Ghostty.SurfaceView.copy(_:)), .copy),
             item("Paste", #selector(Ghostty.SurfaceView.paste(_:)), .paste),
+            item("Paste Selection", #selector(Ghostty.SurfaceView.pasteSelection(_:)), .pasteSelection),
             item("Select All", #selector(NSResponder.selectAll(_:)), .selectAll),
         ])
         submenu("View", [

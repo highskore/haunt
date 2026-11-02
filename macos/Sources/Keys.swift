@@ -140,6 +140,7 @@ struct KeyMap: Equatable {
         case quit
         case minimize
         case copy, paste
+        case pasteSelection = "paste_selection"
         case selectAll = "select_all"
 
         /// Warp's defaults where Warp has the action (⌘⇧B is its vertical tabs panel); macOS standards otherwise.
@@ -162,6 +163,7 @@ struct KeyMap: Equatable {
             case .minimize: return "cmd+m"
             case .copy: return "cmd+c"
             case .paste: return "cmd+v"
+            case .pasteSelection: return "cmd+shift+v"
             case .selectAll: return "cmd+a"
             default: return "cmd+\(tabIndex! + 1)"
             }
