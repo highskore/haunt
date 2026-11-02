@@ -80,7 +80,8 @@ pub struct SurfaceView<'a> {
     pub selected: bool,
 }
 
-/// Groups rows as NEEDS YOU, RUNNING, IDLE (done, failed and shells included); empty groups are left out.
+/// Groups rows as NEEDS YOU, RUNNING, IDLE (done, failed and shells included); empty groups are left out,
+/// and a shells-only group has no label.
 /// `surfaces` come in tab order; within a group the latest status change comes first.
 pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, shell: Option<&str>, now: Instant) -> SidebarSnapshot {
     let mut groups: Vec<SidebarGroup> = [NEEDS_YOU, RUNNING, IDLE].iter().map(|l| SidebarGroup { label: (*l).to_owned(), rows: vec![] }).collect();
@@ -96,6 +97,12 @@ pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, shell: Option<&str
         groups[g].rows.push(row(s, home, shell, now));
     }
     groups.retain(|g| !g.rows.is_empty());
+    // Plain shells aren't agents, so a shells-only group gets no label.
+    for g in &mut groups {
+        if g.rows.iter().all(|r| r.kind == RowKind::Shell) {
+            g.label.clear();
+        }
+    }
     SidebarSnapshot { groups }
 }
 
@@ -340,7 +347,7 @@ mod tests {
         let views = [SurfaceView { id: "a", cwd: "/Users/me", branch: None, session: &shell, selected: false }];
         let snap = snapshot(&views, HOME, Some("zsh"), t);
         assert_eq!(snap.groups.len(), 1);
-        assert_eq!(snap.groups[0].label, "IDLE");
+        assert_eq!(snap.groups[0].label, "", "shells alone get no IDLE label");
         assert_eq!((snap.groups[0].rows[0].name.as_str(), snap.groups[0].rows[0].meta.as_str()), ("~", "~ · zsh"));
     }
 
