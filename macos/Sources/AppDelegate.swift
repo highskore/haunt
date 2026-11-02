@@ -207,6 +207,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if item.action == #selector(toggleAgentsOnlyView(_:)) {
             item.state = controller?.isAgentsViewOn == true ? .on : .off
         }
+        // The sidebar's editor is hidden behind the agents view.
+        if item.action == #selector(renameHauntTab(_:)), controller?.isAgentsViewOn == true { return false }
         // While a tab name is being edited, Haunt's own shortcuts stay out of the way; disabled items
         // don't take their key equivalents, so the keys reach the text field.
         return !(controller?.isRenaming == true && Self.renameBlocked.contains(item.action))
