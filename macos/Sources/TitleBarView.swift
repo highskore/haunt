@@ -246,8 +246,10 @@ final class TitleBarView: NSView {
     override func mouseDown(with event: NSEvent) {
         guard let window else { return }
         let p = convert(event.locationInWindow, from: nil)
-        let actions: [Selector] = [#selector(NSWindow.performClose(_:)), #selector(NSWindow.performMiniaturize(_:)),
-                                   #selector(NSWindow.performZoom(_:))]
+        // As macOS: green enters full screen, and zooms with ⌥, matching the glyph it shows.
+        let green = event.modifierFlags.contains(.option) ? #selector(NSWindow.performZoom(_:))
+            : #selector(NSWindow.toggleFullScreen(_:))
+        let actions: [Selector] = [#selector(NSWindow.performClose(_:)), #selector(NSWindow.performMiniaturize(_:)), green]
         for i in 0..<3 where lightRect(i).insetBy(dx: -2, dy: -2).contains(p) {
             NSApp.sendAction(actions[i], to: window, from: self)
             return
