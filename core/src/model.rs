@@ -83,6 +83,9 @@ pub(crate) struct State {
     /// Basename of the login shell surfaces run, for shell rows.
     shell: Option<String>,
     listener: Option<Listener>,
+    /// The listener fired and no snapshot was taken since: further changes don't fire it again.
+    notified: bool,
+    version: u64,
     decisions: DecisionLog,
     /// (project, command) suggestions the user accepted or dismissed.
     allow_done: HashSet<(String, String)>,
@@ -149,7 +152,13 @@ impl State {
                 SurfaceView { id: &s.id, cwd, branch, session: &s.session, selected: self.selected.as_deref() == Some(s.id.as_str()) }
             })
             .collect();
-        layout::snapshot(&views, self.home.as_deref(), self.shell.as_deref(), now)
+        SidebarSnapshot { version: self.version, ..layout::snapshot(&views, self.home.as_deref(), self.shell.as_deref(), now) }
+    }
+
+    /// The snapshot the UI draws, which re-arms the listener.
+    fn take_snapshot(&mut self, now: Instant) -> SidebarSnapshot {
+        self.notified = false;
+        self.snapshot(now)
     }
 }
 
@@ -175,15 +184,18 @@ fn deliver(state: &Mutex<State>, branches: &Branches, d: &Delivery) -> bool {
     update_state(state, |st, now| st.deliver(d, branch, now))
 }
 
-/// Runs `f` on the state and fires the listener, outside the lock, if it reports a change.
+/// Runs `f` on the state and, if it reports a change, fires the listener outside the lock, once
+/// until the next `Core::snapshot`.
 fn update_state(state: &Mutex<State>, f: impl FnOnce(&mut State, Instant) -> bool) -> bool {
     let mut st = lock(state);
     let changed = f(&mut st, Instant::now());
-    let listener = st.listener.clone();
+    st.version += changed as u64;
+    let fire = changed && !std::mem::replace(&mut st.notified, true);
+    let listener = if fire { st.listener.clone() } else { None };
     let log = st.decisions.writer().clone();
     drop(st);
     log.flush();
-    if changed && let Some(l) = listener {
+    if let Some(l) = listener {
         l();
     }
     changed
@@ -235,7 +247,8 @@ fn ctl_request(state: &Mutex<State>, branches: &Branches, line: &str) -> String 
 impl Core {
     pub fn new(config_dir: impl Into<PathBuf>) -> Self {
         let shell = std::env::var("SHELL").ok().and_then(|s| s.rsplit('/').next().map(str::to_owned)).filter(|s| !s.is_empty());
-        let state = State { home: std::env::var("HOME").ok(), shell, ..State::default() };
+        // Version 0 is older than any snapshot, so `snapshot_if_newer(0)` always returns one.
+        let state = State { home: std::env::var("HOME").ok(), shell, version: 1, ..State::default() };
         Self { dir: config_dir.into(), state: Arc::new(Mutex::new(state)), branches: Arc::default(), servers: Mutex::new(None) }
     }
 
@@ -358,11 +371,21 @@ impl Core {
     }
 
     pub fn snapshot(&self) -> SidebarSnapshot {
-        lock(&self.state).snapshot(Instant::now())
+        lock(&self.state).take_snapshot(Instant::now())
     }
 
+    /// None while nothing changed since the snapshot with `version`. Elapsed times still move on
+    /// their own, so a `next_tick_ms` redraw takes a full `snapshot`.
+    pub fn snapshot_if_newer(&self, version: u64) -> Option<SidebarSnapshot> {
+        let mut st = lock(&self.state);
+        (st.version != version).then(|| st.take_snapshot(Instant::now()))
+    }
+
+    /// The listener fires once per change burst: after it fires, it waits for the next `snapshot`.
     pub fn set_listener(&self, listener: Listener) {
-        lock(&self.state).listener = Some(listener);
+        let mut st = lock(&self.state);
+        st.listener = Some(listener);
+        st.notified = false;
     }
 
     /// Bytes for `ghostty_surface_text`, only while `request_key` is that surface's live,
@@ -868,16 +891,40 @@ mod tests {
         c.set_listener(Arc::new(move || {
             k.fetch_add(1, Ordering::SeqCst);
         }));
+        let fired = || n.load(Ordering::SeqCst);
         let env = c.register_surface("/a").unwrap();
+        let v = c.snapshot().version;
         c.select_surface(&env.surface_id);
         c.select_surface(&env.surface_id);
+        c.snapshot();
         c.set_surface_info(&env.surface_id, "zsh", "/a", None);
+        assert_eq!((fired(), c.snapshot_if_newer(v + 1)), (2, None), "unchanged: no call, no snapshot");
         c.set_surface_info(&env.surface_id, "zsh", "/b", Some("ignored".into()));
-        assert_eq!(n.load(Ordering::SeqCst), 3);
-        assert!(c.snapshot().groups[0].rows[0].selected);
+        assert_eq!(fired(), 3);
+        assert!(c.snapshot_if_newer(v + 1).unwrap().groups[0].rows[0].selected);
         c.unregister_surface(&env.surface_id);
-        assert_eq!(n.load(Ordering::SeqCst), 4);
+        c.select_surface("gone");
+        assert_eq!(fired(), 4);
         assert!(c.snapshot().groups.is_empty());
+    }
+
+    #[test]
+    fn a_burst_of_changes_fires_once_until_the_next_snapshot() {
+        let c = core();
+        let n = Arc::new(AtomicUsize::new(0));
+        let k = n.clone();
+        c.set_listener(Arc::new(move || {
+            k.fetch_add(1, Ordering::SeqCst);
+        }));
+        let a = c.register_surface("/a").unwrap();
+        let b = c.register_surface("/b").unwrap();
+        c.select_surface(&a.surface_id);
+        assert_eq!(n.load(Ordering::SeqCst), 1);
+        let v = c.snapshot().version;
+        assert_eq!(c.snapshot_if_newer(0).map(|s| s.version), Some(v));
+        c.select_surface(&b.surface_id);
+        c.select_surface(&a.surface_id);
+        assert_eq!((n.load(Ordering::SeqCst), c.snapshot_if_newer(v).map(|s| s.version)), (2, Some(v + 2)));
     }
 
     #[test]
@@ -895,6 +942,7 @@ mod tests {
         }));
         let env = c.register_surface("/w").unwrap();
         rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        c.snapshot();
         let mut s = UnixStream::connect(&env.socket_path).unwrap();
         writeln!(s, "{}", line(&env, Some(&env.nonce), PERM)).unwrap();
         drop(s);

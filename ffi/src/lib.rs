@@ -22,7 +22,8 @@ pub use haunt_core::{
     SurfaceEnv,
 };
 
-/// Called after any change to the snapshot, on the thread that caused it (often the socket thread).
+/// Called after a change to the snapshot, on the thread that caused it (often the socket thread);
+/// then not again until the next `snapshot`.
 #[uniffi::export(callback_interface)]
 pub trait CoreListener: Send + Sync {
     fn changed(&self);
@@ -67,6 +68,10 @@ impl HauntCore {
 
     pub fn snapshot(&self) -> SidebarSnapshot {
         self.core.snapshot()
+    }
+
+    pub fn snapshot_if_newer(&self, version: u64) -> Option<SidebarSnapshot> {
+        self.core.snapshot_if_newer(version)
     }
 
     pub fn set_listener(&self, listener: Box<dyn CoreListener>) {

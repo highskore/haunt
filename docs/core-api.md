@@ -14,6 +14,7 @@ object HauntCore {
   fn select_surface(surface_id: string)           // marks Row.selected
   fn on_osc_notification(surface_id: string, title: string, body: string)
   fn snapshot() -> SidebarSnapshot
+  fn snapshot_if_newer(version: u64) -> Option<SidebarSnapshot>   // nil while snapshot.version is still `version`
   fn set_listener(listener: CoreListener)
   fn answer_permission(surface_id: string, request_key: u64, allow: bool) -> Option<bytes>
   fn on_user_input(surface_id: string)           // every keyDown routed to that surface
@@ -65,7 +66,7 @@ In Swift, the generated `Progress` struct shadows `Foundation.Progress` inside t
 
 3. On `PWD` and title changes, call `setSurfaceInfo`, from any thread, with `gitBranch: nil`: the core reads the branch itself. On tab selection, call `selectSurface`. When a tab closes, call `unregisterSurface`.
 4. On `GHOSTTY_ACTION_DESKTOP_NOTIFICATION` with title `haunt://cli-agent` or `warp://cli-agent`, call `onOscNotification`. The core ignores other titles, so the UI can pass every notification through and still show the non-agent ones itself.
-5. `changed()` fires on whatever thread made the change. That is often the socket thread. Hop to the main actor, then call `snapshot()`. It is never called while the core holds its lock, so calling back into the core is safe.
+5. `changed()` fires on whatever thread made the change. That is often the socket thread. Hop to the main actor, then call `snapshot()`. It is never called while the core holds its lock, so calling back into the core is safe. It fires once per burst: after a call, further changes don't call it again until the next `snapshot()` or `snapshotIfNewer` that returns one, so a UI that stops taking snapshots stops being called.
 6. Allow/Deny: a row with `pending` has a nonce-verified request. If `pending.suspicious` is set, show the preview with a warning and no Allow/Deny: the request is terminal-only (see Nonce gating below: hidden characters, a tool that may touch more than it shows, or another request possibly still on screen), and `answerPermission` returns `nil` for it. It can clear while the key stays the same, once the request is the only one left. Keep `pending.key` with whatever offers the answer (the button, a notification's `userInfo`) and pass it back: `answerPermission(surfaceId, requestKey, allow)` returns the asking agent's keys for `ghostty_surface_text`: `"1"` (allow) or `"\u{1b}"` (deny) for Claude Code, `"y"` or `"\u{1b}"` for Codex (see [agent-events.md](agent-events.md#agent-ids)). An agent haunt has no keys for gets no `pending` at all. For Claude Code, `1` picks Claude Code's first option, "Yes", wherever the highlight is, where Enter would pick the highlighted one ("Yes, and don't ask again" or "No" if the highlight moved). In a prompt that defaults to No, Claude Code hides the indexes and ignores digits, so `1` does nothing there rather than answering No. It returns them only while that key is still the surface's live request, and consumes the request, so a second call, or a key from a prompt that has since changed, returns `nil`. If it returns `nil`, write nothing.
 
 ### UI must call
@@ -74,7 +75,7 @@ In Swift, the generated `Progress` struct shadows `Foundation.Progress` inside t
 - `try registerSurface(cwd:)`: it throws now (past 512 surfaces), so `CoreAPI.registerSurface` must be `throws` and its callers need `try`.
 - `gatePluginRequest(request:)` for every `.ptyAnswer` from `HauntPlugins.takeRequests()`, writing only the bytes it returns (see Plugins).
 
-Elapsed times in subrow meta are computed when `snapshot()` runs. A UI that wants them to tick can call `snapshot()` once a second while any row is running.
+Elapsed times in subrow meta are computed when `snapshot()` runs. `snapshot.nextTickMs` is the time until one of them next reads differently (a running subagent's clock), or `nil` when nothing on screen depends on the clock: schedule one `snapshot()` then instead of a steady timer. `snapshot.version` goes up with every change, so `snapshotIfNewer(version)` can skip a redraw that changes nothing; a clock tick still needs `snapshot()`.
 
 ## Decision log
 

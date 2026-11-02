@@ -9,6 +9,13 @@ use crate::session::{Session, Status};
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct SidebarSnapshot {
     pub groups: Vec<SidebarGroup>,
+    /// Bumped on every change; `snapshot_if_newer` compares it.
+    #[cfg_attr(feature = "ffi", uniffi(default = 0))]
+    pub version: u64,
+    /// Milliseconds until a running subagent's elapsed time reads differently; None when no text
+    /// depends on the clock, so nothing needs to redraw until the listener fires.
+    #[cfg_attr(feature = "ffi", uniffi(default = None))]
+    pub next_tick_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -103,7 +110,22 @@ pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, shell: Option<&str
     {
         g.label.clear();
     }
-    SidebarSnapshot { groups }
+    SidebarSnapshot { groups, version: 0, next_tick_ms: next_tick(surfaces, now) }
+}
+
+/// `precise` changes every second below an hour, every minute after.
+fn next_tick(surfaces: &[SurfaceView], now: Instant) -> Option<u64> {
+    surfaces
+        .iter()
+        .filter(|s| s.session.is_agent && matches!(s.session.status, Status::Running | Status::NeedsYou))
+        .flat_map(|s| &s.session.progress.subagents)
+        .filter(|a| a.duration.is_none())
+        .map(|a| {
+            let ms = a.elapsed(now).as_millis() as u64;
+            let step = if ms < 3_600_000 { 1_000 } else { 60_000 };
+            step - ms % step
+        })
+        .min()
 }
 
 fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -> Row {
@@ -301,6 +323,16 @@ mod tests {
             .map(|(id, cwd, b, s)| SurfaceView { id, cwd, branch: b.as_deref(), session: s, selected: id == "pawr" })
             .collect();
         snapshot(&views, HOME, Some("zsh"), now)
+    }
+
+    #[test]
+    fn the_next_tick_is_when_a_running_subagent_clock_changes() {
+        let (mut surfaces, now) = mockup();
+        let ms = Duration::from_millis;
+        assert_eq!(render(&surfaces, now + ms(300)).next_tick_ms, Some(700));
+        assert_eq!(render(&surfaces, now + ms(3_600_000 - 72_000 + 250)).next_tick_ms, Some(59_750));
+        feed(&mut surfaces[0].3, &[r#"{"event":"subagent_stop","agent_id":"e1"}"#], now);
+        assert_eq!(render(&surfaces, now).next_tick_ms, None, "finished subagents show a fixed duration");
     }
 
     #[test]
