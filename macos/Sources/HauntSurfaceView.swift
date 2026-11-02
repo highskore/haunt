@@ -93,6 +93,15 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
             guard oldValue !== pendingClipboardConfirmation else { return }
             if let old = oldValue, old.kind == .paste { onInput?() }
             let new = pendingClipboardConfirmation
+            // Only pastes get a sheet. Any other access Ghostty asks about (an OSC 52 read under
+            // clipboard-read = ask) is denied now rather than left waiting forever.
+            if let new, new.kind != .paste {
+                AppDelegate.logger.warning("clipboard \(String(describing: new.kind), privacy: .public) request denied")
+                new.cancel()
+                DispatchQueue.main.async { [weak self] in
+                    if self?.pendingClipboardConfirmation === new { self?.pendingClipboardConfirmation = nil }
+                }
+            }
             onPasteConfirmation?(new?.kind == .paste ? new : nil)
         }
     }
