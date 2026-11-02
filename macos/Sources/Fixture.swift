@@ -24,6 +24,8 @@ enum Fixture: String {
     case setupChange = "setup-change"
     /// No mockup: ui-03 with the Settings window open, Claude Code set up.
     case settings = "settings"
+    /// No mockup: a selection paste carrying a bracketed paste end, held by Haunt before Ghostty sees it.
+    case pasteRisky = "paste-risky"
 
     static var current: Fixture? {
         ProcessInfo.processInfo.environment["HAUNT_FIXTURE"].flatMap(Fixture.init(rawValue:))
@@ -33,8 +35,11 @@ enum Fixture: String {
     static let windowSize = NSSize(width: 900, height: Tok.Size.windowH)
 
     var titleAccessory: TitleBarView.Accessory {
-        self == .iconOnly || self == .zen || isSheet ? .icons : .kbd
+        self == .iconOnly || self == .zen || isSheet || self == .pasteRisky ? .icons : .kbd
     }
+
+    /// Mockup 03 shows ⌕ + ⚙; other fixtures keep the default.
+    var titlebarButtons: [TitlebarButton] { self == .iconOnly ? [.search, .newTab, .settings] : TitlebarButton.defaults }
 
     var sidebarHidden: Bool { self == .zen }
 
@@ -97,7 +102,7 @@ enum Fixture: String {
         }
         guard rows.count == tabs.count else { return SidebarSnapshot(groups: [], colorStyle: .dot) }
         switch self {
-        case .iconOnly, .zen, .pasteConfirm, .narrowList, .setupPicker, .setupChange, .settings:
+        case .iconOnly, .zen, .pasteConfirm, .pasteRisky, .narrowList, .setupPicker, .setupChange, .settings:
             return SidebarSnapshot(groups: [SidebarGroup(id: "tabs", label: "", rows: rows)], colorStyle: .dot)
         case .groupedFlat, .palette, .suspicious, .codex, .codexLog:
             return SidebarSnapshot(groups: [
