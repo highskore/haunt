@@ -230,7 +230,7 @@ enum GitRunner {
     static let safeConfig = [
         "core.fsmonitor=false", "core.untrackedCache=false", "core.pager=cat", "core.quotePath=false",
         "core.hooksPath=/dev/null", "core.attributesFile=/dev/null", "diff.external=", "diff.noprefix=false",
-        "diff.mnemonicPrefix=false", "diff.relative=false", "color.ui=false", "submodule.recurse=false", "diff.ignoreSubmodules=all", "status.submoduleSummary=false",
+        "diff.mnemonicPrefix=false", "diff.relative=false", "color.ui=false", "submodule.recurse=false", "diff.ignoreSubmodules=dirty", "status.submoduleSummary=false",
         "protocol.allow=never", "protocol.ext.allow=never", "protocol.file.allow=never", "protocol.ssh.allow=never",
         "protocol.http.allow=never", "protocol.https.allow=never",
         "core.sshCommand=", "core.askPass=", "credential.helper=", "gpg.program=",
@@ -403,7 +403,7 @@ enum ReviewLoader {
         var files: [FileDiff] = []
         if let range {
             let diffArgs = ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
-                            "--submodule=short", "--ignore-submodules=all", "-M"] + range + ["--"]
+                            "--submodule=short", "--ignore-submodules=dirty", "-M"] + range + ["--"]
             guard let out = git(diffArgs) else { return .failure(.failed("git diff didn't start.")) }
             guard out.status == 0 || out.truncated else { return .failure(.failed("git diff failed (exit \(out.status)).")) }
             if out.timedOut { notes.append("git diff timed out; the list may be incomplete.") }
@@ -411,7 +411,7 @@ enum ReviewLoader {
             files = DiffParser.parse(out.text)
         }
         let tracked = Set(files.map(\.path))
-        let dirty = readTree ? (head.map { git(["diff", "--quiet", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", $0, "--"])?.status == 1 } ?? !files.isEmpty) : false
+        let dirty = readTree ? (head.map { git(["diff", "--quiet", "--no-ext-diff", "--no-textconv", "--ignore-submodules=dirty", $0, "--"])?.status == 1 } ?? !files.isEmpty) : false
 
         if readTree, let u = git(["ls-files", "--others", "--exclude-standard", "-z"]), u.status == 0 {
             let paths = u.data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }.filter { !tracked.contains($0) }
