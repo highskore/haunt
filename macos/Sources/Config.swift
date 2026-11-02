@@ -17,6 +17,7 @@ final class HauntConfig {
     private var source: DispatchSourceFileSystemObject?
     private var fileSource: DispatchSourceFileSystemObject?
     private var onChange: ((_ ghostty: Bool, _ keys: Bool, _ layout: Bool) -> Void)?
+    /// Seeded from disk, so a launch with an unchanged config doesn't rewrite the file.
     private var lastWritten: String?
     /// config.toml's identity at the last read; events that leave it unchanged (state.json, our own
     /// generated Ghostty file) skip the reload.
@@ -29,6 +30,7 @@ final class HauntConfig {
         let e = ProcessInfo.processInfo.environment
         let env = (e["HAUNT_CONFIG_DIR"] ?? e["HAUNT_HOME"]).map { URL(fileURLWithPath: $0) }
         self.dir = dir ?? env ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".haunt")
+        lastWritten = try? String(contentsOf: ghosttyURL, encoding: .utf8)
     }
 
     /// Re-reads config.toml into `keys` and `[layout]` and rewrites the Ghostty file; says which changed.
