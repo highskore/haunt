@@ -16,19 +16,18 @@ fn script() -> PathBuf {
     root.join("scripts/haunt-hook.sh")
 }
 
+/// True when the test can't run; with `HAUNT_REQUIRE_ADAPTERS=1` that is a failure instead.
 fn skip() -> bool {
-    if Command::new("jq").arg("--version").output().is_err() {
-        eprintln!("skipped: jq not installed");
-        return true;
-    }
-    if !script().is_file() {
-        eprintln!(
-            "skipped: Claude adapter not found at {}; clone haunt-claude there or set HAUNT_CLAUDE_ADAPTER to its checkout",
-            script().display()
-        );
-        return true;
-    }
-    false
+    let why = if Command::new("jq").arg("--version").output().is_err() {
+        "jq not installed".to_owned()
+    } else if !script().is_file() {
+        format!("Claude adapter not found at {}; clone haunt-claude there or set HAUNT_CLAUDE_ADAPTER to its checkout", script().display())
+    } else {
+        return false;
+    };
+    assert!(std::env::var_os("HAUNT_REQUIRE_ADAPTERS").is_none_or(|v| v != "1"), "HAUNT_REQUIRE_ADAPTERS=1: {why}");
+    eprintln!("skipped: {why}");
+    true
 }
 
 fn hook(kind: &str, input: &str, env: &haunt_core::SurfaceEnv, nonce: &str) -> std::process::Output {

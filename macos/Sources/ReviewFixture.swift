@@ -1,5 +1,11 @@
 import Foundation
 
+#if HAUNT_FIXTURES
+extension Fixture {
+    var isInbox: Bool { self == .reviewInbox }
+}
+
+
 /// The review mockup's turn (haunt-review/index.html: FILES, H, PROMPT), fed through the real diff parser.
 extension Fixture {
     private struct MockHunk {
@@ -310,3 +316,15 @@ extension Fixture {
         s.selectedFile = 0
     }
 }
+#else
+extension Fixture {
+    var isInbox: Bool { switch self {} }
+    var reviewTurn: ReviewTurn? { switch self {} }
+    var reviewDiff: ReviewDiff { switch self {} }
+    var reviewProject: (Set<String>, Set<String>) { switch self {} }
+    var reviewEditingComment: Int? { switch self {} }
+    func setUpReview(_ s: ReviewState) {}
+    func inboxTurn(tab: String) -> ReviewTurn? { switch self {} }
+    func setUpInbox(_ e: InboxEntry) {}
+}
+#endif

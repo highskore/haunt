@@ -18,11 +18,12 @@ pub fn event_name(event: AgentEvent) -> String {
 }
 
 pub use haunt_core::{
-    Agent, AllowSuggestion, CommandOutcome, CoreError, Decision, Outcome, PendingRequest, Progress, ReviewTurn, Row, RowKind, SidebarGroup,
-    SidebarSnapshot, Subrow, SurfaceEnv, TurnCommand, TurnSubagent, TurnTask,
+    Agent, AllowSuggestion, ColorStyle, CommandOutcome, CoreError, Decision, Outcome, PendingRequest, Progress, ReviewTurn, Row, RowKind,
+    SidebarGroup, SidebarSnapshot, Subrow, SurfaceEnv, TabColor, TurnCommand, TurnSubagent, TurnTask,
 };
 
-/// Called after any change to the snapshot, on the thread that caused it (often the socket thread).
+/// Called after a change to the snapshot, on the thread that caused it (often the socket thread);
+/// then not again until the next `snapshot`.
 #[uniffi::export(callback_interface)]
 pub trait CoreListener: Send + Sync {
     fn changed(&self);
@@ -69,6 +70,10 @@ impl HauntCore {
         self.core.snapshot()
     }
 
+    pub fn snapshot_if_newer(&self, version: u64) -> Option<SidebarSnapshot> {
+        self.core.snapshot_if_newer(version)
+    }
+
     pub fn set_listener(&self, listener: Box<dyn CoreListener>) {
         self.core.set_listener(std::sync::Arc::new(move || listener.changed()));
     }
@@ -88,6 +93,11 @@ impl HauntCore {
 
     pub fn decisions(&self, query: String, limit: u32) -> Vec<Decision> {
         self.core.decisions(&query, limit)
+    }
+
+    /// `decisions` of one tab when `surface_id` is set; the filter applies before the limit.
+    pub fn decisions_in(&self, query: String, surface_id: Option<String>, limit: u32) -> Vec<Decision> {
+        self.core.decisions_in(&query, surface_id.as_deref(), limit)
     }
 
     pub fn allow_suggestions(&self) -> Vec<AllowSuggestion> {
@@ -118,7 +128,7 @@ impl From<haunt_core::plugins::PluginError> for HostError {
 }
 
 #[cfg(feature = "plugins")]
-pub use haunt_core::plugins::{HostRequest, NotifyAction, PaletteItem};
+pub use haunt_core::plugins::{HostRequest, Mark, NotifyAction, PaletteItem, RowMenuItem};
 #[cfg(feature = "plugins")]
 pub use haunt_core::ptygate::PtyWrite;
 
@@ -135,36 +145,59 @@ impl HauntCore {
 #[cfg(feature = "plugins")]
 #[derive(uniffi::Object)]
 pub struct HauntPlugins {
-    set: Mutex<haunt_core::plugin_store::PluginSet>,
+    set: std::sync::Arc<Mutex<haunt_core::plugin_store::PluginSet>>,
 }
 
 #[cfg(feature = "plugins")]
 #[uniffi::export]
 impl HauntPlugins {
     /// Plugins that fail verification (hash mismatch, link error) are skipped and listed in `load_errors`.
+    /// `core` backs the `decisions` and `allowlist` imports, and its events reach the plugins from now on.
+    /// The plugins in `bundled_dir` (the app's own) are installed or updated first, without a prompt.
     #[uniffi::constructor]
-    pub fn load(haunt_dir: String) -> Result<std::sync::Arc<Self>, HostError> {
+    pub fn load(haunt_dir: String, core: std::sync::Arc<HauntCore>, bundled_dir: Option<String>) -> Result<std::sync::Arc<Self>, HostError> {
         let fail = |e: haunt_core::plugin_store::StoreError| HostError::Failed { reason: e.to_string() };
         let host = haunt_core::plugins::PluginHost::new()?;
-        let set = haunt_core::plugin_store::Store::open(haunt_dir.as_ref()).map_err(fail)?.load_all(&host).map_err(fail)?;
-        Ok(std::sync::Arc::new(Self { set: Mutex::new(set) }))
+        let store = haunt_core::plugin_store::Store::open(haunt_dir.as_ref()).map_err(fail)?;
+        let bundled = bundled_dir.map_or_else(Vec::new, |d| {
+            store.install_bundled(d.as_ref(), &host).unwrap_or_else(|e| vec![format!("bundled plugins: {e}")])
+        });
+        let mut set = store.load_all(&host, Some(&core.core.handle())).map_err(fail)?;
+        set.add_errors(bundled);
+        let set = std::sync::Arc::new(Mutex::new(set));
+        haunt_core::plugin_store::attach(&core.core, &set);
+        Ok(std::sync::Arc::new(Self { set }))
     }
 
     pub fn load_errors(&self) -> Vec<String> {
-        self.set.lock().unwrap().errors().to_vec()
+        haunt_core::sync::lock(&self.set).errors().to_vec()
     }
 
     /// No mode: registered commands and modes. A mode word: that mode's items for `query`.
     pub fn palette_items(&self, mode: Option<String>, query: String) -> Vec<PaletteItem> {
-        self.set.lock().unwrap().palette_items(mode.as_deref(), &query)
+        haunt_core::sync::lock(&self.set).palette_items(mode.as_deref(), &query)
     }
 
     pub fn invoke_palette_item(&self, plugin_id: String, item_id: String) -> Result<(), HostError> {
-        Ok(self.set.lock().unwrap().invoke(&plugin_id, &item_id)?)
+        Ok(haunt_core::sync::lock(&self.set).invoke(&plugin_id, &item_id)?)
     }
 
     /// Notifications and pty writes plugins asked for since the last call.
     pub fn take_requests(&self) -> Vec<HostRequest> {
-        self.set.lock().unwrap().take_requests()
+        haunt_core::sync::lock(&self.set).take_requests()
+    }
+
+    /// Plugin entries for a row's context menu, built when the menu opens.
+    pub fn row_menu_items(&self, surface_id: String) -> Vec<RowMenuItem> {
+        haunt_core::sync::lock(&self.set).row_menu(&surface_id)
+    }
+
+    pub fn invoke_row_menu_item(&self, plugin_id: String, item_id: String, surface_id: String) -> Result<(), HostError> {
+        Ok(haunt_core::sync::lock(&self.set).invoke_row_item(&plugin_id, &item_id, &surface_id)?)
+    }
+
+    /// A drag dropped `surface_id` into `SidebarGroup.id` `group_id`, above `before_surface_id` (nil: at the end).
+    pub fn row_moved(&self, surface_id: String, group_id: String, before_surface_id: Option<String>) {
+        haunt_core::sync::lock(&self.set).row_moved(&surface_id, &group_id, before_surface_id.as_deref());
     }
 }

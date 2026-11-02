@@ -47,14 +47,14 @@ final class ReviewCoordinator {
     /// The inbox with the selected tab's entry selected. Fixtures for 01, 06 and 09 open that version directly.
     func open() {
         guard let sel = host.reviewSelection else { return NSSound.beep() }
-        if let f = host.reviewFixture, f.isReview, f != .reviewInbox {
+        if let f = host.reviewFixture, f.isReview, !f.isInbox {
             return openDetail(sel.surfaceId, row: sel.row, mode: nil)
         }
         openInbox(selecting: sel.surfaceId)
     }
 
     private func turn(for row: Row) -> ReviewTurn? {
-        if let f = host.reviewFixture, f.isReview { return f == .reviewInbox ? f.inboxTurn(tab: row.name) : f.reviewTurn }
+        if let f = host.reviewFixture, f.isReview { return f.isInbox ? f.inboxTurn(tab: row.name) : f.reviewTurn }
         return host.reviewCore.reviewTurn(surfaceId: row.surfaceId)
     }
 
@@ -125,7 +125,7 @@ final class ReviewCoordinator {
         host.reviewWindow?.makeFirstResponder(v)
         updateTitle()
 
-        if let fixture, fixture.isReview, fixture != .reviewInbox {
+        if let fixture, fixture.isReview, !fixture.isInbox {
             st.diff = fixture.reviewDiff
             let (files, scripts) = fixture.reviewProject
             st.checks = Checks.merge(turn: Checks.fromTurn(st.turn?.commands ?? []),

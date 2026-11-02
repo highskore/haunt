@@ -14,7 +14,7 @@ for name in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_CHILD_SESSION"
 }
 
 if ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != GHOSTTY_SUCCESS {
-    FileHandle.standardError.write("ghostty_init failed\n".data(using: .utf8)!)
+    FileHandle.standardError.write(Data("ghostty_init failed\n".utf8))
     exit(1)
 }
 

@@ -42,9 +42,9 @@ git runs as a `Process` without a shell, with a 10 s timeout (SIGTERM, then SIGK
 
 Diffs also pass `--no-ext-diff --no-textconv --no-color`, so `diff.<driver>.command` and `textconv` don't run.
 
-**Filter drivers.** A working-tree diff runs `filter.<name>.clean` or `.process` for any path whose attributes name that filter. Haunt never builds `-c filter.<name>...` overrides from the repo's filter names: a name can hold `=` or `.` and be misparsed. Instead it reads `git config --name-only -z --get-regexp '^filter\.'` (reading config runs nothing):
+**Filter and diff drivers.** A working-tree diff runs `filter.<name>.clean` or `.process` for any path whose attributes name that filter, and a diff can run `diff.<name>.textconv`, `diff.<name>.command` or `diff.external`. Haunt never builds `-c filter.<name>...` overrides from the repo's names: a name can hold `=`, `.`, quotes or a newline and be misparsed. Instead it reads `git config --show-scope -z --get-regexp '^(filter|diff)\.'` (reading config runs nothing; the `command` scope is Haunt's own pins):
 
-- If any filter is configured, or the list can't be read, the working tree and untracked files aren't read. Only the committed range is diffed (`git diff <base> <head>`, which compares blobs and runs no filter), and the screen says why.
+- If any filter, textconv, diff command or external diff is configured, or the list can't be read, the working tree and untracked files aren't read. Only the committed range is diffed (`git diff <base> <head>`, which compares blobs and runs no filter), and the screen says why.
 - Otherwise, the working tree is read. `GIT_ATTR_SOURCE` points attributes at the empty tree, so a `.gitattributes` written after the check can't name a filter either.
 - `GIT_ATTR_SOURCE` needs git 2.40 or newer. With an older git (Apple's `/usr/bin/git` is 2.39), Haunt shows committed changes only and says so.
 - Residual: `$GIT_DIR/info/attributes` is still read under `GIT_ATTR_SOURCE`. It can only name a filter that is configured, and a configured filter turns the working tree off, so a filter set up between the check and the diff (milliseconds) is the remaining window.
@@ -55,7 +55,8 @@ Diffs also pass `--no-ext-diff --no-textconv --no-color`, so `diff.<driver>.comm
 
 `/usr/bin/git` is used only when the developer tools are installed, so it never triggers the install prompt. `macos/tests/review.sh` covers the following. Each hostile fixture is first run through plain git to show it really fires, so the test is live.
 
-- A repo's own `diff.external` and `core.fsmonitor` don't run.
+- A repo's own `core.fsmonitor` doesn't run. A repo's `diff.external` limits the review to the committed range and doesn't run either.
+- `diff.<x>.textconv`, `diff.<x>.command` and `diff.external` each count as drivers. `diff.renames` and Haunt's own `-c` pins don't.
 - With clean and process filters configured, including ones named `Ev.il` and `x=y.z`, only the committed range is shown, and no filter runs.
 - With the filters still configured, a direct working-tree diff runs none of them, because `GIT_ATTR_SOURCE` is set. This simulates a filter that appears after the check.
 - A partial clone with a deleted blob and an `ext::` promisor remote fetches nothing, and loads promptly.

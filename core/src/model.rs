@@ -1,24 +1,27 @@
 //! `Core`: surfaces, their agent sessions, the socket intake and the sidebar snapshot.
 
-use std::collections::HashSet;
-use std::fs::File;
-use std::io::Read;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde_json::{Value, json};
 
-use crate::allowlist::{self, AllowError, AllowSuggestion};
+use crate::allowlist::{self, AllowError, AllowSuggestion, Approval};
+use crate::arrange::{self, Arrangement, RowInfo};
 use crate::ctl::{self, Ctl};
 use crate::decisions::{Decision, DecisionLog};
+use crate::git::Branches;
 use crate::event::{AgentEvent, parse_osc};
-use crate::intake::{Delivery, Intake, IntakeError, Limits, SOCKET_NAME};
+use crate::ids::{hex, random, uuid_v4};
+use crate::intake::{Delivery, Intake, IntakeError, Limits, Nonces, SOCKET_NAME};
 use crate::layout::{self, SidebarSnapshot, SurfaceView};
 use crate::session::{Outcome, Session};
+use crate::sync::{lock, write};
 use crate::turn::ReviewTurn;
 
 const MAX_SURFACES: usize = 512;
+const MAX_PROPOSALS: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Error))]
@@ -62,13 +65,15 @@ pub struct SurfaceEnv {
 }
 
 pub type Listener = Arc<dyn Fn() + Send + Sync>;
+/// Sees every event for a registered surface, with whether it was verified; called outside the lock.
+pub type EventTap = Arc<dyn Fn(&AgentEvent, bool) + Send + Sync>;
 
 struct Surface {
     id: String,
-    nonce: String,
     cwd: String,
+    /// Branch at `cwd`.
     branch: Option<String>,
-    /// Branch at `session.cwd`, looked up here because the UI only knows the surface cwd.
+    /// Branch at `session.cwd`.
     agent_branch: Option<String>,
     session: Session,
 }
@@ -76,77 +81,150 @@ struct Surface {
 #[derive(Default)]
 pub(crate) struct State {
     surfaces: Vec<Surface>,
+    /// Surface id to nonce, shared with the intake: the one place a nonce is kept.
+    nonces: Nonces,
     selected: Option<String>,
     home: Option<String>,
     /// Basename of the login shell surfaces run, for shell rows.
     shell: Option<String>,
     listener: Option<Listener>,
-    decisions: DecisionLog,
+    /// The listener fired and no snapshot was taken since: further changes don't fire it again.
+    notified: bool,
+    version: u64,
+    pub(crate) decisions: DecisionLog,
     /// (project, command) suggestions the user accepted or dismissed.
     allow_done: HashSet<(String, String)>,
+    /// Rules plugins proposed, newest first, as (plugin id, project, command).
+    allow_proposals: Vec<(String, String, String)>,
+    event_tap: Option<EventTap>,
+    /// The arranging plugin's id, the token of the instance that set it, and its arrangement.
+    arrangement: Option<(String, u64, Arrangement)>,
+    /// Tokens of plugin instances loaded with the sidebar capability and not disabled.
+    sidebar_live: HashSet<u64>,
+    next_sidebar_token: u64,
 }
 
 impl State {
+    /// Whether an arrangement set by `token` was dropped.
+    fn drop_arrangement(&mut self, token: u64) -> bool {
+        let owned = self.arrangement.as_ref().is_some_and(|(_, t, _)| *t == token);
+        if owned {
+            self.arrangement = None;
+        }
+        owned
+    }
+
     fn surface(&mut self, id: &str) -> Option<&mut Surface> {
         self.surfaces.iter_mut().find(|s| s.id == id)
     }
 
-    /// One intake delivery; the intake already checked the nonce and the rate limit.
-    pub(crate) fn deliver(&mut self, d: &Delivery, now: Instant) -> bool {
+    fn tap_for(&self, surface_id: &str) -> Option<EventTap> {
+        self.event_tap.clone().filter(|_| self.surfaces.iter().any(|s| s.id == surface_id))
+    }
+
+    /// Runs `f` on one surface, then moves the requests it ended into the decision log. Only
+    /// verified requests ever exist, so unverified events can at most end one, never add one.
+    fn with_surface<R>(&mut self, id: &str, f: impl FnOnce(&mut Surface) -> R) -> Option<R> {
+        let s = self.surfaces.iter_mut().find(|s| s.id == id)?;
+        let r = f(s);
+        for (p, outcome) in s.session.take_ended() {
+            self.decisions.record(Decision::new(&s.id, &p, outcome));
+        }
+        Some(r)
+    }
+
+    /// One intake delivery; the intake already checked the nonce and the rate limit. `agent_branch`
+    /// is the branch at the agent cwd after it, looked up before the lock (`Branches::agent`), and
+    /// `head` the commit there when the event starts a turn.
+    fn deliver(&mut self, d: &Delivery, agent_branch: Option<Option<String>>, head: Option<Option<String>>, now: Instant) -> bool {
         let Some(event) = &d.event else { return false };
-        let changed = self.surface(&d.surface_id).is_some_and(|s| {
+        self.with_surface(&d.surface_id, |s| {
             let mut changed = s.session.apply(event, d.verified, now);
-            // Every verified event re-reads HEAD, so a checkout inside the session shows up.
-            if d.verified && let Some(cwd) = &s.session.cwd {
-                let b = crate::git::branch(cwd);
+            if let Some(b) = agent_branch {
                 changed |= b != s.agent_branch;
                 s.agent_branch = b;
             }
-            if d.verified && matches!(event.kind, crate::event::EventKind::PromptSubmit { .. }) {
-                let cwd = s.session.cwd.as_deref().unwrap_or(&s.cwd);
-                s.session.turn.turn.head_at_start = crate::git::head_commit(cwd);
+            if let Some(h) = head {
+                s.session.turn.turn.head_at_start = h;
             }
             changed
-        });
-        self.settle();
-        changed
-    }
-
-    /// A hook line checked against the registered nonces, as the intake does.
-    fn decode(&self, line: &str) -> Delivery {
-        let nonces = self.surfaces.iter().map(|s| (s.id.clone(), s.nonce.clone())).collect();
-        crate::intake::decode(line, &nonces)
+        }) == Some(true)
     }
 
     /// A socket line as the intake would deliver it, minus the socket and the rate limit.
     #[cfg(test)]
     pub(crate) fn handle_line(&mut self, line: &str, now: Instant) -> bool {
-        let d = self.decode(line);
-        self.deliver(&d, now)
+        let Some(d) = crate::intake::decode(line, &self.nonces) else { return false };
+        let cwd = d.event.as_ref().and_then(|e| e.cwd.clone()).filter(|c| c.starts_with('/'));
+        let known = self.surfaces.iter().find(|s| s.id == d.surface_id).and_then(|s| s.session.cwd.clone());
+        let shell = self.surfaces.iter().find(|s| s.id == d.surface_id).map(|s| s.cwd.clone());
+        let at = d.verified.then(|| cwd.or(known)).flatten();
+        let branch = at.as_deref().map(crate::git::branch);
+        let head = starts_turn(&d).then(|| at.or(shell).and_then(|c| crate::git::head_commit(&c)));
+        self.deliver(&d, branch, head, now)
     }
 
     fn apply_unverified(&mut self, id: &str, event: &AgentEvent, now: Instant) -> bool {
-        let changed = self.surface(id).is_some_and(|s| s.session.apply(event, false, now));
-        self.settle();
-        changed
+        self.with_surface(id, |s| s.session.apply(event, false, now)) == Some(true)
     }
 
-    /// Moves every ended request into the decision log. Only verified requests ever exist, so
-    /// unverified events can at most end one (as superseded), never add one.
-    fn settle(&mut self) {
-        for s in &mut self.surfaces {
-            for (p, outcome) in s.session.take_ended() {
-                self.decisions.record(Decision::new(&s.id, &p, outcome));
-            }
-        }
-    }
-
+    /// Proposals that still pass every check, most recently approved first. Each is re-checked here
+    /// and again on accept, so a proposal never outlives its approvals or its project's safety.
     fn suggestions(&self) -> Vec<AllowSuggestion> {
-        let done = |p: &str, c: &str| self.allow_done.contains(&(p.to_owned(), c.to_owned()));
-        allowlist::suggestions(self.decisions.iter(), |p| allowlist::check_project(p).is_ok(), done)
+        if self.allow_proposals.is_empty() {
+            return Vec::new();
+        }
+        let approvals = allowlist::approvals(self.decisions.iter(), 1);
+        let counted: HashMap<(&str, &str), (usize, u32)> =
+            approvals.iter().enumerate().map(|(rank, a)| ((a.project.as_str(), a.command.as_str()), (rank, a.count))).collect();
+        let mut out: Vec<(usize, AllowSuggestion)> = self
+            .allow_proposals
+            .iter()
+            .filter(|(_, p, c)| !self.allow_done.contains(&(p.clone(), c.clone())))
+            .filter_map(|(plugin_id, project, command)| {
+                let &(rank, count) = counted.get(&(project.as_str(), command.as_str()))?;
+                let rule = allowlist::rule_for(command)?;
+                allowlist::check_project(project).ok()?;
+                let s = AllowSuggestion { project: project.clone(), command: command.clone(), rule, approvals: count, plugin_id: plugin_id.clone() };
+                Some((rank, s))
+            })
+            .collect();
+        out.sort_by_key(|(rank, _)| *rank);
+        out.into_iter().map(|(_, s)| s).collect()
+    }
+
+    /// Records a plugin's proposal; true if it is new. Nothing is written until the user accepts it.
+    fn propose(&mut self, plugin_id: &str, project: &str, command: &str) -> Result<bool, CoreError> {
+        let invalid = |reason: &str| Err(CoreError::Invalid { reason: reason.into() });
+        if allowlist::rule_for(command).is_none() {
+            return invalid("not a command an exact rule can allow");
+        }
+        if !allowlist::approvals(self.decisions.iter(), 1).iter().any(|a| a.project == project && a.command == command) {
+            return invalid("the user never approved this command in this project in haunt");
+        }
+        allowlist::check_project(project)?;
+        let key = (project.to_owned(), command.to_owned());
+        if self.allow_done.contains(&key) {
+            return invalid("the user already accepted or dismissed this rule");
+        }
+        if self.allow_proposals.iter().any(|(_, p, c)| *p == key.0 && *c == key.1) {
+            return Ok(false);
+        }
+        self.allow_proposals.insert(0, (plugin_id.to_owned(), key.0, key.1));
+        self.allow_proposals.truncate(MAX_PROPOSALS);
+        Ok(true)
     }
 
     pub(crate) fn snapshot(&self, now: Instant) -> SidebarSnapshot {
+        let snap = self.core_snapshot(now);
+        match &self.arrangement {
+            Some((_, t, a)) if self.sidebar_live.contains(t) => arrange::arrange(snap, a),
+            _ => snap,
+        }
+    }
+
+    /// Before any plugin arrangement.
+    fn core_snapshot(&self, now: Instant) -> SidebarSnapshot {
         let views: Vec<SurfaceView> = self
             .surfaces
             .iter()
@@ -158,27 +236,14 @@ impl State {
                 SurfaceView { id: &s.id, cwd, branch, session: &s.session, selected: self.selected.as_deref() == Some(s.id.as_str()) }
             })
             .collect();
-        layout::snapshot(&views, self.home.as_deref(), self.shell.as_deref(), now)
+        SidebarSnapshot { version: self.version, ..layout::snapshot(&views, self.home.as_deref(), self.shell.as_deref(), now) }
     }
-}
 
-pub(crate) fn random_bytes() -> [u8; 16] {
-    let mut b = [0; 16];
-    // Without a random nonce the hook channel has no authentication at all, so failing here is fatal.
-    File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).expect("read /dev/urandom");
-    b
-}
-
-pub(crate) fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
-
-fn uuid() -> String {
-    let mut b = random_bytes();
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    let h = hex(&b);
-    format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
+    /// The snapshot the UI draws, which re-arms the listener.
+    fn take_snapshot(&mut self, now: Instant) -> SidebarSnapshot {
+        self.notified = false;
+        self.snapshot(now)
+    }
 }
 
 struct Servers {
@@ -186,24 +251,59 @@ struct Servers {
     _ctl: Ctl,
 }
 
+/// `$HAUNT_HOME`, else `~/.haunt`.
+pub fn default_home() -> PathBuf {
+    if let Some(h) = std::env::var_os("HAUNT_HOME") {
+        return PathBuf::from(h);
+    }
+    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".haunt")
+}
+
 /// Thread-safe; the listener fires on whichever thread caused the change, never under the lock.
 pub struct Core {
     dir: PathBuf,
     state: Arc<Mutex<State>>,
+    branches: Arc<Branches>,
     servers: Mutex<Option<Servers>>,
 }
 
-fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+/// A verified prompt: the review diffs from the commit HEAD is on now.
+fn starts_turn(d: &Delivery) -> bool {
+    d.verified && d.event.as_ref().is_some_and(|e| matches!(e.kind, crate::event::EventKind::PromptSubmit { .. }))
 }
 
-/// Runs `f` on the state and fires the listener, outside the lock, if it reports a change.
+/// One intake delivery. The branch lookup goes first and the event goes to the tap after, both
+/// outside the state lock: the lookup reads files a hook-chosen cwd points at, and plugins call
+/// back into the core.
+fn deliver(state: &Mutex<State>, branches: &Branches, d: &Delivery) -> bool {
+    let branch = match &d.event {
+        Some(e) if d.verified => branches.agent(&d.surface_id, e.cwd.as_deref()),
+        _ => None,
+    };
+    let head = starts_turn(d).then(|| branches.turn_cwd(&d.surface_id).and_then(|c| crate::git::head_commit(&c)));
+    let mut tap = None;
+    let changed = update_state(state, |st, now| {
+        tap = st.tap_for(&d.surface_id);
+        st.deliver(d, branch, head, now)
+    });
+    if let (Some(tap), Some(event)) = (tap, &d.event) {
+        tap(event, d.verified);
+    }
+    changed
+}
+
+/// Runs `f` on the state and, if it reports a change, fires the listener outside the lock, once
+/// until the next `Core::snapshot`.
 fn update_state(state: &Mutex<State>, f: impl FnOnce(&mut State, Instant) -> bool) -> bool {
     let mut st = lock(state);
     let changed = f(&mut st, Instant::now());
-    let listener = st.listener.clone();
+    st.version += changed as u64;
+    let fire = changed && !std::mem::replace(&mut st.notified, true);
+    let listener = if fire { st.listener.clone() } else { None };
+    let log = st.decisions.writer().clone();
     drop(st);
-    if changed && let Some(l) = listener {
+    log.flush();
+    if let Some(l) = listener {
         l();
     }
     changed
@@ -213,7 +313,7 @@ const DEFAULT_LIMIT: u64 = 50;
 const MAX_LIMIT: u64 = 1000;
 
 /// One ctl request: `dump`, `event` (a hook line, nonce still required) or `decisions`.
-fn ctl_request(state: &Mutex<State>, line: &str) -> String {
+fn ctl_request(state: &Mutex<State>, branches: &Branches, line: &str) -> String {
     let Ok(req) = serde_json::from_str::<Value>(line) else { return ctl::error("invalid json") };
     match req.get("cmd").and_then(Value::as_str) {
         Some("dump") => {
@@ -226,7 +326,8 @@ fn ctl_request(state: &Mutex<State>, line: &str) -> String {
                     r.pending.as_ref().map(|p| json!({ "surface_id": r.surface_id, "key": p.key, "tool": p.tool, "preview": p.preview, "suspicious": p.suspicious }))
                 })
                 .collect();
-            json!({ "ok": true, "snapshot": snapshot, "pending": pending }).to_string()
+            let write_errors = lock(state).decisions.writer().errors();
+            json!({ "ok": true, "snapshot": snapshot, "pending": pending, "decision_log_write_errors": write_errors }).to_string()
         }
         Some("event") => {
             let hook_line = match req.get("line") {
@@ -234,18 +335,18 @@ fn ctl_request(state: &Mutex<State>, line: &str) -> String {
                 Some(v @ Value::Object(_)) => v.to_string(),
                 _ => return ctl::error("event needs a line"),
             };
-            let mut verified = false;
-            let changed = update_state(state, |st, now| {
-                let d = st.decode(&hook_line);
-                verified = d.verified;
-                st.deliver(&d, now)
-            });
+            let nonces = lock(state).nonces.clone();
+            let d = crate::intake::decode(&hook_line, &nonces);
+            let changed = d.as_ref().is_some_and(|d| deliver(state, branches, d));
+            let verified = d.is_some_and(|d| d.verified);
             json!({ "ok": true, "verified": verified, "changed": changed }).to_string()
         }
         Some("decisions") => {
             let query = req.get("query").and_then(Value::as_str).unwrap_or("");
             let limit = req.get("limit").and_then(Value::as_u64).unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-            json!({ "ok": true, "decisions": lock(state).decisions.query(query, limit) }).to_string()
+            let surface = req.get("surface").and_then(Value::as_str);
+            let hits = lock(state).decisions.query(query, surface, limit);
+            json!({ "ok": true, "decisions": hits.iter().map(|d| &**d).collect::<Vec<_>>() }).to_string()
         }
         _ => ctl::error("unknown cmd"),
     }
@@ -254,8 +355,9 @@ fn ctl_request(state: &Mutex<State>, line: &str) -> String {
 impl Core {
     pub fn new(config_dir: impl Into<PathBuf>) -> Self {
         let shell = std::env::var("SHELL").ok().and_then(|s| s.rsplit('/').next().map(str::to_owned)).filter(|s| !s.is_empty());
-        let state = State { home: std::env::var("HOME").ok(), shell, ..State::default() };
-        Self { dir: config_dir.into(), state: Arc::new(Mutex::new(state)), servers: Mutex::new(None) }
+        // Version 0 is older than any snapshot, so `snapshot_if_newer(0)` always returns one.
+        let state = State { home: std::env::var("HOME").ok(), shell, version: 1, ..State::default() };
+        Self { dir: config_dir.into(), state: Arc::new(Mutex::new(state)), branches: Arc::default(), servers: Mutex::new(None) }
     }
 
     pub fn socket_path(&self) -> PathBuf {
@@ -265,16 +367,17 @@ impl Core {
     /// Binds the hook socket and the ctl socket, opens the decision log, and registers every
     /// surface's nonce with the intake; a second call is a no-op.
     pub fn start(&self) -> Result<(), CoreError> {
-        let mut servers = self.servers.lock().unwrap_or_else(|e| e.into_inner());
+        let mut servers = lock(&self.servers);
         if servers.is_some() {
             return Ok(());
         }
-        let state = self.state.clone();
+        let (state, branches) = (self.state.clone(), self.branches.clone());
         let sink = Arc::new(move |d: Delivery| {
-            update_state(&state, |st, now| st.deliver(&d, now));
+            deliver(&state, &branches, &d);
         });
         // Binding the intake first secures the dir the log and ctl live in.
-        let intake = Intake::bind(&self.dir, Limits::default(), sink).map_err(CoreError::from)?;
+        let nonces = lock(&self.state).nonces.clone();
+        let intake = Intake::bind(&self.dir, Limits::default(), nonces, sink).map_err(CoreError::from)?;
         lock(&self.state).decisions.open(&self.dir).map_err(|e| {
             let reason = format!("decision log: {e}");
             match e.raw_os_error() {
@@ -282,17 +385,14 @@ impl Core {
                 Some(_) => CoreError::Io { reason },
             }
         })?;
-        let state = self.state.clone();
-        let ctl = Ctl::bind(&self.dir, Arc::new(move |line: &str| ctl_request(&state, line))).map_err(CoreError::from)?;
-        for s in &lock(&self.state).surfaces {
-            intake.register_surface(&s.id, &s.nonce);
-        }
+        let (state, branches) = (self.state.clone(), self.branches.clone());
+        let ctl = Ctl::bind(&self.dir, Arc::new(move |line: &str| ctl_request(&state, &branches, line))).map_err(CoreError::from)?;
         *servers = Some(Servers { intake, _ctl: ctl });
         Ok(())
     }
 
     fn with_intake(&self, f: impl FnOnce(&Intake)) {
-        if let Some(s) = self.servers.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if let Some(s) = lock(&self.servers).as_ref() {
             f(&s.intake);
         }
     }
@@ -304,33 +404,32 @@ impl Core {
     /// `Invalid` once `MAX_SURFACES` are registered: an env the core doesn't know would never verify.
     pub fn register_surface(&self, cwd: &str) -> Result<SurfaceEnv, CoreError> {
         let env = SurfaceEnv {
-            surface_id: uuid(),
-            nonce: hex(&random_bytes()),
+            surface_id: uuid_v4(),
+            nonce: hex(&random::<16>()),
             socket_path: self.socket_path().to_string_lossy().into_owned(),
         };
         let added = self.update(|st, now| {
             if st.surfaces.len() >= MAX_SURFACES {
                 return false;
             }
-            let (id, nonce, cwd) = (env.surface_id.clone(), env.nonce.clone(), cwd.to_owned());
-            st.surfaces.push(Surface { id, nonce, cwd, branch: None, agent_branch: None, session: Session::new(now) });
+            let (id, cwd) = (env.surface_id.clone(), cwd.to_owned());
+            st.surfaces.push(Surface { id, cwd, branch: None, agent_branch: None, session: Session::new(now) });
+            write(&st.nonces).insert(env.surface_id.clone(), env.nonce.clone());
             true
         });
         if !added {
             return Err(CoreError::Invalid { reason: format!("at most {MAX_SURFACES} surfaces") });
         }
-        self.with_intake(|i| i.register_surface(&env.surface_id, &env.nonce));
         Ok(env)
     }
 
     pub fn unregister_surface(&self, surface_id: &str) {
-        self.with_intake(|i| i.unregister_surface(surface_id));
+        self.with_intake(|i| i.forget_surface(surface_id));
+        self.branches.forget(surface_id);
         self.update(|st, _| {
+            write(&st.nonces).remove(surface_id);
             let before = st.surfaces.len();
-            if let Some(s) = st.surface(surface_id) {
-                s.session.close();
-            }
-            st.settle();
+            st.with_surface(surface_id, |s| s.session.close());
             st.surfaces.retain(|s| s.id != surface_id);
             if st.selected.as_deref() == Some(surface_id) {
                 st.selected = None;
@@ -339,15 +438,28 @@ impl Core {
         });
     }
 
-    /// `title` is accepted for the contract; rows are named after the cwd.
-    pub fn set_surface_info(&self, surface_id: &str, _title: &str, cwd: &str, git_branch: Option<String>) {
+    /// `title` is accepted for the contract; rows are named after the cwd. The core reads the
+    /// branch at `cwd` itself, outside its lock, so `_git_branch` is ignored (to be dropped from the API).
+    pub fn set_surface_info(&self, surface_id: &str, _title: &str, cwd: &str, _git_branch: Option<String>) {
+        if !lock(&self.state).surfaces.iter().any(|s| s.id == surface_id) {
+            return;
+        }
+        let branch = self.branches.shell(surface_id, cwd);
+        let mut gone = false;
         self.update(|st, _| {
-            let Some(s) = st.surface(surface_id) else { return false };
-            let changed = s.cwd != cwd || s.branch != git_branch;
-            s.cwd = cwd.to_owned();
-            s.branch = git_branch;
+            let Some(s) = st.surface(surface_id) else {
+                gone = true;
+                return false;
+            };
+            let changed = s.cwd != cwd || s.branch != branch;
+            cwd.clone_into(&mut s.cwd);
+            s.branch = branch;
             changed
         });
+        // Unregistered meanwhile: drop the cache entry the lookup made.
+        if gone {
+            self.branches.forget(surface_id);
+        }
     }
 
     pub fn select_surface(&self, surface_id: &str) {
@@ -363,15 +475,32 @@ impl Core {
     /// The OSC 777 fallback: anything in the pty can print these, so they are status-only.
     pub fn on_osc_notification(&self, surface_id: &str, title: &str, body: &str) {
         let Ok(event) = parse_osc(title, body) else { return };
-        self.update(|st, now| st.apply_unverified(surface_id, &event, now));
+        let mut tap = None;
+        self.update(|st, now| {
+            tap = st.tap_for(surface_id);
+            st.apply_unverified(surface_id, &event, now)
+        });
+        if let Some(tap) = tap {
+            tap(&event, false);
+        }
     }
 
     pub fn snapshot(&self) -> SidebarSnapshot {
-        lock(&self.state).snapshot(Instant::now())
+        lock(&self.state).take_snapshot(Instant::now())
     }
 
+    /// None while nothing changed since the snapshot with `version`. Elapsed times still move on
+    /// their own, so a `next_tick_ms` redraw takes a full `snapshot`.
+    pub fn snapshot_if_newer(&self, version: u64) -> Option<SidebarSnapshot> {
+        let mut st = lock(&self.state);
+        (st.version != version).then(|| st.take_snapshot(Instant::now()))
+    }
+
+    /// The listener fires once per change burst: after it fires, it waits for the next `snapshot`.
     pub fn set_listener(&self, listener: Listener) {
-        lock(&self.state).listener = Some(listener);
+        let mut st = lock(&self.state);
+        st.listener = Some(listener);
+        st.notified = false;
     }
 
     /// Bytes for `ghostty_surface_text`, only while `request_key` is that surface's live,
@@ -392,11 +521,12 @@ impl Core {
         };
         let mut bytes = None;
         self.update(|st, now| {
-            bytes = st.surface(surface_id).and_then(|s| {
-                let b = s.session.live_permission()?.agent.answer_bytes(allow)?;
-                s.session.answer_as(request_key, outcome, now).then_some(b)
-            });
-            st.settle();
+            bytes = st
+                .with_surface(surface_id, |s| {
+                    let b = s.session.live_permission()?.agent.answer_bytes(allow)?;
+                    s.session.answer_as(request_key, outcome, now).then_some(b)
+                })
+                .flatten();
             bytes.is_some()
         });
         bytes.map(<[u8]>::to_vec)
@@ -422,7 +552,13 @@ impl Core {
 
     /// Ended permission requests, newest first; see `DecisionLog::query`.
     pub fn decisions(&self, query: &str, limit: u32) -> Vec<Decision> {
-        lock(&self.state).decisions.query(query, limit as usize)
+        self.decisions_in(query, None, limit)
+    }
+
+    /// `decisions` of one surface when `surface_id` is set, filtered before the limit.
+    pub fn decisions_in(&self, query: &str, surface_id: Option<&str>, limit: u32) -> Vec<Decision> {
+        let hits = lock(&self.state).decisions.query(query, surface_id, limit as usize);
+        hits.iter().map(|d| Decision::clone(d)).collect()
     }
 
     pub fn allow_suggestions(&self) -> Vec<AllowSuggestion> {
@@ -443,10 +579,121 @@ impl Core {
     }
 
     pub fn dismiss_allow_suggestion(&self, project: &str, command: &str) {
-        lock(&self.state).allow_done.insert((project.to_owned(), command.to_owned()));
+        self.update(|st, _| st.allow_done.insert((project.to_owned(), command.to_owned())));
     }
 
-    #[cfg(test)]
+    /// Replaces the event tap; plugins get their events through it.
+    pub fn set_event_tap(&self, tap: Option<EventTap>) {
+        lock(&self.state).event_tap = tap;
+    }
+
+    /// What plugin imports may reach: reading decisions and approvals, and proposing a rule.
+    pub fn handle(&self) -> CoreHandle {
+        CoreHandle { state: self.state.clone() }
+    }
+}
+
+/// The core as plugins see it. Plugin calls hold the plugin lock and then take the core's, so the
+/// core never calls a plugin while holding its own.
+/// One plugin instance's claim on the sidebar, from `CoreHandle::attach_sidebar`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidebarToken(u64);
+
+#[derive(Clone)]
+pub struct CoreHandle {
+    state: Arc<Mutex<State>>,
+}
+
+impl std::fmt::Debug for CoreHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CoreHandle")
+    }
+}
+
+impl CoreHandle {
+    pub fn decisions(&self, query: &str, limit: u32) -> Vec<Decision> {
+        let hits = lock(&self.state).decisions.query(query, None, limit as usize);
+        hits.iter().map(|d| Decision::clone(d)).collect()
+    }
+
+    pub fn approvals(&self, min_count: u32) -> Vec<Approval> {
+        allowlist::approvals(lock(&self.state).decisions.iter(), min_count)
+    }
+
+    /// Adds a pending suggestion for the UI; the rule is written only by `accept_allow_suggestion`.
+    pub fn propose_allow_rule(&self, plugin_id: &str, project: &str, command: &str) -> Result<(), CoreError> {
+        let mut res = Ok(false);
+        update_state(&self.state, |st, _| {
+            res = st.propose(plugin_id, project, command);
+            *res.as_ref().unwrap_or(&false)
+        });
+        res.map(|_| ())
+    }
+
+    /// The rows in the core's own order, without meta or task text.
+    pub fn sidebar_rows(&self) -> Vec<RowInfo> {
+        arrange::row_infos(&lock(&self.state).core_snapshot(Instant::now()))
+    }
+
+    /// The first live plugin to arrange owns the sidebar until it clears or goes away.
+    pub fn set_arrangement(&self, plugin_id: &str, token: SidebarToken, a: Arrangement) -> Result<(), CoreError> {
+        a.validate().map_err(|reason| CoreError::Invalid { reason })?;
+        let mut res = Ok(());
+        update_state(&self.state, |st, _| {
+            if !st.sidebar_live.contains(&token.0) {
+                res = Err(CoreError::Invalid { reason: "not loaded with the sidebar capability".into() });
+                return false;
+            }
+            match &st.arrangement {
+                Some((owner, t, _)) if owner != plugin_id && st.sidebar_live.contains(t) => {
+                    res = Err(CoreError::Invalid { reason: format!("the sidebar is arranged by {owner}") });
+                    false
+                }
+                Some((_, t, old)) if *t == token.0 && *old == a => false,
+                _ => {
+                    st.arrangement = Some((plugin_id.to_owned(), token.0, a));
+                    true
+                }
+            }
+        });
+        res
+    }
+
+    pub fn clear_arrangement(&self, token: SidebarToken) {
+        update_state(&self.state, |st, _| st.drop_arrangement(token.0));
+    }
+
+    /// Marks a plugin instance loaded with the sidebar capability; only its arrangement is applied.
+    pub fn attach_sidebar(&self) -> SidebarToken {
+        let mut st = lock(&self.state);
+        st.next_sidebar_token += 1;
+        let t = st.next_sidebar_token;
+        st.sidebar_live.insert(t);
+        SidebarToken(t)
+    }
+
+    /// The instance was disabled, reloaded or dropped: its arrangement goes with it.
+    pub fn detach_sidebar(&self, token: SidebarToken) {
+        update_state(&self.state, |st, _| {
+            st.sidebar_live.remove(&token.0);
+            st.drop_arrangement(token.0)
+        });
+    }
+
+    /// A plugin loaded without the sidebar capability loses any arrangement an earlier load left.
+    pub fn forget_arrangement_of(&self, plugin_id: &str) {
+        update_state(&self.state, |st, _| {
+            let stale = st.arrangement.as_ref().is_some_and(|(owner, t, _)| owner == plugin_id && !st.sidebar_live.contains(t));
+            if stale {
+                st.arrangement = None;
+            }
+            stale
+        });
+    }
+}
+
+#[cfg(test)]
+impl Core {
     pub(crate) fn with_state<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
         f(&mut lock(&self.state))
     }
@@ -455,6 +702,7 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testdir::TempDir;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -498,7 +746,7 @@ mod tests {
 
     #[test]
     fn claude_rows_follow_the_verified_hook_cwd() {
-        let repo = std::env::temp_dir().join(format!("haunt-model-cwd-{}", std::process::id()));
+        let repo = TempDir::new("model-cwd");
         let specs = repo.join("specs");
         std::fs::create_dir_all(repo.join(".git")).unwrap();
         std::fs::create_dir_all(&specs).unwrap();
@@ -520,7 +768,6 @@ mod tests {
         std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/next\n").unwrap();
         c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &body), Instant::now()));
         assert!(only_row(&c).meta.starts_with("next · "), "a checkout shows on the next event");
-        let _ = std::fs::remove_dir_all(&repo);
 
         let body = r#""event":"stop","cwd":"/Users/me/code/vibes/specs""#;
         c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), body), Instant::now()));
@@ -558,7 +805,10 @@ mod tests {
     #[test]
     fn a_stale_request_key_writes_nothing() {
         let c = core();
-        let env = blocked(&c, true);
+        let env = c.register_surface("/Users/me/code/orchestrator").unwrap();
+        for body in [r#""event":"prompt_submit","query":"release""#, r#""event":"tool_start","tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"git push"}"#, PERM] {
+            c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), body), Instant::now()));
+        }
         let old = pending(&c).expect("a live request");
         assert_eq!(old.preview, "git push");
         let changed = r#""event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm -rf build"}"#;
@@ -566,6 +816,12 @@ mod tests {
         assert_eq!(c.answer_permission(&env.surface_id, old.key, true), None);
         let new = pending(&c).expect("the new request is still live");
         assert_eq!(new.preview, "rm -rf build");
+        assert!(new.suspicious, "the git push prompt may still be on screen ahead of it");
+        assert_eq!(c.answer_permission(&env.surface_id, new.key, false), None);
+        let ran = r#""event":"tool_ran","tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"git push"}"#;
+        c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), ran), Instant::now()));
+        let new = pending(&c).expect("the new request is still live");
+        assert!(!new.suspicious, "the only one left");
         assert_eq!(c.answer_permission("other", new.key, true), None, "a key is only good for its surface");
         assert_eq!(c.answer_permission(&env.surface_id, new.key, false), Some(b"\x1b".to_vec()));
         let log: Vec<_> = c.decisions("", 10).into_iter().map(|d| (d.preview, d.outcome)).collect();
@@ -587,11 +843,11 @@ mod tests {
         assert_eq!((d.len(), d[0].outcome.clone(), d[0].surface_id.as_str()), (1, crate::Outcome::Superseded, env.surface_id.as_str()));
     }
 
-    fn canonical_dir(tag: &str) -> String {
-        let d = format!("/tmp/haunt-{tag}-{}", std::process::id());
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        std::fs::canonicalize(d).unwrap().to_str().unwrap().to_owned()
+    /// A created, canonical project dir, as a string, and the guard that removes it.
+    fn canonical_dir(tag: &str) -> (TempDir, String) {
+        let d = TempDir::created(tag);
+        let s = d.to_str().unwrap().to_owned();
+        (d, s)
     }
 
     #[test]
@@ -613,7 +869,7 @@ mod tests {
 
     #[test]
     fn invisible_or_multiline_commands_are_never_suggested() {
-        let project = canonical_dir("allow-raw");
+        let (_project, project) = canonical_dir("allow-raw");
         for cmd in [r"git\u200b push", r"ls\nrm -rf x", r"ls\t-la"] {
             let c = core();
             let env = c.register_surface(&project).unwrap();
@@ -625,9 +881,11 @@ mod tests {
                 c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &ran), Instant::now()));
             }
             assert_eq!(c.decisions("", 10).len(), 3);
+            assert!(c.handle().approvals(1).is_empty(), "{cmd}");
+            let raw: String = serde_json::from_str(&format!("\"{cmd}\"")).unwrap();
+            assert!(c.handle().propose_allow_rule("p", &project, &raw).is_err(), "{cmd}");
             assert!(c.allow_suggestions().is_empty(), "{cmd}");
         }
-        std::fs::remove_dir_all(&project).unwrap();
     }
 
     #[test]
@@ -645,8 +903,8 @@ mod tests {
     }
 
     #[test]
-    fn three_verified_approvals_suggest_an_exact_rule() {
-        let project = canonical_dir("allow");
+    fn only_verified_haunt_approvals_are_counted() {
+        let (_project, project) = canonical_dir("allow");
         let c = core();
         let env = c.register_surface(&project).unwrap();
         let perm = format!(r#""event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"cargo test"}}"#);
@@ -656,35 +914,141 @@ mod tests {
             send(None, &perm);
             send(None, ran);
         }
-        assert!(c.allow_suggestions().is_empty(), "unverified approvals never count");
+        assert!(c.handle().approvals(1).is_empty(), "unverified approvals never count");
         send(Some(&env.nonce), &perm);
         answer(&c, &env.surface_id, true).unwrap();
         for _ in 0..3 {
             send(Some(&env.nonce), &perm);
             send(Some(&env.nonce), ran);
         }
-        assert!(c.allow_suggestions().is_empty(), "answers in the terminal never count");
+        let counts = |min| c.handle().approvals(min).into_iter().map(|a| (a.command, a.count)).collect::<Vec<_>>();
+        assert_eq!(counts(1), [("cargo test".to_owned(), 1)], "answers in the terminal never count");
         for _ in 0..2 {
             send(Some(&env.nonce), &perm);
             answer(&c, &env.surface_id, true).unwrap();
         }
+        assert_eq!(counts(3), [("cargo test".to_owned(), 3)]);
+        assert!(c.allow_suggestions().is_empty(), "the core never suggests on its own");
+    }
+
+    /// One haunt approval of `command` in a fresh canonical project.
+    fn approved(tag: &str, command: &str) -> (Core, TempDir, String) {
+        let (dir, project) = canonical_dir(tag);
+        let c = core();
+        let env = c.register_surface(&project).unwrap();
+        let perm = format!(r#""event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"{command}"}}"#);
+        c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &perm), Instant::now()));
+        answer(&c, &env.surface_id, true).unwrap();
+        (c, dir, project)
+    }
+
+    #[test]
+    fn a_proposal_writes_nothing_until_accepted() {
+        let (c, _project, project) = approved("allow-propose", "cargo test");
+        let fired = Arc::new(AtomicUsize::new(0));
+        let f = fired.clone();
+        c.set_listener(Arc::new(move || {
+            f.fetch_add(1, Ordering::SeqCst);
+        }));
+        let h = c.handle();
+        h.propose_allow_rule("dev.haunt.allowlist", &project, "cargo test").unwrap();
+        h.propose_allow_rule("dev.haunt.allowlist", &project, "cargo test").unwrap();
+        assert_eq!(fired.load(Ordering::SeqCst), 1, "a repeat proposal changes nothing");
+        assert!(!std::path::Path::new(&project).join(".claude").exists(), "proposing never touches the project");
         let s = c.allow_suggestions();
-        assert_eq!((s.len(), s[0].rule.as_str(), s[0].approvals), (1, "Bash(cargo test)", 3));
+        assert_eq!(s.len(), 1);
+        assert_eq!((s[0].rule.as_str(), s[0].approvals, s[0].plugin_id.as_str()), ("Bash(cargo test)", 1, "dev.haunt.allowlist"));
 
         assert!(matches!(c.accept_allow_suggestion(&project, "cargo build"), Err(CoreError::Invalid { .. })));
         c.accept_allow_suggestion(&project, "cargo test").unwrap();
         let written = std::fs::read_to_string(format!("{project}/.claude/settings.local.json")).unwrap();
         assert!(written.contains("\"Bash(cargo test)\""), "{written}");
         assert!(c.allow_suggestions().is_empty(), "accepted once, never again");
-        std::fs::remove_dir_all(&project).unwrap();
+        assert!(h.propose_allow_rule("dev.haunt.allowlist", &project, "cargo test").is_err(), "nor proposed again");
+    }
+
+    #[test]
+    fn proposals_must_rest_on_an_exact_haunt_approval() {
+        let (c, _project, project) = approved("allow-floor", "cargo test");
+        let h = c.handle();
+        for (p, cmd) in [
+            (project.as_str(), "cargo build"),
+            (project.as_str(), "cargo *"),
+            ("/tmp", "cargo test"),
+            (&format!("{project}/"), "cargo test"),
+        ] {
+            assert!(h.propose_allow_rule("p", p, cmd).is_err(), "{p} {cmd}");
+        }
+        assert!(c.allow_suggestions().is_empty());
+        c.dismiss_allow_suggestion(&project, "cargo test");
+        assert!(h.propose_allow_rule("p", &project, "cargo test").is_err(), "dismissed");
+    }
+
+    #[test]
+    fn accepting_rechecks_the_project_and_never_follows_a_symlink() {
+        let (c, _project, project) = approved("allow-recheck", "cargo test");
+        c.handle().propose_allow_rule("p", &project, "cargo test").unwrap();
+        let (_outside, outside) = canonical_dir("allow-recheck-out");
+        std::os::unix::fs::symlink(&outside, format!("{project}/.claude")).unwrap();
+        assert!(matches!(c.accept_allow_suggestion(&project, "cargo test"), Err(CoreError::Insecure { .. })));
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "nothing written through the link");
+
+        std::fs::remove_file(format!("{project}/.claude")).unwrap();
+        let moved = format!("{project}-moved");
+        std::fs::rename(&project, &moved).unwrap();
+        std::os::unix::fs::symlink(&outside, &project).unwrap();
+        assert!(c.allow_suggestions().is_empty(), "a project that became a symlink is no longer offered");
+        assert!(matches!(c.accept_allow_suggestion(&project, "cargo test"), Err(CoreError::Invalid { .. })));
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        std::fs::remove_file(&project).unwrap();
+        std::fs::remove_dir_all(&moved).unwrap();
+    }
+
+    #[test]
+    fn an_arrangement_applies_only_while_its_instance_is_live() {
+        let c = core();
+        c.register_surface("/a").unwrap();
+        let flat = Arrangement { flat: true, ..Default::default() };
+        let h = c.handle();
+        let t = h.attach_sidebar();
+        h.set_arrangement("p", t, flat.clone()).unwrap();
+        assert_eq!(c.snapshot().groups[0].id, arrange::TABS_ID);
+
+        // An arrangement left by an instance that is gone is never applied, and a sidebar-less load drops it.
+        c.with_state(|st| {
+            st.sidebar_live.remove(&t.0);
+        });
+        assert_ne!(c.snapshot().groups[0].id, arrange::TABS_ID);
+        c.with_state(|st| st.arrangement = Some(("p".into(), t.0, flat.clone())));
+        h.forget_arrangement_of("p");
+        assert!(c.with_state(|st| st.arrangement.is_none()));
+        assert!(h.set_arrangement("p", t, flat).is_err(), "a detached token can't arrange");
+    }
+
+    #[test]
+    fn the_event_tap_sees_events_for_registered_surfaces_only() {
+        let c = core();
+        let env = c.register_surface("/w").unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s = seen.clone();
+        c.set_event_tap(Some(Arc::new(move |e: &AgentEvent, verified| s.lock().unwrap().push((e.kind.name().to_owned(), verified)))));
+        let (st, branches) = (c.state.clone(), c.branches.clone());
+        let nonces = lock(&st).nonces.clone();
+        let stranger = SurfaceEnv { surface_id: "nope".into(), ..env.clone() };
+        for (e, nonce) in [(&env, Some(env.nonce.as_str())), (&env, None), (&stranger, None)] {
+            if let Some(d) = crate::intake::decode(&line(e, nonce, r#""event":"stop""#), &nonces) {
+                deliver(&st, &branches, &d);
+            }
+        }
+        c.on_osc_notification(&env.surface_id, "haunt://cli-agent", r#"{"v":1,"event":"stop"}"#);
+        assert_eq!(*seen.lock().unwrap(), [("stop".to_owned(), true), ("stop".to_owned(), false), ("stop".to_owned(), false)]);
     }
 
     #[test]
     fn ctl_dumps_injects_and_queries() {
         use std::io::{BufRead, BufReader, Write};
         use std::os::unix::net::UnixStream;
-        let dir = format!("/tmp/haunt-ctl-{}", std::process::id());
-        let _ = std::fs::remove_dir_all(&dir);
+        let (_dir, dir) = canonical_dir("ctl");
         let c = Core::new(&dir);
         c.start().unwrap();
         let env = c.register_surface("/w").unwrap();
@@ -709,11 +1073,13 @@ mod tests {
         assert!(c.answer_permission(&env.surface_id, key, true).is_some());
         let got = ask(json!({"cmd": "decisions", "query": "push"}));
         assert_eq!(got["decisions"][0]["outcome"], "allowed_in_haunt");
+        assert_eq!(ask(json!({"cmd": "decisions", "surface": env.surface_id}))["decisions"].as_array().unwrap().len(), 1);
+        assert_eq!(ask(json!({"cmd": "decisions", "surface": "other"}))["decisions"], json!([]));
+        assert_eq!(ask(json!({"cmd": "dump"}))["decision_log_write_errors"], 0);
         assert_eq!(ask(json!({"cmd": "nope"}))["ok"], false);
         let log = std::fs::read_to_string(format!("{dir}/decisions.jsonl")).unwrap();
-        assert_eq!(log.lines().count(), 1);
+        assert_eq!(log.lines().count(), 1, "flushed once the lock is released");
         drop(c);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -781,7 +1147,7 @@ mod tests {
 
     #[test]
     fn codex_approvals_are_never_suggested() {
-        let project = canonical_dir("allow-codex");
+        let (_project, project) = canonical_dir("allow-codex");
         let c = core();
         let env = c.register_surface(&project).unwrap();
         let perm = format!(r#""agent":"codex","event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"cargo test"}}"#);
@@ -794,8 +1160,9 @@ mod tests {
             send(ran);
         }
         assert_eq!(c.decisions("", 10).len(), 6);
+        assert!(c.handle().approvals(1).is_empty());
+        assert!(c.handle().propose_allow_rule("p", &project, "cargo test").is_err());
         assert!(c.allow_suggestions().is_empty());
-        std::fs::remove_dir_all(&project).unwrap();
     }
 
     #[test]
@@ -886,6 +1253,18 @@ mod tests {
     }
 
     #[test]
+    fn the_core_reads_the_shell_branch_itself() {
+        let repo = TempDir::created("shell-branch");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/dev\n").unwrap();
+        let c = core();
+        let env = c.register_surface("/").unwrap();
+        c.set_surface_info(&env.surface_id, "zsh", repo.to_str().unwrap(), Some("stale".into()));
+        let s = c.with_state(|st| st.surface(&env.surface_id).map(|s| s.branch.clone()));
+        assert_eq!(s, Some(Some("dev".into())));
+    }
+
+    #[test]
     fn listener_fires_on_changes_only() {
         let c = core();
         let n = Arc::new(AtomicUsize::new(0));
@@ -893,24 +1272,47 @@ mod tests {
         c.set_listener(Arc::new(move || {
             k.fetch_add(1, Ordering::SeqCst);
         }));
+        let fired = || n.load(Ordering::SeqCst);
         let env = c.register_surface("/a").unwrap();
+        let v = c.snapshot().version;
         c.select_surface(&env.surface_id);
         c.select_surface(&env.surface_id);
+        c.snapshot();
         c.set_surface_info(&env.surface_id, "zsh", "/a", None);
-        c.set_surface_info(&env.surface_id, "zsh", "/a", Some("main".into()));
-        assert_eq!(n.load(Ordering::SeqCst), 3);
-        assert!(c.snapshot().groups[0].rows[0].selected);
+        assert_eq!((fired(), c.snapshot_if_newer(v + 1)), (2, None), "unchanged: no call, no snapshot");
+        c.set_surface_info(&env.surface_id, "zsh", "/b", Some("ignored".into()));
+        assert_eq!(fired(), 3);
+        assert!(c.snapshot_if_newer(v + 1).unwrap().groups[0].rows[0].selected);
         c.unregister_surface(&env.surface_id);
-        assert_eq!(n.load(Ordering::SeqCst), 4);
+        c.select_surface("gone");
+        assert_eq!(fired(), 4);
         assert!(c.snapshot().groups.is_empty());
+    }
+
+    #[test]
+    fn a_burst_of_changes_fires_once_until_the_next_snapshot() {
+        let c = core();
+        let n = Arc::new(AtomicUsize::new(0));
+        let k = n.clone();
+        c.set_listener(Arc::new(move || {
+            k.fetch_add(1, Ordering::SeqCst);
+        }));
+        let a = c.register_surface("/a").unwrap();
+        let b = c.register_surface("/b").unwrap();
+        c.select_surface(&a.surface_id);
+        assert_eq!(n.load(Ordering::SeqCst), 1);
+        let v = c.snapshot().version;
+        assert_eq!(c.snapshot_if_newer(0).map(|s| s.version), Some(v));
+        c.select_surface(&b.surface_id);
+        c.select_surface(&a.surface_id);
+        assert_eq!((n.load(Ordering::SeqCst), c.snapshot_if_newer(v).map(|s| s.version)), (2, Some(v + 2)));
     }
 
     #[test]
     fn socket_end_to_end() {
         use std::io::Write;
         use std::os::unix::net::UnixStream;
-        let dir = format!("/tmp/haunt-e2e-{}", std::process::id());
-        let _ = std::fs::remove_dir_all(&dir);
+        let (_dir, dir) = canonical_dir("e2e");
         let c = Core::new(&dir);
         c.start().unwrap();
         c.start().unwrap();
@@ -921,12 +1323,12 @@ mod tests {
         }));
         let env = c.register_surface("/w").unwrap();
         rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        c.snapshot();
         let mut s = UnixStream::connect(&env.socket_path).unwrap();
         writeln!(s, "{}", line(&env, Some(&env.nonce), PERM)).unwrap();
         drop(s);
         rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(answer(&c, &env.surface_id, true), Some(b"1".to_vec()));
         drop(c);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

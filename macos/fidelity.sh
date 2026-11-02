@@ -1,5 +1,5 @@
 #!/bin/bash
-# Launches build/haunt.app on a mockup fixture, captures its window and runs design/check.
+# Launches build/haunt-fixtures.app on a mockup fixture, captures its window and runs design/check.
 # Usage: macos/fidelity.sh [screen...]   (default: ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox)
 # HAUNT_INACTIVE=1 captures the window unfocused; captures then get an -inactive suffix.
 set -uo pipefail
@@ -7,6 +7,19 @@ cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
 OUT="$ROOT/design/out"
 mkdir -p "$OUT"
+# Fixtures exist only in the HAUNT_FIXTURES build: build/haunt.app with that binary swapped in, rebuilt when stale.
+APP="$ROOT/build/haunt-fixtures.app"
+FBIN="$ROOT/build/macos/haunt-fixtures"
+[ -d "$ROOT/build/haunt.app" ] || { echo "no build/haunt.app: run macos/build.sh && macos/make-app.sh" >&2; exit 1; }
+if [ ! -x "$FBIN" ] || [ -n "$(find Sources Vendor deps/lib -newer "$FBIN" -print -quit)" ]; then
+  HAUNT_FIXTURES=1 ./build.sh >/dev/null || exit 1
+fi
+if [ ! -d "$APP" ] || [ "$FBIN" -nt "$APP/Contents/MacOS/haunt" ] || [ "$ROOT/build/haunt.app" -nt "$APP" ]; then
+  rm -rf "$APP"
+  cp -R "$ROOT/build/haunt.app" "$APP"
+  cp "$FBIN" "$APP/Contents/MacOS/haunt"
+  codesign --force --sign - "$APP" >/dev/null 2>&1
+fi
 status=0
 for screen in "${@:-ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox}"; do
   for s in $screen; do
@@ -15,7 +28,7 @@ for screen in "${@:-ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette a
     width=""
     inset=0
     case "$s" in dl-04-palette) width=400; inset=2 ;; esac
-    HAUNT_FIXTURE="$s" "$ROOT/build/haunt.app/Contents/MacOS/haunt" >"$OUT/$tag-app.log" 2>&1 &
+    HAUNT_FIXTURE="$s" "$APP/Contents/MacOS/haunt" >"$OUT/$tag-app.log" 2>&1 &
     pid=$!
     win=""
     for _ in $(seq 1 40); do

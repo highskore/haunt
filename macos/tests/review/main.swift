@@ -206,10 +206,9 @@ sh(["git", "commit", "-q", "-am", "during the turn"], repo)
 write("a.txt", "one\nTWO\nthree\n")
 write("sub/new.txt", "fresh\n")
 try! FileManager.default.removeItem(atPath: repo + "/gone.txt")
-// A hostile external diff driver and fsmonitor hook, set up last so the setup's own git runs don't trip them.
+// A hostile fsmonitor hook, set up last so the setup's own git runs don't trip it.
 write("evil.sh", "#!/bin/sh\ntouch \(repo)/PWNED\n")
 sh(["chmod", "+x", "evil.sh"], repo)
-sh(["git", "config", "diff.external", repo + "/evil.sh"], repo)
 sh(["git", "config", "core.fsmonitor", repo + "/evil.sh"], repo)
 
 switch ReviewLoader.load(cwd: repo + "/sub", headAtStart: start) {
@@ -228,6 +227,13 @@ case let .failure(e):
 if case let .success(d) = ReviewLoader.load(cwd: repo, headAtStart: nil) {
     check(d.files.first { $0.path == "a.txt" }.map { ($0.additions, $0.deletions) } ?? (0, 0) == (1, 0), "without a start, vs HEAD")
     check(d.notes.contains { $0.contains("doesn't know where the turn started") }, "and says so")
+}
+// An external diff driver turns the working tree off: only the turn's commit is shown.
+sh(["git", "config", "diff.external", repo + "/evil.sh"], repo)
+if case let .success(d) = ReviewLoader.load(cwd: repo, headAtStart: start) {
+    check(d.files.map(\.path) == ["a.txt"] && d.files[0].additions == 1 && !d.uncommitted, "committed range only \(d.files.map(\.path))")
+} else {
+    check(false, "load with diff.external failed")
 }
 check(!FileManager.default.fileExists(atPath: repo + "/PWNED"), "no external diff or fsmonitor hook ran")
 check(ReviewLoader.load(cwd: "/", headAtStart: nil) == .failure(.notARepo("/")), "not a repo")
@@ -272,12 +278,12 @@ sh(["git", "diff"], repo)
 check(exists("FILTERED"), "plain git diff runs the hostile filter (test is live)")
 try? FileManager.default.removeItem(atPath: repo + "/FILTERED")
 sh(["touch", "a.txt", "b.md", "c.cfg", "d.ini"], repo)
-check(GitRunner.hasFilters(cwd: repo) == true, "filters are seen")
+check(GitRunner.definesDrivers(cwd: repo) == true, "filters are seen")
 switch ReviewLoader.load(cwd: repo, headAtStart: filterStart) {
 case let .success(d):
     check(d.files.map(\.path) == ["a.txt"], "only the committed range \(d.files.map(\.path))")
     check(d.files.first.map { ($0.additions, $0.deletions) } ?? (0, 0) == (1, 0), "committed lines only")
-    check(d.notes.contains { $0.contains("defines git filters") }, "and says why")
+    check(d.notes.contains { $0.contains("defines git filters or diff drivers") }, "and says why")
 case let .failure(e):
     check(false, "load with filters failed: \(e)")
 }
@@ -290,6 +296,17 @@ if GitRunner.supportsAttrSource {
 } else {
     print("review: git < 2.40, skipping the GIT_ATTR_SOURCE check")
 }
+
+// A textconv or external diff driver alone also keeps the working tree out; harmless diff settings don't.
+for (k, v) in [("diff.evil.textconv", "true"), ("diff.evil.command", "true"), ("diff.external", "true"), ("diff.renames", "true")] {
+    fresh()
+    sh(["git", "init", "-q", "-b", "main"], repo)
+    sh(["git", "config", k, v], repo)
+    check(GitRunner.definesDrivers(cwd: repo) == (k != "diff.renames"), "\(k) counts as a driver: \(k != "diff.renames")")
+}
+fresh()
+sh(["git", "init", "-q", "-b", "main"], repo)
+check(GitRunner.definesDrivers(cwd: repo) == false, "Haunt's own -c pins don't count")
 
 // A partial clone missing a blob, with a promisor remote that would run a command.
 fresh()

@@ -43,7 +43,7 @@ struct Shortcut: Equatable, Hashable {
             "space": (" ", "space", "Space"),
             "escape": ("\u{1b}", "escape", "⎋"), "esc": ("\u{1b}", "escape", "⎋"),
             "backspace": ("\u{8}", "backspace", "⌫"),
-            "delete": ("\u{7f}", "delete", "⌦"),
+            "delete": (fn(NSDeleteFunctionKey), "delete", "⌦"),
             "up": (fn(NSUpArrowFunctionKey), "arrow_up", "↑"),
             "down": (fn(NSDownArrowFunctionKey), "arrow_down", "↓"),
             "left": (fn(NSLeftArrowFunctionKey), "arrow_left", "←"),
@@ -56,6 +56,9 @@ struct Shortcut: Equatable, Hashable {
         for n in 1...12 { m["f\(n)"] = (fn(NSF1FunctionKey + n - 1), "f\(n)", "F\(n)") }
         return m
     }()
+
+    /// Other spellings of a named key, stored as one so equal chords compare and hash equal.
+    private static let namedAlias = ["return": "enter", "esc": "escape"]
 
     /// nil for anything malformed: no key, an unknown key or modifier, or a repeated part.
     static func parse(_ text: String) -> Shortcut? {
@@ -73,7 +76,7 @@ struct Shortcut: Equatable, Hashable {
         // A bare letter or digit would be stolen from the terminal on every keystroke.
         let isFKey = key.hasPrefix("f") && named[key] != nil
         if mods.isDisjoint(with: [.command, .control, .option]) && !isFKey { return nil }
-        return Shortcut(mods: mods, key: punct[key]?.1 ?? key)
+        return Shortcut(mods: mods, key: punct[key]?.1 ?? namedAlias[key] ?? key)
     }
 
     /// What shift turns punctuation and digits into on a US layout. AppKit matches a menu key equivalent
@@ -128,7 +131,7 @@ struct KeyMap: Equatable {
         case selectTab4 = "select_tab_4", selectTab5 = "select_tab_5", selectTab6 = "select_tab_6"
         case selectTab7 = "select_tab_7", selectTab8 = "select_tab_8", selectTab9 = "select_tab_9"
         case nextTab = "next_tab"
-        case previousTab = "previous_tab"
+        case previousTab = "prev_tab"
         case renameTab = "rename_tab"
         case palette
         case toggleSidebar = "toggle_sidebar"
@@ -141,6 +144,7 @@ struct KeyMap: Equatable {
         case quit
         case minimize
         case copy, paste
+        case pasteSelection = "paste_selection"
         case selectAll = "select_all"
 
         /// Warp's defaults where Warp has the action (⌘⇧B is its vertical tabs panel); macOS standards otherwise.
@@ -164,6 +168,7 @@ struct KeyMap: Equatable {
             case .minimize: return "cmd+m"
             case .copy: return "cmd+c"
             case .paste: return "cmd+v"
+            case .pasteSelection: return "cmd+shift+v"
             case .selectAll: return "cmd+a"
             default: return "cmd+\(tabIndex! + 1)"
             }
@@ -176,39 +181,80 @@ struct KeyMap: Equatable {
     }
 
     private(set) var bindings: [Action: Shortcut] = [:]
+    /// Plugin palette commands by "<plugin id>/<item id>", from their default keys and the table.
+    private(set) var plugin: [String: Shortcut] = [:]
 
     subscript(_ a: Action) -> Shortcut? { bindings[a] }
 
+    var all: [Shortcut] { Array(bindings.values) + Array(plugin.values) }
+
     static let defaults = KeyMap(table: [:], log: { _ in })
 
-    /// Invalid, unknown or clashing entries are dropped through `log`, never thrown.
-    init(table: [String: TOML.Value], log: (String) -> Void) {
+    /// "<plugin id>/<item id>", as `[keys]` names a plugin command.
+    static func pluginName(_ pluginId: String, _ itemId: String) -> String { "\(pluginId)/\(itemId)" }
+
+    /// Chords a plugin default may never take, even when unbound: Haunt's defaults, the terminal's line
+    /// editing and macOS's own. A chord without cmd is refused before this, being terminal input.
+    static let reserved: Set<Shortcut> = Set(
+        (Action.allCases.compactMap(\.defaultKey) + [
+            "cmd+x", "cmd+z", "cmd+shift+z", "cmd+n", "cmd+f", "cmd+g", "cmd+shift+g", "cmd+equal", "cmd+shift+equal",
+            "cmd+minus", "cmd+0", "cmd+space", "cmd+tab", "cmd+shift+tab", "cmd+backquote", "cmd+ctrl+q",
+            "cmd+ctrl+space", "cmd+shift+3", "cmd+shift+4", "cmd+shift+5", "cmd+opt+escape", "cmd+opt+d",
+            "cmd+left", "cmd+right", "cmd+up", "cmd+down", "cmd+backspace", "cmd+delete", "cmd+enter",
+        ]).map { Shortcut.parse($0)! }
+    )
+
+    /// Invalid, unknown or clashing entries are dropped through `log`, never thrown. `order` is the
+    /// table's keys as written, so of two entries with one chord the earlier wins. `pluginDefaults` are the
+    /// loaded plugins' commands with a default key; a plugin's default never takes a Haunt chord.
+    init(table: [String: TOML.Value], order: [String] = [], pluginDefaults: [String: String] = [:], log: (String) -> Void) {
         var configured: [Action: Shortcut] = [:]
-        for (name, value) in table.sorted(by: { $0.key < $1.key }) {
-            guard let action = Action(rawValue: name) else {
+        var configuredPlugin: [String: Shortcut] = [:]
+        func owner(_ s: Shortcut) -> String? {
+            configured.first(where: { $0.value == s })?.key.rawValue ?? configuredPlugin.first(where: { $0.value == s })?.key
+        }
+        let names = order.filter { table[$0] != nil } + table.keys.filter { !order.contains($0) }.sorted()
+        for name in names {
+            let value = table[name]!
+            let action = Action(rawValue: name)
+            guard action != nil || name.contains("/") else {
                 log("[keys] \(name): unknown action, ignored")
                 continue
             }
+            let fallback = action.map { $0.defaultKey ?? "none" } ?? pluginDefaults[name] ?? "none"
             guard case let .scalar(text) = value, let s = Shortcut.parse(text) else {
-                log("[keys] \(name) = \(value.strings.joined(separator: ",")): not a shortcut like \"cmd+shift+b\", using \(action.defaultKey ?? "none")")
+                log("[keys] \(name) = \(value.strings.joined(separator: ",")): not a shortcut like \"cmd+shift+b\", using \(fallback)")
                 continue
             }
-            if let other = configured.first(where: { $0.value == s })?.key {
-                log("[keys] \(name): \(text) is already \(other.rawValue), using \(action.defaultKey ?? "none")")
+            if let other = owner(s) {
+                log("[keys] \(name): \(text) is already \(other), using \(fallback)")
                 continue
             }
-            configured[action] = s
+            if let action { configured[action] = s } else { configuredPlugin[name] = s }
         }
         bindings = configured
+        plugin = configuredPlugin
         // A configured chord takes precedence over another action's default, which then has none.
         for a in Action.allCases where configured[a] == nil {
             guard let d = a.defaultKey else { continue }
             let s = Shortcut.parse(d)!
-            if let owner = configured.first(where: { $0.value == s })?.key {
-                log("[keys] \(owner.rawValue) took \(d); \(a.rawValue) has no shortcut")
+            if let owner = owner(s) {
+                log("[keys] \(owner) took \(d); \(a.rawValue) has no shortcut")
                 continue
             }
             bindings[a] = s
+        }
+        for (name, d) in pluginDefaults.sorted(by: { $0.key < $1.key }) where configuredPlugin[name] == nil {
+            guard let s = Shortcut.parse(d) else { continue }
+            guard s.mods.contains(.command), !Self.reserved.contains(s) else {
+                log("[keys] \(name): its default \(d) needs cmd and must not be a chord the terminal or macOS uses, so it has no shortcut")
+                continue
+            }
+            if let other = bindings.first(where: { $0.value == s })?.key.rawValue ?? plugin.first(where: { $0.value == s })?.key {
+                log("[keys] \(name): its default \(d) is already \(other), so it has no shortcut")
+                continue
+            }
+            plugin[name] = s
         }
     }
 }

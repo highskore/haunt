@@ -75,7 +75,7 @@ enum RV {
     }
 
     static func agentMark(_ agent: Agent, in r: NSRect, ctx: CGContext) {
-        if agent == .codex { Draw.codexMark(in: r, ctx: ctx) } else { Draw.claudeMark(in: r) }
+        if agent == .codex { Draw.codexMark(in: r, color: Tok.Color.textPrimary, ctx: ctx) } else { Draw.claudeMark(in: r) }
     }
 
     static func agentName(_ agent: Agent) -> String {

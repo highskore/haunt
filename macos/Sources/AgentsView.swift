@@ -5,7 +5,7 @@ import AppKit
 final class AgentsView: NSView {
     let titleBar = TitleBarView()
     let list = SidebarView()
-    private(set) var snapshot = SidebarSnapshot(groups: [])
+    private(set) var snapshot = SidebarSnapshot(groups: [], colorStyle: .dot)
     private var hiddenShells = 0
     /// The frame and minimum size the window had before it shrank; nil while the view is off.
     var restore: (frame: NSRect, minSize: NSSize)?
@@ -38,7 +38,7 @@ final class AgentsView: NSView {
     func update(_ snap: SidebarSnapshot) {
         let rows = snap.groups.flatMap(\.rows)
         let agents = rows.filter { $0.kind != .shell }
-        let next = SidebarSnapshot(groups: [SidebarGroup(label: "Agents · \(agents.count)", rows: agents)])
+        let next = SidebarSnapshot(groups: [SidebarGroup(id: "agents", label: "Agents · \(agents.count)", rows: agents)], colorStyle: snap.colorStyle)
         if rows.count - agents.count != hiddenShells {
             hiddenShells = rows.count - agents.count
             needsDisplay = true
@@ -78,6 +78,15 @@ final class AgentsView: NSView {
         let mods = order.filter { s.mods.contains($0.0) }.map(\.1).joined()
         let plain = Shortcut(mods: [], key: s.key).display
         return mods + plain
+    }
+
+    /// The frame to restore, if it still meets one of `screens` (visible frames); otherwise its size,
+    /// capped to `current`, centred there. Screens can go away while the view is on.
+    static func restoredFrame(_ frame: NSRect, screens: [NSRect], current: NSRect?) -> NSRect {
+        if screens.contains(where: { $0.intersects(frame) }) { return frame }
+        guard let area = current ?? screens.first else { return frame }
+        let w = min(frame.width, area.width), h = min(frame.height, area.height)
+        return NSRect(x: area.midX - w / 2, y: area.midY - h / 2, width: w, height: h)
     }
 
     /// A strip of the mockup's width, the full height of the screen's visible area, docked to its right edge.

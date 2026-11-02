@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["cli", "core", "ffi"]
+members = ["cli", "core", "ffi", "tools/uniffi-bindgen"]
 
 [workspace.package]
 edition = "2024"
@@ -14,6 +14,7 @@ thiserror = "2"
 uniffi = "0.32"
 
 [profile.release]
+# No panic = "abort": a panic stays in its thread (a socket loop) or becomes a UniFFI error, not an app crash.
 lto = "thin"
 codegen-units = 1
-strip = "debuginfo"
+strip = "symbols"

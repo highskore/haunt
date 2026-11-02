@@ -85,7 +85,7 @@ impl FsScope {
     pub fn new(read: &[String], write: &[String], haunt_dir: Option<&Path>) -> Self {
         let valid = |gs: &[String]| gs.iter().filter(|g| validate_glob(g).is_ok()).cloned().collect();
         let home = std::env::var_os("HOME").and_then(|h| Path::new(&h).canonicalize().ok());
-        let haunt = haunt_dir.map_or_else(crate::plugin_store::default_home, Path::to_owned);
+        let haunt = haunt_dir.map_or_else(crate::model::default_home, Path::to_owned);
         let haunt = haunt.canonicalize().unwrap_or(haunt);
         Self { read: valid(read), write: valid(write), cwds: Vec::new(), home, haunt }
     }
@@ -279,13 +279,13 @@ fn stat_at(dir: &OwnedFd, name: &CString) -> io::Result<libc::stat> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testdir::TempDir;
     use std::os::unix::fs::{PermissionsExt, symlink};
 
-    fn tempdir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("haunt-fs-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
+    fn tempdir(tag: &str) -> TempDir {
+        let d = TempDir::created(&format!("fs-{tag}"));
         std::fs::create_dir_all(d.join("proj/.claude")).unwrap();
-        d.canonicalize().unwrap()
+        d
     }
 
     fn scope(root: &Path) -> FsScope {
@@ -345,7 +345,6 @@ mod tests {
         let (r, w) = rx.recv_timeout(std::time::Duration::from_secs(2)).expect("fs on a FIFO must not block");
         assert!(r.unwrap_err().contains("not a regular file"));
         assert!(w.unwrap_err().contains("not a regular file"));
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -364,7 +363,6 @@ mod tests {
         assert!(s.write(root.join("proj/.claude/settings.json").to_str().unwrap(), b"x").is_err(), "read-only glob");
         assert!(s.read(&format!("{}/proj/.claude/../secret.txt", root.display())).is_err());
         assert!(s.list(root.join("proj").to_str().unwrap()).is_err());
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -384,7 +382,6 @@ mod tests {
         std::fs::remove_dir_all(root.join("proj/.claude")).unwrap();
         symlink(root.join("elsewhere"), root.join("proj/.claude")).unwrap();
         assert!(s.read(root.join("proj/.claude/x.json").to_str().unwrap()).is_err());
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -393,7 +390,6 @@ mod tests {
         let s = FsScope::new(&["${cwd}/.claude/*.json".into()], &[], None);
         std::fs::write(root.join("proj/.claude/a.json"), "x").unwrap();
         assert!(s.read(root.join("proj/.claude/a.json").to_str().unwrap()).is_err());
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -404,14 +400,13 @@ mod tests {
         std::fs::create_dir_all(home.join(".haunt/plugins")).unwrap();
         let mut s = FsScope::new(&["${cwd}/*".into()], &[], Some(&home.join(".haunt")));
         s.home = Some(home.canonicalize().unwrap());
-        for wide in [home.clone(), root.join("Users"), root.clone(), PathBuf::from("/"), home.join(".haunt"), home.join(".haunt/plugins")] {
+        for wide in [home.clone(), root.join("Users"), root.to_path_buf(), PathBuf::from("/"), home.join(".haunt"), home.join(".haunt/plugins")] {
             s.add_cwd(wide.to_str().unwrap());
         }
         s.add_cwd(&format!("{}/code/..", home.display()));
         assert!(s.cwds.is_empty(), "{:?}", s.cwds);
         s.add_cwd(home.join("code/p").to_str().unwrap());
         assert_eq!(s.cwds, [home.join("code/p")]);
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -422,7 +417,6 @@ mod tests {
         s.home = Some(PathBuf::from("/nonexistent/home"));
         s.add_cwd(root.join("proj").to_str().unwrap());
         assert!(s.cwds.is_empty(), "{:?}", s.cwds);
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -432,7 +426,6 @@ mod tests {
         s.home = None;
         s.add_cwd(root.join("proj").to_str().unwrap());
         assert!(s.cwds.is_empty());
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -449,6 +442,5 @@ mod tests {
         assert_eq!(std::fs::read(&lock).unwrap(), b"x");
         assert!(s.list(haunt.to_str().unwrap()).is_err());
         assert_eq!(s.list(root.to_str().unwrap()).unwrap(), ["proj"], "the haunt dir is not listed either");
-        std::fs::remove_dir_all(root).unwrap();
     }
 }

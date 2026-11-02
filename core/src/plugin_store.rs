@@ -3,14 +3,18 @@
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use wasmtime::component::Linker;
 
 use crate::event::AgentEvent;
-use crate::plugin_cache::{CwasmCache, check_dir, hex, write_atomic};
+use crate::ids::hex;
+use crate::model::CoreHandle;
+use crate::plugin_cache::{CwasmCache, check_dir, write_atomic};
 use crate::plugin_manifest::{ALWAYS, Capabilities, MANIFEST, Manifest, valid_id};
-use crate::plugins::{Decoration, HostRequest, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost};
+use crate::plugins::{Decoration, HostRequest, HostState, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost, RowMenuItem};
 
 pub const LOCKFILE: &str = "plugins.lock";
 pub const WASM: &str = "plugin.wasm";
@@ -55,8 +59,14 @@ pub struct LockEntry {
     pub granted: Capabilities,
 }
 
+/// `source` of a plugin that ships inside the app.
+pub const BUNDLED: &str = "bundled";
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Lock {
+    /// Bundled plugins the user removed; they are never installed again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    removed_bundled: Vec<String>,
     #[serde(default, rename = "plugin")]
     plugins: Vec<LockEntry>,
 }
@@ -96,8 +106,12 @@ pub struct Store {
     home: PathBuf,
 }
 
+fn digest(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
 fn sha(bytes: &[u8]) -> String {
-    hex(&Sha256::digest(bytes))
+    hex(&digest(bytes))
 }
 
 fn mkdir_private(dir: &Path) -> Result<(), StoreError> {
@@ -196,8 +210,9 @@ impl Store {
         let caps = &manifest.capabilities;
         let id = manifest.plugin.id.clone();
 
+        let wasm_digest = digest(&wasm);
         let cache = CwasmCache::open(&self.cache_dir())?;
-        let (component, _) = host.compile_cached(&wasm, &cache).map_err(|e| StoreError::Invalid(format!("entry is not a valid component: {e}")))?;
+        let (component, _) = host.compile_cached(&wasm, &wasm_digest, &cache).map_err(|e| StoreError::Invalid(format!("entry is not a valid component: {e}")))?;
         host.check_links(&component, caps)
             .map_err(|e| StoreError::Invalid(format!("plugin uses an import its manifest does not request: {e}")))?;
 
@@ -231,23 +246,13 @@ impl Store {
             return Err(StoreError::Declined);
         }
 
-        let dest = self.plugins_dir().join(&id);
-        let staging = self.plugins_dir().join(format!(".{id}.staging"));
-        let _ = fs::remove_dir_all(&staging);
-        mkdir_private(&staging)?;
-        write_atomic(&staging.join(MANIFEST), &manifest_bytes)?;
-        write_atomic(&staging.join(WASM), &wasm)?;
-        if dest.exists() {
-            fs::remove_dir_all(&dest)?;
-        }
-        fs::rename(&staging, &dest)?;
-
+        self.put(&id, &manifest_bytes, &wasm)?;
         let entry = LockEntry {
             id: id.clone(),
             version: manifest.plugin.version.clone(),
             source,
             commit: None,
-            sha256_wasm: sha(&wasm),
+            sha256_wasm: hex(&wasm_digest),
             sha256_manifest: sha(&manifest_bytes),
             granted: caps.clone(),
         };
@@ -259,6 +264,101 @@ impl Store {
             Some(_) => Installed::Updated { prompted },
             None => Installed::New,
         })
+    }
+
+    /// Replaces `plugins/<id>` with the given files, through a staging directory.
+    fn put(&self, id: &str, manifest_bytes: &[u8], wasm: &[u8]) -> Result<(), StoreError> {
+        let dest = self.plugins_dir().join(id);
+        let staging = self.plugins_dir().join(format!(".{id}.staging"));
+        let _ = fs::remove_dir_all(&staging);
+        mkdir_private(&staging)?;
+        write_atomic(&staging.join(MANIFEST), manifest_bytes)?;
+        write_atomic(&staging.join(WASM), wasm)?;
+        if dest.exists() {
+            fs::remove_dir_all(&dest)?;
+        }
+        fs::rename(&staging, &dest)?;
+        Ok(())
+    }
+
+    /// Installs or updates the plugins shipped in `dir` (`<dir>/<id>/haunt-plugin.toml` and `plugin.wasm`)
+    /// without asking: they come inside the signed app. A bundled update that asks for more than was
+    /// granted is put on disk unpinned, so it stays off until `haunt plugin approve`. A copy installed
+    /// from elsewhere, or one the user removed, is left alone. Returns one line per plugin it skipped.
+    pub fn install_bundled(&self, dir: &Path, host: &PluginHost) -> Result<Vec<String>, StoreError> {
+        let mut lock = self.read_lock()?;
+        let mut errors = Vec::new();
+        let mut changed = false;
+        let entries = match fs::read_dir(dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(errors),
+            r => r?,
+        };
+        let mut entries: Vec<_> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+        entries.sort();
+        for src in entries {
+            let name = src.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            match self.bundled_one(&src, &name, host, &mut lock) {
+                Ok(c) => changed |= c,
+                Err(e) => errors.push(format!("{name} (bundled): {e}")),
+            }
+        }
+        if changed {
+            self.write_lock(&lock)?;
+        }
+        Ok(errors)
+    }
+
+    /// Whether the lockfile changed.
+    fn bundled_one(&self, src: &Path, id: &str, host: &PluginHost, lock: &mut Lock) -> Result<bool, StoreError> {
+        if lock.removed_bundled.iter().any(|r| r == id) {
+            return Ok(false);
+        }
+        let old = lock.plugins.iter().position(|p| p.id == id);
+        if old.is_some_and(|i| lock.plugins[i].source != BUNDLED) {
+            return Ok(false);
+        }
+        let manifest_bytes = read_capped(&src.join(MANIFEST))?;
+        let wasm = read_capped(&src.join(WASM))?;
+        let wasm_digest = digest(&wasm);
+        let (wasm_sha, manifest_sha) = (hex(&wasm_digest), sha(&manifest_bytes));
+        if old.is_some_and(|i| lock.plugins[i].sha256_wasm == wasm_sha && lock.plugins[i].sha256_manifest == manifest_sha) {
+            return Ok(false);
+        }
+        let manifest = Manifest::parse(&String::from_utf8_lossy(&manifest_bytes))?;
+        if manifest.plugin.id != id {
+            return Err(StoreError::Invalid(format!("its manifest is for {}", manifest.plugin.id)));
+        }
+        let dest = self.plugin_dir(id)?;
+        let grew = old.is_some_and(|i| !manifest.capabilities.added_since(&lock.plugins[i].granted).is_empty());
+        let on_disk = read_capped(&dest.join(WASM)).is_ok_and(|w| w == wasm)
+            && read_capped(&dest.join(MANIFEST)).is_ok_and(|m| m == manifest_bytes);
+        if grew && on_disk {
+            return Ok(false);
+        }
+        let cache = CwasmCache::open(&self.cache_dir())?;
+        let (component, _) = host.compile_cached(&wasm, &wasm_digest, &cache)?;
+        host.check_links(&component, &manifest.capabilities)?;
+        self.put(id, &manifest_bytes, &wasm)?;
+        if grew {
+            return Ok(false);
+        }
+        let entry = LockEntry {
+            id: id.to_owned(),
+            version: manifest.plugin.version.clone(),
+            source: BUNDLED.into(),
+            commit: None,
+            sha256_wasm: wasm_sha,
+            sha256_manifest: manifest_sha,
+            granted: manifest.capabilities,
+        };
+        match old {
+            Some(i) => lock.plugins[i] = entry,
+            None => lock.plugins.push(entry),
+        }
+        Ok(true)
     }
 
     /// Re-approves an installed plugin whose files changed on disk, pinning the new hashes.
@@ -274,8 +374,10 @@ impl Store {
         if manifest.plugin.id != id {
             return Err(StoreError::Invalid(format!("installed manifest is for {}, not {id}", manifest.plugin.id)));
         }
+        let wasm_digest = digest(&wasm);
+        let (wasm_sha, manifest_sha) = (hex(&wasm_digest), sha(&manifest_bytes));
         let cache = CwasmCache::open(&self.cache_dir())?;
-        let (component, _) = host.compile_cached(&wasm, &cache)?;
+        let (component, _) = host.compile_cached(&wasm, &wasm_digest, &cache)?;
         host.check_links(&component, &manifest.capabilities)?;
         let e = &mut lock.plugins[pos];
         let prompt = Prompt {
@@ -285,28 +387,29 @@ impl Store {
             lines: manifest.capabilities.describe(),
             always: ALWAYS,
             update_from: None,
-            changed_on_disk: e.sha256_wasm != sha(&wasm) || e.sha256_manifest != sha(&manifest_bytes),
+            changed_on_disk: e.sha256_wasm != wasm_sha || e.sha256_manifest != manifest_sha,
             replaces: None,
         };
         if !approve(&prompt) {
             return Err(StoreError::Declined);
         }
         e.version = manifest.plugin.version;
-        e.sha256_wasm = sha(&wasm);
-        e.sha256_manifest = sha(&manifest_bytes);
+        e.sha256_wasm = wasm_sha;
+        e.sha256_manifest = manifest_sha;
         e.granted = manifest.capabilities;
         self.write_lock(&lock)
     }
 
     /// Removes the code and the lock entry of a plugin in the lockfile; `plugin-data/<id>` is kept
-    /// so a reinstall keeps its state.
+    /// so a reinstall keeps its state. A removed bundled plugin stays removed.
     pub fn remove(&self, id: &str) -> Result<(), StoreError> {
         let dir = self.plugin_dir(id)?;
         let mut lock = self.read_lock()?;
-        let before = lock.plugins.len();
-        lock.plugins.retain(|p| p.id != id);
-        if before == lock.plugins.len() {
+        let Some(pos) = lock.plugins.iter().position(|p| p.id == id) else {
             return Err(StoreError::NotInstalled(id.to_owned()));
+        };
+        if lock.plugins.remove(pos).source == BUNDLED && !lock.removed_bundled.iter().any(|r| r == id) {
+            lock.removed_bundled.push(id.to_owned());
         }
         if dir.exists() {
             fs::remove_dir_all(&dir)?;
@@ -319,25 +422,31 @@ impl Store {
     }
 
     /// The installed manifest and wasm, only if both still hash to what was approved.
-    fn verify(&self, e: &LockEntry) -> Result<(Manifest, Vec<u8>), StoreError> {
+    fn verify(&self, e: &LockEntry) -> Result<(Manifest, Vec<u8>, [u8; 32]), StoreError> {
         let dir = self.plugin_dir(&e.id)?;
         let manifest_bytes = read_capped(&dir.join(MANIFEST))?;
         let wasm = read_capped(&dir.join(WASM))?;
-        if sha(&wasm) != e.sha256_wasm {
+        let wasm_digest = digest(&wasm);
+        if hex(&wasm_digest) != e.sha256_wasm {
             return Err(StoreError::Invalid(format!("{}: plugin.wasm does not match the lockfile; run `haunt plugin approve {}`", e.id, e.id)));
         }
         if sha(&manifest_bytes) != e.sha256_manifest {
             return Err(StoreError::Invalid(format!("{}: manifest does not match the lockfile; run `haunt plugin approve {}`", e.id, e.id)));
         }
         let manifest = Manifest::parse(&String::from_utf8_lossy(&manifest_bytes))?;
-        Ok((manifest, wasm))
+        Ok((manifest, wasm, wasm_digest))
     }
 
-    /// Loads every pinned plugin with exactly the capabilities the user granted.
-    pub fn load_all(&self, host: &PluginHost) -> Result<PluginSet, StoreError> {
+    /// Loads every pinned plugin with exactly the capabilities the user granted; `core` backs the
+    /// `decisions` and `allowlist` imports.
+    pub fn load_all(&self, host: &PluginHost, core: Option<&CoreHandle>) -> Result<PluginSet, StoreError> {
         let mut set = PluginSet { plugins: Vec::new(), errors: Vec::new() };
+        let cache = CwasmCache::open(&self.cache_dir());
+        // Plugins with the same grants share a linker.
+        let mut linkers: Vec<(Capabilities, Linker<HostState>)> = Vec::new();
         for e in self.read_lock()?.plugins {
-            let loaded = self.verify(&e).and_then(|(manifest, wasm)| {
+            let loaded = self.verify(&e).and_then(|(manifest, wasm, wasm_digest)| {
+                let cache = cache.as_ref().map_err(|err| StoreError::Invalid(err.to_string()))?;
                 let data = self.data_dir(&e.id);
                 mkdir_private(&data)?;
                 let spec = LoadSpec {
@@ -346,8 +455,17 @@ impl Store {
                     kv_path: Some(data.join("kv.json")),
                     settings_json: default_settings(&manifest),
                     haunt_dir: Some(self.home.clone()),
+                    core: core.cloned(),
                 };
-                Ok(host.load_bytes(&wasm, &self.cache_dir(), &spec)?.0)
+                let (component, _) = host.compile_cached(&wasm, &wasm_digest, cache)?;
+                let i = match linkers.iter().position(|(c, _)| *c == e.granted) {
+                    Some(i) => i,
+                    None => {
+                        linkers.push((e.granted.clone(), host.linker(&e.granted)?));
+                        linkers.len() - 1
+                    }
+                };
+                Ok(host.instantiate_with(&component, &spec, &linkers[i].1)?)
             });
             match loaded {
                 Ok(p) => set.plugins.push((e.granted, p)),
@@ -368,6 +486,11 @@ impl PluginSet {
     /// Plugins that were not loaded, with the reason (hash mismatch, link failure, trap in `init`).
     pub fn errors(&self) -> &[String] {
         &self.errors
+    }
+
+    /// Lists problems found before loading, such as a bundled plugin that couldn't be installed.
+    pub fn add_errors(&mut self, errors: Vec<String>) {
+        self.errors.splice(0..0, errors);
     }
 
     pub fn ids(&self) -> Vec<String> {
@@ -394,19 +517,45 @@ impl PluginSet {
     }
 
     pub fn invoke(&mut self, plugin_id: &str, item_id: &str) -> Result<(), PluginError> {
-        let (_, p) = self
-            .plugins
+        self.plugin(plugin_id)?.on_action(item_id, "")
+    }
+
+    fn plugin(&mut self, plugin_id: &str) -> Result<&mut LoadedPlugin, PluginError> {
+        self.plugins
             .iter_mut()
-            .find(|(_, p)| p.id() == plugin_id)
-            .ok_or_else(|| PluginError(format!("no loaded plugin {plugin_id}")))?;
-        p.on_action(item_id, "")
+            .map(|(_, p)| p)
+            .find(|p| p.id() == plugin_id)
+            .ok_or_else(|| PluginError(format!("no loaded plugin {plugin_id}")))
+    }
+
+    /// Every loaded plugin's context-menu entries for the row of `surface`.
+    pub fn row_menu(&mut self, surface: &str) -> Vec<RowMenuItem> {
+        self.plugins
+            .iter_mut()
+            .filter(|(_, p)| p.disabled().is_none())
+            .flat_map(|(_, p)| p.row_menu(surface).unwrap_or_default())
+            .collect()
+    }
+
+    /// A chosen context-menu entry: `on-action(item_id, surface)`.
+    pub fn invoke_row_item(&mut self, plugin_id: &str, item_id: &str, surface: &str) -> Result<(), PluginError> {
+        self.plugin(plugin_id)?.on_action(item_id, surface)
+    }
+
+    /// A row dropped into snapshot group `group` above `before`; only `sidebar` plugins hear it.
+    pub fn row_moved(&mut self, surface: &str, group: &str, before: Option<&str>) {
+        for (caps, p) in &mut self.plugins {
+            if caps.sidebar {
+                let _ = p.on_row_moved(surface, group, before);
+            }
+        }
     }
 
     /// Delivers `event` to plugins whose `events` grant covers it; `verified` as the core decided it.
     pub fn on_event(&mut self, event: &AgentEvent, verified: bool) -> Vec<(String, Decoration)> {
         let mut out = Vec::new();
         for (caps, p) in &mut self.plugins {
-            if caps.wants_event(&event.kind)
+            if caps.wants_event(&event.kind, verified)
                 && let Ok(Some(d)) = p.on_event(event, verified)
             {
                 out.push((p.id().to_owned(), d));
@@ -427,23 +576,24 @@ impl PluginSet {
     }
 }
 
-/// `$HAUNT_HOME`, else `~/.haunt`.
-pub fn default_home() -> PathBuf {
-    if let Some(h) = std::env::var_os("HAUNT_HOME") {
-        return PathBuf::from(h);
-    }
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".haunt")
+/// Sends the core's events to `set`'s plugins for as long as `set` lives. Row decorations are
+/// dropped until the snapshot has a place for them.
+pub fn attach(core: &crate::Core, set: &Arc<Mutex<PluginSet>>) {
+    let weak = Arc::downgrade(set);
+    core.set_event_tap(Some(Arc::new(move |event, verified| {
+        if let Some(set) = weak.upgrade() {
+            crate::sync::lock(&set).on_event(event, verified);
+        }
+    })));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testdir::TempDir;
 
-    fn tempdir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("haunt-store-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
+    fn tempdir(tag: &str) -> TempDir {
+        TempDir::created(&format!("store-{tag}"))
     }
 
     fn src(dir: &Path, caps: &str) -> PathBuf {
@@ -451,7 +601,7 @@ mod tests {
         fs::create_dir_all(&s).unwrap();
         fs::write(
             s.join(MANIFEST),
-            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.1\"\nentry = \"p.wasm\"\n[capabilities]\n{caps}\n"),
+            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.3\"\nentry = \"p.wasm\"\n[capabilities]\n{caps}\n"),
         )
         .unwrap();
         fs::write(s.join("p.wasm"), "(component)").unwrap();
@@ -491,7 +641,6 @@ mod tests {
         store.remove("dev.haunt.t").unwrap();
         assert!(store.list().unwrap().is_empty());
         assert!(!home.join("plugins/dev.haunt.t").exists());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -520,7 +669,6 @@ mod tests {
         let r = store.install(&other, &host, &mut |_| true).unwrap();
         assert_eq!(r, Installed::Replaced { old_source });
         assert_eq!(store.list().unwrap()[0].entry.source, other.canonicalize().unwrap().display().to_string());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -537,7 +685,6 @@ mod tests {
         store.approve("dev.haunt.t", &host, &mut |p| { changed = p.changed_on_disk; true }).unwrap();
         assert!(changed);
         assert!(store.list().unwrap()[0].problem.is_none());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -550,7 +697,6 @@ mod tests {
         let e = store.install(Path::new("https://github.com/x/y"), &host, &mut |_| true).unwrap_err().to_string();
         assert!(e.contains("only local paths"), "{e}");
         assert!(store.list().unwrap().is_empty());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -570,7 +716,6 @@ mod tests {
         fs::create_dir(store.plugins_dir().join("dev.haunt.stray")).unwrap();
         assert!(matches!(store.remove("dev.haunt.stray"), Err(StoreError::NotInstalled(_))), "only lockfile entries");
         assert!(store.plugins_dir().join("dev.haunt.stray").exists());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -588,7 +733,71 @@ mod tests {
         assert!(matches!(store.approve("dev.haunt.t", &host, &mut |_| true), Err(StoreError::Invalid(_))));
         assert!(store.list().unwrap()[0].problem.as_deref().unwrap().contains("symlink"));
         assert!(victim.join(WASM).exists(), "the link target is untouched");
-        fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn bundle(dir: &Path, id: &str, version: &str, caps: &str) -> PathBuf {
+        let b = dir.join("bundled");
+        fs::create_dir_all(b.join(id)).unwrap();
+        fs::write(
+            b.join(id).join(MANIFEST),
+            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"{version}\"\napi = \"0.3\"\nentry = \"plugin.wasm\"\n[capabilities]\n{caps}\n"),
+        )
+        .unwrap();
+        fs::write(b.join(id).join(WASM), "(component)").unwrap();
+        b
+    }
+
+    #[test]
+    fn bundled_plugins_install_silently_and_update_only_without_growth() {
+        let dir = tempdir("bundled");
+        let store = Store::open(&dir.join("home")).unwrap();
+        let host = PluginHost::new().unwrap();
+        let b = bundle(&dir, "dev.haunt.t", "0.1.0", "decisions_read = true");
+        assert!(store.install_bundled(&b, &host).unwrap().is_empty());
+        let l = store.list().unwrap();
+        assert_eq!((l[0].entry.source.as_str(), l[0].problem.as_deref()), (BUNDLED, None));
+        assert!(l[0].entry.granted.decisions_read);
+
+        bundle(&dir, "dev.haunt.t", "0.2.0", "");
+        store.install_bundled(&b, &host).unwrap();
+        let l = store.list().unwrap();
+        assert_eq!((l[0].entry.version.as_str(), l[0].problem.as_deref()), ("0.2.0", None));
+        assert!(!l[0].entry.granted.decisions_read, "a shrunk grant is pinned as shipped");
+
+        bundle(&dir, "dev.haunt.t", "0.3.0", "notifications = true");
+        store.install_bundled(&b, &host).unwrap();
+        let l = store.list().unwrap();
+        assert_eq!(l[0].entry.version, "0.2.0", "growth is not pinned");
+        assert!(!l[0].entry.granted.notifications);
+        assert!(l[0].problem.as_deref().is_some_and(|p| p.contains("haunt plugin approve")), "{:?}", l[0].problem);
+        assert!(store.load_all(&host, None).unwrap().errors()[0].contains("does not match"));
+        store.approve("dev.haunt.t", &host, &mut |_| true).unwrap();
+        let l = store.list().unwrap();
+        assert_eq!((l[0].entry.version.as_str(), l[0].entry.granted.notifications, l[0].entry.source.as_str()), ("0.3.0", true, BUNDLED));
+
+        store.remove("dev.haunt.t").unwrap();
+        store.install_bundled(&b, &host).unwrap();
+        assert!(store.list().unwrap().is_empty(), "a removed bundled plugin stays removed");
+    }
+
+    #[test]
+    fn bundled_plugins_never_replace_a_users_copy_or_another_id() {
+        let dir = tempdir("bundled-user");
+        let store = Store::open(&dir.join("home")).unwrap();
+        let host = PluginHost::new().unwrap();
+        let mine = src(&dir, "");
+        store.install(&mine, &host, &mut |_| true).unwrap();
+        let b = bundle(&dir, "dev.haunt.t", "9.0.0", "pty_write = true");
+        assert!(store.install_bundled(&b, &host).unwrap().is_empty());
+        let l = store.list().unwrap();
+        assert_eq!((l[0].entry.version.as_str(), l[0].problem.as_deref()), ("0.1.0", None));
+        assert!(!l[0].entry.granted.pty_write);
+
+        let b = bundle(&dir, "dev.haunt.other", "0.1.0", "");
+        let e = store.install_bundled(&b, &host).unwrap();
+        assert!(e.iter().any(|l| l.contains("dev.haunt.other") && l.contains("manifest is for dev.haunt.t")), "{e:?}");
+        assert!(!dir.join("home/plugins/dev.haunt.other").exists());
+        assert!(store.install_bundled(&dir.join("missing"), &host).unwrap().is_empty());
     }
 
     #[test]
@@ -600,6 +809,5 @@ mod tests {
         fs::write(home.join(LOCKFILE), "").unwrap();
         fs::set_permissions(home.join(LOCKFILE), fs::Permissions::from_mode(0o666)).unwrap();
         assert!(store.list().is_err());
-        fs::remove_dir_all(dir).unwrap();
     }
 }

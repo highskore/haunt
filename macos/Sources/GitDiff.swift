@@ -237,14 +237,19 @@ enum GitRunner {
         "gpg.openpgp.program=", "gpg.x509.program=", "gpg.ssh.program=", "core.editor=true", "sequence.editor=true",
     ]
 
-    /// Whether the repo's config defines any filter driver (a working-tree diff would run `clean` or
-    /// `process` for paths `.gitattributes` assigns to it); nil when that can't be told. Reading config runs nothing.
-    static func hasFilters(cwd: String) -> Bool? {
-        guard let o = run(["config", "--name-only", "-z", "--get-regexp", #"^filter\."#], cwd: cwd), !o.timedOut else { return nil }
-        switch o.status {
-        case 0: return true
-        case 1: return false
-        default: return nil
+    /// Whether the repo's config defines a filter, textconv or external diff driver (a working-tree diff
+    /// could run one for paths its attributes name); nil when that can't be told. Reading config runs nothing.
+    static func definesDrivers(cwd: String) -> Bool? {
+        guard let o = run(["config", "--show-scope", "-z", "--get-regexp", #"^(filter|diff)\."#], cwd: cwd),
+              !o.timedOut, !o.truncated else { return nil }
+        if o.status == 1 { return false }
+        guard o.status == 0 else { return nil }
+        // "scope\0key\nvalue\0" per entry; the command scope is safeConfig's own pins.
+        let fields = o.data.split(separator: 0, omittingEmptySubsequences: false).map { String(decoding: $0, as: UTF8.self) }
+        return stride(from: 0, to: fields.count - 1, by: 2).contains { i in
+            guard fields[i] != "command" else { return false }
+            let key = fields[i + 1].prefix { $0 != "\n" }
+            return key.hasPrefix("filter.") || key == "diff.external" || key.hasPrefix("diff.") && (key.hasSuffix(".textconv") || key.hasSuffix(".command"))
         }
     }
 
@@ -379,12 +384,13 @@ enum ReviewLoader {
 
         // Reading the working tree can run a filter driver; comparing two commits never does.
         let readTree: Bool
-        switch (GitRunner.hasFilters(cwd: root), GitRunner.supportsAttrSource) {
+        switch (GitRunner.definesDrivers(cwd: root), GitRunner.supportsAttrSource) {
         case (false?, true):
             readTree = true
         case (true?, _):
             readTree = false
-            notes.append("This repository defines git filters. Haunt won't run them, so only committed changes are shown.")
+            notes.append("This repository defines git filters or diff drivers, so the working-tree diff is skipped "
+                         + "and only committed changes are shown.")
         case (nil, _):
             readTree = false
             notes.append("Haunt couldn't read this repository's filter settings, so only committed changes are shown.")

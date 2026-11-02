@@ -28,7 +28,6 @@ struct PaletteRow: Equatable {
 protocol PaletteHost: AnyObject {
     var paletteTabs: [Row] { get }
     var selectedSurfaceId: String? { get }
-    func paletteDecisions(query: String) -> [Decision]
     var palettePlugins: PluginsAPI? { get }
     var pluginLoadErrors: [String] { get }
     func paletteSelectTab(_ surfaceId: String)
@@ -40,9 +39,8 @@ protocol PaletteHost: AnyObject {
     func paletteDidClose()
 }
 
-/// ⌘K: fuzzy jump to tabs, `log` for the core's decision log, and plugin commands and modes.
+/// ⌘K: fuzzy jump to tabs, app commands, and plugin commands and modes (`log` is the decision-log plugin's).
 final class PaletteController: NSObject, NSWindowDelegate {
-    static let logMode = "log"
     private static let maxRows = 8
 
     private weak var host: PaletteHost?
@@ -50,8 +48,11 @@ final class PaletteController: NSObject, NSWindowDelegate {
     private let view = PaletteView()
     private(set) var mode: String?
     private var query = ""
-    /// ⇥ in `log` mode: only the selected tab's decisions.
+    /// ⇥ in a mode whose rows name tabs (`log`): only the selected tab's rows.
     private var tabFilter: String?
+    /// The start of the day the rows were last built, for their times.
+    private var today = Date()
+    private var rowsNameTabs = false
     /// Fixture captures keep it open when focus moves to another app mid-capture.
     var sticky = false
 
@@ -90,7 +91,9 @@ final class PaletteController: NSObject, NSWindowDelegate {
     }
 
     /// Centred on `parent`, `top` points below its top edge; the height follows the rows shown.
+    /// It keeps the same margin below as above, scrolling rows that don't fit.
     func position(over parent: NSWindow, top: CGFloat) {
+        view.heightLimit = parent.frame.height - top - Tok.Size.paletteTop
         let size = view.fittingSize
         let x = (parent.frame.midX - size.width / 2).rounded()
         panel.setFrame(NSRect(x: x, y: parent.frame.maxY - top - size.height, width: size.width, height: size.height), display: true)
@@ -152,7 +155,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
             view.moveSelection(1)
             resize()
         case .tab:
-            guard mode == Self.logMode else { return }
+            guard rowsNameTabs else { return }
             tabFilter = tabFilter == nil ? host?.selectedSurfaceId : nil
             reload()
         case .enter: activate(view.selectedRow)
@@ -181,27 +184,29 @@ final class PaletteController: NSObject, NSWindowDelegate {
     }
 
     private func modes() -> [String] {
-        [Self.logMode] + (host?.palettePlugins?.paletteItems(mode: nil, query: "").filter(\.isMode).map(\.id) ?? [])
+        host?.palettePlugins?.paletteItems(mode: nil, query: "").filter(\.isMode).map(\.id) ?? []
     }
 
     // MARK: Rows
 
     private func reload() {
+        today = Calendar.current.startOfDay(for: Date())
         let rows: [PaletteRow]
         var foot: [String]
         switch mode {
         case nil:
             rows = defaultRows()
+            rowsNameTabs = false
             foot = ["↵ open"]
-        case Self.logMode?:
-            rows = logRows()
-            foot = ["↵ jump to tab", tabFilter == nil ? "⇥ filter by tab" : "⇥ all tabs"]
         case let m?:
-            rows = (host?.palettePlugins?.paletteItems(mode: m, query: query) ?? []).map(pluginRow)
-            foot = ["↵ run"]
+            let items = host?.palettePlugins?.paletteItems(mode: m, query: query) ?? []
+            rows = items.filter { tabFilter == nil || $0.surfaceId == tabFilter }.map(pluginRow)
+            rowsNameTabs = items.contains { $0.surfaceId != nil }
+            foot = rowsNameTabs
+                ? ["↵ jump to tab", tabFilter == nil ? "⇥ filter by tab" : "⇥ all tabs"] : ["↵ run"]
         }
         if rows.isEmpty { foot = [] }
-        view.update(chip: mode, query: query, placeholder: mode == nil ? "Jump to a tab, or type log" : "",
+        view.update(chip: mode, query: query, placeholder: mode == nil ? "Jump to a tab or command, or type log" : "",
                     rows: rows.isEmpty ? [PaletteRow(title: "No matches", sub: "", dim: true)] : rows,
                     foot: foot, maxRows: Self.maxRows)
         resize()
@@ -235,8 +240,6 @@ final class PaletteController: NSObject, NSWindowDelegate {
                                  action: .command(a))
             scored.append((s, scored.count, row))
         }
-        let logRow = PaletteRow(title: Self.logMode, sub: "Search the decision log", action: .enterMode(Self.logMode))
-        if let s = Fuzzy.score(query, Self.logMode) { scored.append((s - 10, scored.count, logRow)) }
         for item in host.palettePlugins?.paletteItems(mode: nil, query: query) ?? [] {
             scored.append((Fuzzy.score(query, item.title) ?? 0, scored.count, pluginRow(item)))
         }
@@ -247,72 +250,41 @@ final class PaletteController: NSObject, NSWindowDelegate {
         return rows
     }
 
+    /// A row naming an open tab (`surfaceId`) jumps to it; one with a time or mark is a log line, laid out as such.
     private func pluginRow(_ item: PaletteItem) -> PaletteRow {
-        PaletteRow(title: item.title, sub: item.subtitle ?? item.pluginId,
-                   right: item.defaultKey.map { .key(Shortcut.parse($0)?.display ?? $0) } ?? .none,
-                   action: item.isMode ? .enterMode(item.id) : .plugin(pluginId: item.pluginId, itemId: item.id))
+        let tab = item.surfaceId.flatMap { s in host?.paletteTabs.contains { $0.surfaceId == s } == true ? s : nil }
+        let logLine = item.atMs != nil || item.mark != nil || item.surfaceId != nil
+        // The binding `[keys]` gave it, which may differ from, or have refused, the plugin's default.
+        let key = host?.paletteKeys.plugin[KeyMap.pluginName(item.pluginId, item.id)].map { PaletteRow.Right.key($0.display) } ?? .none
+        return PaletteRow(left: item.atMs.map { Self.time($0, today: today) } ?? "", mark: item.mark.map(Self.mark),
+                          title: item.title, sub: item.subtitle ?? (logLine ? "" : item.pluginId),
+                          right: tab == nil ? key : .jump,
+                          action: tab.map { .tab($0) } ?? (item.isMode ? .enterMode(item.id) : .plugin(pluginId: item.pluginId, itemId: item.id)))
     }
 
-    private func logRows() -> [PaletteRow] {
-        guard let host else { return [] }
-        let names = Dictionary(host.paletteTabs.map { ($0.surfaceId, $0.name) }, uniquingKeysWith: { a, _ in a })
-        return host.paletteDecisions(query: query)
-            .filter { tabFilter == nil || $0.surfaceId == tabFilter }
-            .map { d in
-                let tab = names[d.surfaceId] ?? d.cwd.map { ($0 as NSString).lastPathComponent } ?? d.surfaceId
-                let place = [tab, Self.agentName(d.agent)].compactMap { $0 }.joined(separator: " · ")
-                let what = d.tool == "Bash" ? d.preview : "\(d.tool) \(d.preview)"
-                return PaletteRow(left: Self.time(d.atMs), mark: Self.mark(d.outcome),
-                                  title: "\(Self.phrase(d.outcome)) \(what)", sub: place,
-                                  right: names[d.surfaceId] == nil ? .none : .jump,
-                                  action: names[d.surfaceId] == nil ? .none : .tab(d.surfaceId))
-            }
-    }
-
-    /// Claude is left implicit so the all-Claude log matches the mockup's tab-only sub line.
-    static func agentName(_ a: Agent) -> String? {
-        switch a {
-        case .claude: return nil
-        case .codex: return "Codex"
-        case let .other(id): return id
+    static func mark(_ m: Mark) -> PaletteRow.Mark {
+        switch m {
+        case .open: return .open
+        case .filled: return .filled
+        case .round: return .round
         }
     }
 
-    static func phrase(_ o: Outcome) -> String {
-        switch o {
-        case .allowedInHaunt: return "You approved"
-        case .deniedInHaunt: return "You denied"
-        case let .allowedByPlugin(id): return "\(id) approved"
-        case let .deniedByPlugin(id): return "\(id) denied"
-        case .answeredInTerminal: return "Allowed in terminal:"
-        case .superseded: return "Superseded:"
-        }
-    }
-
-    /// The mockup's markers: open square for your answers, filled for a plugin's, round for one that lapsed.
-    static func mark(_ o: Outcome) -> PaletteRow.Mark {
-        switch o {
-        case .allowedInHaunt, .deniedInHaunt, .answeredInTerminal: return .open
-        case .allowedByPlugin, .deniedByPlugin: return .filled
-        case .superseded: return .round
-        }
-    }
-
-    /// "14:02" today, "Sat" this week, "10/3" before that.
-    static func time(_ ms: UInt64, now: Date = Date()) -> String {
-        let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
-        let cal = Calendar.current
+    private static func formatter(_ format: String) -> DateFormatter {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        if cal.isDate(date, inSameDayAs: now) {
-            f.dateFormat = "HH:mm"
-        } else if let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: now)).day,
-                  days < 7 {
-            f.dateFormat = "EEE"
-        } else {
-            f.dateFormat = "M/d"
-        }
-        return f.string(from: date)
+        f.dateFormat = format
+        return f
+    }
+
+    private static let clock = formatter("HH:mm"), weekday = formatter("EEE"), monthDay = formatter("M/d")
+
+    /// "14:02" today, "Sat" this week, "10/3" before that. `today` is the start of the current day.
+    static func time(_ ms: UInt64, today: Date) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
+        let cal = Calendar.current
+        let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: today).day ?? .max
+        return (days == 0 ? clock : days < 7 ? weekday : monthDay).string(from: date)
     }
 }
 
@@ -353,6 +325,9 @@ final class PaletteView: NSView {
     private var maxRows = 8
     private var selected = 0
     private var scroll = 0
+    /// The most the panel may be tall; rows past it scroll, but at least `minRows` stay.
+    var heightLimit = CGFloat.infinity { didSet { if heightLimit != oldValue { clampScroll(); needsDisplay = true } } }
+    private static let minRows = 3
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -384,9 +359,18 @@ final class PaletteView: NSView {
     }
 
     private func clampScroll() {
+        let n = rowsShown
         if selected < scroll { scroll = selected }
-        if selected >= scroll + maxRows { scroll = selected - maxRows + 1 }
-        scroll = max(0, min(scroll, max(0, rows.count - maxRows)))
+        if selected >= scroll + n { scroll = selected - n + 1 }
+        scroll = max(0, min(scroll, max(0, rows.count - n)))
+    }
+
+    /// `maxRows`, cut to what fits in `heightLimit` with every entry at its full (ruled) height.
+    private var rowsShown: Int {
+        let fixed = 2 * border + inputH + footH + Tok.Size.paletteListPad[0] * 2
+        let entry = Tok.Size.paletteEntryPad[0] * 2 + textLines + 1
+        let fit = heightLimit.isFinite ? Int(((heightLimit - fixed) / entry).rounded(.down)) : maxRows
+        return max(Self.minRows, min(maxRows, fit))
     }
 
     // MARK: Geometry (pt, inside the 1 pt border)
@@ -400,7 +384,7 @@ final class PaletteView: NSView {
     private var footH: CGFloat {
         foot.isEmpty ? 0 : 1 + Tok.Size.paletteFootPad[0] * 2 + Tok.Size.paletteSmallFont * lh
     }
-    private var visible: Range<Int> { scroll..<min(rows.count, scroll + maxRows) }
+    private var visible: Range<Int> { scroll..<min(rows.count, scroll + rowsShown) }
 
     /// The mockup's last-child rule: the selected entry (alone in its `.sel` wrapper) and the last one have no rule.
     private func hasRule(_ i: Int) -> Bool { i != selected && i != visible.upperBound - 1 }
@@ -620,7 +604,7 @@ final class PaletteView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         let d = event.scrollingDeltaY > 0 ? -1 : event.scrollingDeltaY < 0 ? 1 : 0
-        scroll = max(0, min(scroll + d, max(0, rows.count - maxRows)))
+        scroll = max(0, min(scroll + d, max(0, rows.count - rowsShown)))
         needsDisplay = true
     }
 }

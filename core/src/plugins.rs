@@ -1,4 +1,4 @@
-//! wasmtime host for `haunt:plugin@0.1` components (plan sections 3.3 and 3.8).
+//! wasmtime host for `haunt:plugin@0.3` components (plan sections 3.3 and 3.8).
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Config, Engine, EngineWeak, Store, StoreContextMut, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxView, WasiView};
@@ -13,14 +14,21 @@ use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxView, Was
 use crate::event::{AgentEvent, EventKind};
 use crate::plugin_cache::{CacheError, CwasmCache, cache_name};
 use crate::plugin_fs::FsScope;
+use crate::arrange::{Arrangement, ColorStyle, Section, StateGroup, TabColor};
+use crate::layout::RowKind;
+use crate::model::{CoreHandle, SidebarToken};
 use crate::plugin_manifest::{Capabilities, KV_CAP};
+use crate::session::Outcome;
 
 mod bindings {
     wasmtime::component::bindgen!({ path: "../wit/haunt-plugin.wit", world: "plugin" });
 }
 
 use bindings::Plugin;
-use bindings::haunt::plugin::{kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, types as wit};
+use bindings::haunt::plugin::{
+    allowlist as wallow, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, sidebar as wside,
+    types as wit,
+};
 
 pub const MEMORY_CAP: usize = 64 << 20;
 const TICK: Duration = Duration::from_millis(10);
@@ -31,6 +39,9 @@ const MAX_PALETTE: usize = 64;
 const MAX_OUTBOX: usize = 256;
 const MAX_LOGS: usize = 1000;
 const MAX_STR: usize = 4096;
+const MAX_DECISIONS: u32 = 1000;
+/// One-off approvals (an `export TOKEN=…`, say) never reach a plugin; repeats are what rules are for.
+pub const APPROVALS_MIN: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decoration {
@@ -57,6 +68,31 @@ pub struct PaletteItem {
     pub subtitle: Option<String>,
     pub default_key: Option<String>,
     pub is_mode: bool,
+    /// Unix ms for the time column.
+    pub at_ms: Option<u64>,
+    pub mark: Option<Mark>,
+    /// Enter jumps to this tab, if it is open, instead of invoking the item.
+    pub surface_id: Option<String>,
+}
+
+/// The decision-log markers: open square for your answers, filled for a plugin's, round for one that lapsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
+pub enum Mark {
+    Open,
+    Filled,
+    Round,
+}
+
+/// A row context-menu entry; one with a `parent` goes in that entry's submenu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
+pub struct RowMenuItem {
+    pub plugin_id: String,
+    pub id: String,
+    pub title: String,
+    pub checked: bool,
+    pub parent: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,12 +140,16 @@ pub struct LoadSpec {
     pub settings_json: String,
     /// The haunt dir (`~/.haunt`) the plugin's `${cwd}` may never point into.
     pub haunt_dir: Option<PathBuf>,
+    /// What `decisions` and `allowlist` read and propose to; without it they see nothing.
+    pub core: Option<CoreHandle>,
 }
 
+/// Written once per export call (`LoadedPlugin::call`) and on drop, not once per `set`.
 struct Kv {
     map: BTreeMap<String, String>,
     bytes: usize,
     path: Option<PathBuf>,
+    dirty: bool,
 }
 
 impl Kv {
@@ -120,7 +160,7 @@ impl Kv {
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
         let bytes = map.iter().map(|(k, v)| k.len() + v.len()).sum();
-        Self { map, bytes, path }
+        Self { map, bytes, path, dirty: false }
     }
 
     fn set(&mut self, key: String, value: String) -> Result<(), String> {
@@ -131,21 +171,30 @@ impl Kv {
         }
         self.map.insert(key, value);
         self.bytes = bytes;
-        self.persist()
-    }
-
-    fn delete(&mut self, key: &str) -> Result<(), String> {
-        if let Some(v) = self.map.remove(key) {
-            self.bytes -= key.len() + v.len();
-            self.persist()?;
-        }
+        self.dirty = true;
         Ok(())
     }
 
-    fn persist(&self) -> Result<(), String> {
-        let Some(path) = &self.path else { return Ok(()) };
+    fn delete(&mut self, key: &str) {
+        if let Some(v) = self.map.remove(key) {
+            self.bytes -= key.len() + v.len();
+            self.dirty = true;
+        }
+    }
+
+    /// A failed write stays dirty and is tried again after the next call.
+    fn flush(&mut self) -> Result<(), String> {
+        let Some(path) = self.path.as_deref().filter(|_| self.dirty) else { return Ok(()) };
         let json = serde_json::to_vec(&self.map).map_err(|e| e.to_string())?;
-        crate::plugin_cache::write_atomic(path, &json).map_err(|e| e.to_string())
+        crate::plugin_cache::write_atomic(path, &json).map_err(|e| e.to_string())?;
+        self.dirty = false;
+        Ok(())
+    }
+}
+
+impl Drop for Kv {
+    fn drop(&mut self) {
+        let _ = self.flush();
     }
 }
 
@@ -160,10 +209,19 @@ pub struct HostState {
     outbox: Vec<HostRequest>,
     fs: FsScope,
     pty_times: VecDeque<Instant>,
+    core: Option<CoreHandle>,
+    /// Set while this instance may arrange the sidebar.
+    sidebar: Option<SidebarToken>,
+}
+
+impl Drop for HostState {
+    fn drop(&mut self) {
+        self.release_sidebar();
+    }
 }
 
 impl HostState {
-    fn new(id: &str, caps: &Capabilities, kv_path: Option<PathBuf>, haunt_dir: Option<&Path>) -> Self {
+    fn new(id: &str, caps: &Capabilities, kv_path: Option<PathBuf>, haunt_dir: Option<&Path>, core: Option<CoreHandle>) -> Self {
         Self {
             id: id.to_owned(),
             logs: Vec::new(),
@@ -175,6 +233,22 @@ impl HostState {
             outbox: Vec::new(),
             fs: FsScope::new(&caps.fs_read, &caps.fs_write, haunt_dir),
             pty_times: VecDeque::new(),
+            sidebar: match &core {
+                Some(c) if caps.sidebar => Some(c.attach_sidebar()),
+                Some(c) => {
+                    c.forget_arrangement_of(id);
+                    None
+                }
+                None => None,
+            },
+            core,
+        }
+    }
+
+    /// Gives up the sidebar: a disabled, reloaded or dropped instance's arrangement goes with it.
+    fn release_sidebar(&mut self) {
+        if let (Some(core), Some(token)) = (&self.core, self.sidebar.take()) {
+            core.detach_sidebar(token);
         }
     }
 
@@ -211,7 +285,17 @@ impl HostState {
             return;
         }
         let (id, title, default_key) = (clip(id), clip(title), default_key.map(clip));
-        self.palette.push(PaletteItem { plugin_id: self.id.clone(), id, title, subtitle: None, default_key, is_mode });
+        self.palette.push(PaletteItem {
+            plugin_id: self.id.clone(),
+            id,
+            title,
+            subtitle: None,
+            default_key,
+            is_mode,
+            at_ms: None,
+            mark: None,
+            surface_id: None,
+        });
     }
 }
 
@@ -254,9 +338,7 @@ impl wkv::Host for HostState {
         self.kv.set(key, value)
     }
     fn delete(&mut self, key: String) {
-        if let Err(e) = self.kv.delete(&key) {
-            self.push_log(format!("error kv delete: {e}"));
-        }
+        self.kv.delete(&key);
     }
 }
 
@@ -288,6 +370,104 @@ impl wpty::Host for HostState {
         let surface = clip(surface);
         self.push_log(format!("info pty.answer surface={surface} allow={allow} request={request_id}"));
         self.request(HostRequest::PtyAnswer { plugin_id: self.id.clone(), surface, allow, request_id })
+    }
+}
+
+impl wdec::Host for HostState {
+    fn query(&mut self, text: String, limit: u32) -> Vec<wdec::Decision> {
+        let Some(core) = &self.core else { return Vec::new() };
+        core.decisions(&text, limit.min(MAX_DECISIONS))
+            .into_iter()
+            .map(|d| wdec::Decision {
+                at_ms: d.at_ms,
+                surface_id: d.surface_id,
+                tool: d.tool,
+                preview: d.preview,
+                cwd: d.cwd,
+                outcome: match d.outcome {
+                    Outcome::AllowedInHaunt => wdec::Outcome::AllowedInHaunt,
+                    Outcome::DeniedInHaunt => wdec::Outcome::DeniedInHaunt,
+                    Outcome::AllowedByPlugin { plugin_id } => wdec::Outcome::AllowedByPlugin(plugin_id),
+                    Outcome::DeniedByPlugin { plugin_id } => wdec::Outcome::DeniedByPlugin(plugin_id),
+                    Outcome::AnsweredInTerminal => wdec::Outcome::AnsweredInTerminal,
+                    Outcome::Superseded => wdec::Outcome::Superseded,
+                },
+                agent: d.agent.id().to_owned(),
+            })
+            .collect()
+    }
+}
+
+impl wallow::Host for HostState {
+    fn approvals(&mut self, min_count: u32) -> Vec<wallow::Approval> {
+        let Some(core) = &self.core else { return Vec::new() };
+        core.approvals(min_count.max(APPROVALS_MIN))
+            .into_iter()
+            .map(|a| wallow::Approval { project: a.project, command: a.command, count: a.count, last_at_ms: a.last_at_ms })
+            .collect()
+    }
+
+    fn propose(&mut self, project: String, command: String) -> Result<(), String> {
+        let core = self.core.as_ref().ok_or("no haunt core attached")?;
+        core.propose_allow_rule(&self.id, &project, &command).map_err(|e| e.to_string())
+    }
+}
+
+impl wside::Host for HostState {
+    fn rows(&mut self) -> Vec<wside::RowInfo> {
+        let Some(core) = &self.core else { return Vec::new() };
+        core.sidebar_rows()
+            .into_iter()
+            .map(|r| wside::RowInfo {
+                surface: r.surface,
+                name: r.name,
+                kind: match r.kind {
+                    RowKind::Shell => "shell",
+                    RowKind::Claude => "claude",
+                    RowKind::Codex => "codex",
+                }
+                .to_owned(),
+                group: match r.group {
+                    StateGroup::NeedsYou => wside::StateGroup::NeedsYou,
+                    StateGroup::Running => wside::StateGroup::Running,
+                    StateGroup::Idle => wside::StateGroup::Idle,
+                },
+                selected: r.selected,
+            })
+            .collect()
+    }
+
+    fn arrange(&mut self, a: wside::Arrangement) -> Result<(), String> {
+        let core = self.core.as_ref().ok_or("no haunt core attached")?;
+        let color = |c: wside::TabColor| match c {
+            wside::TabColor::Red => TabColor::Red,
+            wside::TabColor::Orange => TabColor::Orange,
+            wside::TabColor::Yellow => TabColor::Yellow,
+            wside::TabColor::Green => TabColor::Green,
+            wside::TabColor::Blue => TabColor::Blue,
+            wside::TabColor::Purple => TabColor::Purple,
+            wside::TabColor::Gray => TabColor::Gray,
+        };
+        let a = Arrangement {
+            pinned: a.pinned,
+            sections: a.sections.into_iter().map(|s| Section { id: s.id, title: s.title, surfaces: s.surfaces }).collect(),
+            sections_after_state: a.placement == wside::Placement::AfterState,
+            order: a.order,
+            flat: a.flat,
+            colors: a.colors.into_iter().map(|(s, c)| (s, color(c))).collect(),
+            color_style: match a.color_style {
+                wside::ColorStyle::Dot => ColorStyle::Dot,
+                wside::ColorStyle::Tint => ColorStyle::Tint,
+            },
+        };
+        let token = self.sidebar.ok_or("not loaded with the sidebar capability")?;
+        core.set_arrangement(&self.id, token, a).map_err(|e| e.to_string())
+    }
+
+    fn clear(&mut self) {
+        if let (Some(core), Some(token)) = (&self.core, self.sidebar) {
+            core.clear_arrangement(token);
+        }
     }
 }
 
@@ -398,6 +578,10 @@ impl LoadedPlugin {
         self.store.set_epoch_deadline(CALL_TICKS);
         let (bindings, store) = (&self.bindings, &mut self.store);
         let res = self.epoch.ticking(|| f(bindings, store));
+        let data = self.store.data_mut();
+        if let Err(e) = data.kv.flush() {
+            data.push_log(format!("error kv write: {e}"));
+        }
         res.map_err(|e| {
             let why = if e.downcast_ref::<Trap>() == Some(&Trap::Interrupt) {
                 format!("plugin {} exceeded its {} ms CPU budget and was disabled", self.id(), CALL_TICKS * TICK.as_millis() as u64)
@@ -405,6 +589,7 @@ impl LoadedPlugin {
                 format!("plugin {} trapped and was disabled: {e:#}", self.id())
             };
             self.disabled = Some(why.clone());
+            self.store.data_mut().release_sidebar();
             PluginError(why)
         })
     }
@@ -432,6 +617,7 @@ impl LoadedPlugin {
             agent_id: event.agent_id.clone(),
             cwd: event.cwd.clone(),
             summary,
+            verified,
         };
         let out = self.call(|b, s| b.call_on_event(s, &ev))?;
         Ok(out.map(|d| Decoration {
@@ -467,12 +653,33 @@ impl LoadedPlugin {
                 subtitle: i.subtitle.map(clip),
                 default_key: None,
                 is_mode: false,
+                at_ms: i.at_ms,
+                mark: i.mark.map(|m| match m {
+                    wit::Mark::Open => Mark::Open,
+                    wit::Mark::Filled => Mark::Filled,
+                    wit::Mark::Round => Mark::Round,
+                }),
+                surface_id: i.surface.map(clip),
             })
             .collect())
     }
 
     pub fn on_action(&mut self, action_id: &str, payload: &str) -> Result<(), PluginError> {
         self.call(|b, s| b.call_on_action(s, action_id, payload))
+    }
+
+    pub fn row_menu(&mut self, surface: &str) -> Result<Vec<RowMenuItem>, PluginError> {
+        let items = self.call(|b, s| b.call_row_menu(s, surface))?;
+        let id = self.id().to_owned();
+        Ok(items
+            .into_iter()
+            .take(MAX_PALETTE)
+            .map(|i| RowMenuItem { plugin_id: id.clone(), id: clip(i.id), title: clip(i.title), checked: i.checked, parent: i.parent.map(clip) })
+            .collect())
+    }
+
+    pub fn on_row_moved(&mut self, surface: &str, group: &str, before: Option<&str>) -> Result<(), PluginError> {
+        self.call(|b, s| b.call_on_row_moved(s, surface, group, before))
     }
 
     pub fn take_logs(&mut self) -> Vec<String> {
@@ -499,9 +706,10 @@ impl PluginHost {
         Ok(Self { engine, epoch })
     }
 
-    /// Compiles `wasm`, or loads it from `cache` when an HMAC-verified artefact exists.
-    pub fn compile_cached(&self, wasm: &[u8], cache: &CwasmCache) -> Result<(Component, bool), PluginError> {
-        let name = cache_name(&self.engine, wasm);
+    /// Compiles `wasm`, or loads it from `cache` when an HMAC-verified artefact exists. The caller
+    /// passes the SHA-256 it already took of `wasm`, so the bytes are hashed once.
+    pub fn compile_cached(&self, wasm: &[u8], wasm_sha256: &[u8; 32], cache: &CwasmCache) -> Result<(Component, bool), PluginError> {
+        let name = cache_name(&self.engine, wasm_sha256);
         if let Some(art) = cache.get(&name) {
             // Safety: the bytes verified under our per-install key, so we serialised them.
             if let Ok(c) = unsafe { Component::deserialize(&self.engine, &art) } {
@@ -528,8 +736,17 @@ impl PluginHost {
         if caps.pty_write {
             wpty::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
+        if caps.decisions_read {
+            wdec::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if caps.allowlist_suggest {
+            wallow::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if caps.sidebar {
+            wside::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
         if caps.fs_read_granted() || caps.fs_write_granted() {
-            let mut fs = l.instance("haunt:plugin/fs@0.1.0")?;
+            let mut fs = l.instance("haunt:plugin/fs@0.3.0")?;
             if caps.fs_read_granted() {
                 fs.func_wrap("read", |s: StoreContextMut<'_, HostState>, (path,): (String,)| Ok((s.data().fs.read(&path),)))?;
                 fs.func_wrap("list", |s: StoreContextMut<'_, HostState>, (path,): (String,)| Ok((s.data().fs.list(&path),)))?;
@@ -551,12 +768,16 @@ impl PluginHost {
 
     /// Instantiates a compiled component with `spec`'s grants and runs its `init`.
     pub fn instantiate(&self, component: &Component, spec: &LoadSpec) -> Result<LoadedPlugin, PluginError> {
-        let linker = self.linker(&spec.caps)?;
-        let mut store = Store::new(&self.engine, HostState::new(&spec.id, &spec.caps, spec.kv_path.clone(), spec.haunt_dir.as_deref()));
+        self.instantiate_with(component, spec, &self.linker(&spec.caps)?)
+    }
+
+    /// `instantiate` with a linker for `spec.caps` the caller may share between loads.
+    pub fn instantiate_with(&self, component: &Component, spec: &LoadSpec, linker: &Linker<HostState>) -> Result<LoadedPlugin, PluginError> {
+        let mut store = Store::new(&self.engine, HostState::new(&spec.id, &spec.caps, spec.kv_path.clone(), spec.haunt_dir.as_deref(), spec.core.clone()));
         store.limiter(|s| &mut s.limits);
         // Instantiation runs the component's start functions, which get the same budget as a call.
         store.set_epoch_deadline(CALL_TICKS);
-        let bindings = self.epoch.ticking(|| Plugin::instantiate(&mut store, component, &linker))?;
+        let bindings = self.epoch.ticking(|| Plugin::instantiate(&mut store, component, linker))?;
         let mut plugin = LoadedPlugin { store, bindings, epoch: self.epoch.clone(), disabled: None };
         plugin.init(&spec.settings_json)?;
         Ok(plugin)
@@ -565,7 +786,7 @@ impl PluginHost {
     pub fn load_bytes(&self, bytes: &[u8], cache_dir: &Path, spec: &LoadSpec) -> Result<(LoadedPlugin, LoadStats), PluginError> {
         let cache = CwasmCache::open(cache_dir)?;
         let t = Instant::now();
-        let (component, from_cache) = self.compile_cached(bytes, &cache)?;
+        let (component, from_cache) = self.compile_cached(bytes, &Sha256::digest(bytes).into(), &cache)?;
         let compile_ms = t.elapsed().as_secs_f64() * 1e3;
         let t = Instant::now();
         let plugin = self.instantiate(&component, spec)?;
@@ -584,11 +805,10 @@ impl PluginHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testdir::TempDir;
 
-    fn tempdir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("haunt-host-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
+    fn tempdir(tag: &str) -> TempDir {
+        TempDir::new(&format!("host-{tag}"))
     }
 
     #[test]
@@ -599,23 +819,23 @@ mod tests {
         // Text form; the dev-only `wat` feature lets Component::new parse it.
         let wasm = b"(component)".to_vec();
 
-        assert!(!host.compile_cached(&wasm, &cache).unwrap().1);
-        assert!(host.compile_cached(&wasm, &cache).unwrap().1);
+        let sha = Sha256::digest(&wasm).into();
+        assert!(!host.compile_cached(&wasm, &sha, &cache).unwrap().1);
+        assert!(host.compile_cached(&wasm, &sha, &cache).unwrap().1);
 
-        let name = cache_name(&host.engine, &wasm);
+        let name = cache_name(&host.engine, &sha);
         let art = dir.join(format!("{name}.cwasm"));
         let mut bytes = std::fs::read(&art).unwrap();
         let last = bytes.len() - 1;
         bytes[last] ^= 0xff;
         std::fs::write(&art, bytes).unwrap();
 
-        assert!(!host.compile_cached(&wasm, &cache).unwrap().1, "tampered artefact must not load");
-        assert!(host.compile_cached(&wasm, &cache).unwrap().1, "recompiled artefact is cached again");
-        std::fs::remove_dir_all(dir).unwrap();
+        assert!(!host.compile_cached(&wasm, &sha, &cache).unwrap().1, "tampered artefact must not load");
+        assert!(host.compile_cached(&wasm, &sha, &cache).unwrap().1, "recompiled artefact is cached again");
     }
 
     const FS_WRITE_IMPORT: &str = r#"(component
-        (import "haunt:plugin/fs@0.1.0" (instance
+        (import "haunt:plugin/fs@0.3.0" (instance
             (export "write" (func (param "path" string) (param "data" (list u8)) (result (result (error string))))))))"#;
 
     #[test]
@@ -638,7 +858,7 @@ mod tests {
         let host = PluginHost::new().unwrap();
         let pty = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/pty@0.1.0" (instance
+            r#"(component (import "haunt:plugin/pty@0.3.0" (instance
                 (export "answer" (func (param "surface" string) (param "allow" bool) (param "request-id" u64) (result (result (error string))))))))"#,
         )
         .unwrap();
@@ -647,7 +867,7 @@ mod tests {
 
         let text = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/pty@0.1.0" (instance
+            r#"(component (import "haunt:plugin/pty@0.3.0" (instance
                 (export "text" (func (param "surface" string) (param "text" string) (result (result (error string))))))))"#,
         )
         .unwrap();
@@ -656,7 +876,7 @@ mod tests {
 
         let notify = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/notify@0.1.0" (instance
+            r#"(component (import "haunt:plugin/notify@0.3.0" (instance
                 (type $r (record (field "id" string) (field "title" string)))
                 (export "action" (type $a (eq $r)))
                 (export "notify" (func (param "title" string) (param "body" string) (param "actions" (list $a))
@@ -667,8 +887,175 @@ mod tests {
         host.check_links(&notify, &Capabilities { notifications: true, ..Default::default() }).unwrap();
     }
 
+    const DECISIONS_IMPORT: &str = r#"(component (import "haunt:plugin/decisions@0.3.0" (instance
+        (type $o (variant (case "allowed-in-haunt") (case "denied-in-haunt") (case "allowed-by-plugin" string)
+            (case "denied-by-plugin" string) (case "answered-in-terminal") (case "superseded")))
+        (export "outcome" (type $oe (eq $o)))
+        (type $d (record (field "at-ms" u64) (field "surface-id" string) (field "tool" string) (field "preview" string)
+            (field "cwd" (option string)) (field "outcome" $oe) (field "agent" string)))
+        (export "decision" (type $de (eq $d)))
+        (export "query" (func (param "text" string) (param "limit" u32) (result (list $de)))))))"#;
+
+    const PROPOSE_IMPORT: &str = r#"(component (import "haunt:plugin/allowlist@0.3.0" (instance
+        (export "propose" (func (param "project" string) (param "command" string) (result (result (error string))))))))"#;
+
+    #[test]
+    fn decisions_and_allowlist_imports_need_their_capability() {
+        let host = PluginHost::new().unwrap();
+        let decisions = Component::new(&host.engine, DECISIONS_IMPORT).unwrap();
+        let propose = Component::new(&host.engine, PROPOSE_IMPORT).unwrap();
+        let all_else = Capabilities {
+            notifications: true,
+            pty_write: true,
+            fs_read: vec!["${cwd}/x".into()],
+            fs_write: vec!["${cwd}/x".into()],
+            ..Default::default()
+        };
+        let e = host.check_links(&decisions, &all_else).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/decisions"), "{e}");
+        let e = host.check_links(&propose, &Capabilities { decisions_read: true, ..all_else.clone() }).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/allowlist"), "{e}");
+        host.check_links(&decisions, &Capabilities { decisions_read: true, ..Default::default() }).unwrap();
+        host.check_links(&propose, &Capabilities { allowlist_suggest: true, ..Default::default() }).unwrap();
+    }
+
+    #[test]
+    fn no_import_writes_decisions_or_settings() {
+        let host = PluginHost::new().unwrap();
+        let both = Capabilities { decisions_read: true, allowlist_suggest: true, ..Default::default() };
+        for (iface, func) in [("decisions", "record"), ("decisions", "write"), ("allowlist", "add-rule"), ("allowlist", "accept"), ("allowlist", "write")] {
+            let c = Component::new(
+                &host.engine,
+                format!(r#"(component (import "haunt:plugin/{iface}@0.3.0" (instance (export "{func}" (func (param "x" string))))))"#),
+            )
+            .unwrap();
+            let e = host.check_links(&c, &both).unwrap_err().0;
+            assert!(e.contains(func), "{iface}.{func}: {e}");
+        }
+    }
+
+    #[test]
+    fn the_sidebar_import_needs_its_capability() {
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/sidebar@0.3.0" (instance (export "clear" (func)))))"#).unwrap();
+        let everything_else = Capabilities { decisions_read: true, allowlist_suggest: true, notifications: true, pty_write: true, ..Default::default() };
+        let e = host.check_links(&c, &everything_else).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/sidebar"), "{e}");
+        host.check_links(&c, &Capabilities { sidebar: true, ..Default::default() }).unwrap();
+    }
+
+    #[test]
+    fn a_plugin_arrangement_keeps_needs_you_first() {
+        use wside::Host as _;
+        let core = crate::Core::new(&*tempdir("arrange-core"));
+        let a = core.register_surface("/a").unwrap();
+        let b = core.register_surface("/b").unwrap();
+        let line = |env: &crate::SurfaceEnv, body: &str| {
+            format!(r#"{{"v":1,"surface_id":"{}","nonce":"{}",{body}}}"#, env.surface_id, env.nonce)
+        };
+        core.with_state(|st| {
+            st.handle_line(&line(&a, r#""event":"prompt_submit","query":"x""#), Instant::now());
+            st.handle_line(&line(&b, r#""event":"permission_seen","tool_name":"Bash","tool_input":{"command":"ls"}"#), Instant::now());
+        });
+        let sidebar = Capabilities { sidebar: true, ..Default::default() };
+        let mut st = HostState::new("dev.haunt.tabs", &sidebar, None, None, Some(core.handle()));
+        let rows = st.rows();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|r| r.surface == b.surface_id && r.group == wside::StateGroup::NeedsYou));
+        let arrangement = wside::Arrangement {
+            pinned: vec![b.surface_id.clone(), a.surface_id.clone()],
+            sections: vec![],
+            placement: wside::Placement::BeforeState,
+            order: vec![],
+            flat: false,
+            colors: vec![(a.surface_id.clone(), wside::TabColor::Blue)],
+            color_style: wside::ColorStyle::Tint,
+        };
+        st.arrange(arrangement.clone()).unwrap();
+        let snap = core.snapshot();
+        let ids: Vec<_> = snap.groups.iter().map(|g| (g.id.as_str(), g.rows.iter().map(|r| r.surface_id.clone()).collect::<Vec<_>>())).collect();
+        assert_eq!(ids, [("needs-you", vec![b.surface_id.clone()]), ("pinned", vec![a.surface_id.clone()])]);
+        assert_eq!((snap.groups[1].rows[0].color, snap.color_style), (Some(TabColor::Blue), ColorStyle::Tint));
+
+        let mut other = HostState::new("dev.x.other", &sidebar, None, None, Some(core.handle()));
+        assert!(other.arrange(arrangement.clone()).unwrap_err().contains("dev.haunt.tabs"), "one arranger at a time");
+        other.clear();
+        assert_eq!(core.snapshot().groups[1].id, "pinned", "only the owner clears");
+        let mut no_cap = HostState::new("dev.x.nocap", &Capabilities::default(), None, None, Some(core.handle()));
+        assert!(no_cap.arrange(arrangement.clone()).unwrap_err().contains("sidebar capability"));
+        st.clear();
+        assert_eq!(core.snapshot().groups[1].id, "running");
+        st.arrange(arrangement.clone()).unwrap();
+
+        // A reload: the new instance takes over, and dropping the old one leaves the new arrangement.
+        let mut reloaded = HostState::new("dev.haunt.tabs", &sidebar, None, None, Some(core.handle()));
+        reloaded.arrange(wside::Arrangement { flat: true, ..arrangement.clone() }).unwrap();
+        drop(st);
+        assert_eq!(core.snapshot().groups[1].id, "pinned", "the reloaded instance's arrangement stays");
+        reloaded.release_sidebar();
+        assert_eq!(core.snapshot().groups[1].id, "running", "a disabled instance's arrangement goes with it");
+        assert!(reloaded.arrange(arrangement.clone()).is_err(), "and it can't arrange again");
+
+        let mut dropped = HostState::new("dev.haunt.tabs", &sidebar, None, None, Some(core.handle()));
+        dropped.arrange(arrangement).unwrap();
+        drop(dropped);
+        assert_eq!(core.snapshot().groups[1].id, "running", "a removed or reloaded plugin's arrangement goes");
+    }
+
+    #[test]
+    fn a_proposal_through_the_import_is_only_pending() {
+        use wallow::Host as _;
+        let project = tempdir("propose");
+        std::fs::create_dir_all(&project).unwrap();
+        let project = project.canonicalize().unwrap();
+        let core = crate::Core::new(&*tempdir("propose-core"));
+        let mut st = HostState::new("dev.haunt.allowlist", &Capabilities::default(), None, None, Some(core.handle()));
+        let p = project.to_str().unwrap().to_owned();
+        assert!(st.propose(p.clone(), "cargo test".into()).unwrap_err().contains("never approved"));
+        assert!(st.approvals(1).is_empty());
+        assert!(core.allow_suggestions().is_empty());
+        assert!(!project.join(".claude").exists());
+        let mut detached = HostState::new("x", &Capabilities::default(), None, None, None);
+        assert!(detached.propose(p, "cargo test".into()).is_err());
+    }
+
+    #[test]
+    fn the_approvals_import_hides_one_offs_other_agents_and_cleaned_commands() {
+        use crate::{decisions::Decision, event::Agent, session::Outcome};
+        use wallow::Host as _;
+        let core = crate::Core::new(&*tempdir("approvals-floor"));
+        let d = |cmd: &str, preview: &str, outcome, agent| Decision {
+            at_ms: 1,
+            surface_id: "s".into(),
+            tool: "Bash".into(),
+            preview: preview.into(),
+            command: Some(cmd.into()),
+            cwd: Some("/p".into()),
+            outcome,
+            agent,
+        };
+        core.with_state(|st| {
+            for x in [
+                d("export TOKEN=abc", "export TOKEN=abc", Outcome::AllowedInHaunt, Agent::Claude),
+                d("cargo test", "cargo test", Outcome::AllowedInHaunt, Agent::Claude),
+                d("cargo test", "cargo test", Outcome::AllowedInHaunt, Agent::Claude),
+                d("make", "make", Outcome::AnsweredInTerminal, Agent::Claude),
+                d("make", "make", Outcome::AnsweredInTerminal, Agent::Claude),
+                d("npm i", "npm i", Outcome::AllowedInHaunt, Agent::Codex),
+                d("npm i", "npm i", Outcome::AllowedInHaunt, Agent::Codex),
+                d("ls\u{1b}[2K", "ls", Outcome::AllowedInHaunt, Agent::Claude),
+                d("ls\u{1b}[2K", "ls", Outcome::AllowedInHaunt, Agent::Claude),
+            ] {
+                st.decisions.record(x);
+            }
+        });
+        let mut st = HostState::new("p", &Capabilities::default(), None, None, Some(core.handle()));
+        let got: Vec<_> = st.approvals(0).into_iter().map(|a| (a.command, a.count)).collect();
+        assert_eq!(got, [("cargo test".to_owned(), 2)]);
+    }
+
     fn raw_store(host: &PluginHost) -> Store<HostState> {
-        let mut store = Store::new(&host.engine, HostState::new("t", &Capabilities::default(), None, None));
+        let mut store = Store::new(&host.engine, HostState::new("t", &Capabilities::default(), None, None, None));
         store.limiter(|s| &mut s.limits);
         store
     }
@@ -742,10 +1129,13 @@ mod tests {
         assert!(kv.set("b".into(), "yy".into()).is_err());
         kv.set("a".into(), "small".into()).unwrap();
         kv.set("b".into(), "yy".into()).unwrap();
-        kv.delete("a").unwrap();
+        kv.delete("a");
+        assert!(!path.exists(), "nothing written before the flush");
+        kv.flush().unwrap();
+        kv.set("c".into(), "z".into()).unwrap();
+        drop(kv);
         let again = Kv::open(Some(path));
         assert_eq!(again.map.get("b").map(String::as_str), Some("yy"));
-        assert_eq!(again.bytes, 3);
-        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!((again.map.get("c").map(String::as_str), again.bytes), (Some("z"), 5), "dropping flushes");
     }
 }

@@ -4,5 +4,5 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 mkdir -p build
 swiftc -module-name ReviewTest macos/Sources/CoreAPI.swift macos/Sources/PastePreview.swift macos/Sources/GitDiff.swift \
-  macos/Sources/ReviewModel.swift macos/tests/review/main.swift -o build/review-test
+  macos/Sources/ReviewModel.swift macos/tests/review/fixture-stub.swift macos/tests/review/main.swift -o build/review-test
 build/review-test

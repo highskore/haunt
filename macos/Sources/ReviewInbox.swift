@@ -282,7 +282,7 @@ private final class InboxList: NSView {
         let y = top + TS.rowPad[0], mid = y + line1 / 2
         let s = TS.claudeIcon
         let icon = NSRect(x: left + (TS.iconSize - s) / 2, y: mid - s / 2, width: s, height: s)
-        if e.row.kind == .codex { Draw.codexMark(in: icon, ctx: ctx) } else { Draw.claudeMark(in: icon) }
+        if e.row.kind == .codex { Draw.codexMark(in: icon, color: Tok.Color.textPrimary, ctx: ctx) } else { Draw.claudeMark(in: icon) }
         var rightW: CGFloat = 0
         if e.status == .waiting {
             let d = TS.inboxDotSize

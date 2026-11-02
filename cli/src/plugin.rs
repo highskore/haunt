@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use haunt_core::plugin_manifest::valid_id;
-use haunt_core::plugin_store::{Installed, Prompt, Store, default_home};
+use haunt_core::model::default_home;
+use haunt_core::plugin_store::{Installed, Prompt, Store};
 use haunt_core::plugins::PluginHost;
 
 const USAGE: &str = "usage:

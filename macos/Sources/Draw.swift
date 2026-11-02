@@ -2,20 +2,37 @@ import AppKit
 
 /// Text and shapes laid out the way the mockup's CSS does it, so geometry matches the reference.
 enum Draw {
+    private enum FontKind: Hashable { case ui, tabular, mono }
+    private struct FontKey: Hashable {
+        let kind: FontKind, size: CGFloat, weight: CGFloat
+    }
+
+    /// Drawing runs on the main thread only, so these caches need no lock.
+    private static var fonts: [FontKey: NSFont] = [:]
+
+    private static func cached(_ kind: FontKind, _ size: CGFloat, _ weight: NSFont.Weight, _ make: () -> NSFont) -> NSFont {
+        let key = FontKey(kind: kind, size: size, weight: weight.rawValue)
+        if let f = fonts[key] { return f }
+        let f = make()
+        fonts[key] = f
+        return f
+    }
+
     static func ui(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
-        NSFont.systemFont(ofSize: size, weight: weight)
+        cached(.ui, size, weight) { NSFont.systemFont(ofSize: size, weight: weight) }
     }
 
     static func uiTabular(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
-        NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
+        cached(.tabular, size, weight) { NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight) }
     }
 
     static func mono(_ size: CGFloat) -> NSFont {
-        let names = [Tok.Font.monoFamily] + Tok.Font.monoFallback
-        for name in names {
-            if let f = NSFontManager.shared.font(withFamily: name, traits: [], weight: 5, size: size) { return f }
+        cached(.mono, size, .regular) {
+            for name in [Tok.Font.monoFamily] + Tok.Font.monoFallback {
+                if let f = NSFontManager.shared.font(withFamily: name, traits: [], weight: 5, size: size) { return f }
+            }
+            return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
         }
-        return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
     static func line(_ s: String, _ font: NSFont, _ color: NSColor, kern: CGFloat = 0) -> CTLine {
@@ -31,8 +48,18 @@ enum Draw {
     /// `line` cut to `maxWidth` with a trailing ellipsis, like `text-overflow: ellipsis`.
     static func truncated(_ line: CTLine, _ maxWidth: CGFloat, _ font: NSFont, _ color: NSColor) -> CTLine {
         guard width(line) > maxWidth else { return line }
-        let token = Draw.line("…", font, color)
-        return CTLineCreateTruncatedLine(line, Double(max(maxWidth, 0)), .end, token) ?? line
+        return CTLineCreateTruncatedLine(line, Double(max(maxWidth, 0)), .end, ellipsis(font, color)) ?? line
+    }
+
+    /// One "…" per font and colour; the entry keeps both alive, so their identities stay unique.
+    private static var ellipses: [[ObjectIdentifier]: (NSFont, NSColor, CTLine)] = [:]
+
+    private static func ellipsis(_ font: NSFont, _ color: NSColor) -> CTLine {
+        let key = [ObjectIdentifier(font), ObjectIdentifier(color)]
+        if let e = ellipses[key] { return e.2 }
+        let token = line("…", font, color)
+        ellipses[key] = (font, color, token)
+        return token
     }
 
     /// Draws `line` in a CSS line box starting at `top`. Like Blink: integer ascent/descent, half-leading,
@@ -71,14 +98,32 @@ enum Draw {
         path.fill()
     }
 
-    private static let codexLogo = Bundle.main.image(forResource: "codex-logo")
+    /// The OpenAI mark from Codex.app (see macos/Resources/README.md): 1x and 2x reps, a template image.
+    static let openAIMark: NSImage? = {
+        let img = Bundle.main.image(forResource: "openai-mark")
+        img?.isTemplate = true
+        return img
+    }()
 
-    /// The official Codex logo (see macos/Resources/README.md), drawn whole into `rect`.
-    static func codexMark(in rect: NSRect, ctx: CGContext) {
-        guard let img = codexLogo else { return }
-        ctx.saveGState()
-        ctx.interpolationQuality = .high
-        img.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-        ctx.restoreGState()
+    /// The mark's native size; drawn at it on whole pixels, neither rep is resampled.
+    static var openAIMarkSize: CGFloat { openAIMark?.size.width ?? 18 }
+
+    /// The Codex icon: the OpenAI mark tinted `color`. `rect` should be backing-aligned and mark-sized.
+    static func codexMark(in rect: NSRect, color: NSColor, ctx: CGContext) {
+        guard let img = openAIMark else { return }
+        // Tinted off to the side: a transparency layer in the view's own context dithers everything it draws.
+        let mark = tintedMarks[color] ?? {
+            let t = NSImage(size: img.size, flipped: false) { r in
+                img.draw(in: r)
+                color.setFill()
+                r.fill(using: .sourceAtop)
+                return true
+            }
+            tintedMarks[color] = t
+            return t
+        }()
+        mark.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     }
+
+    private static var tintedMarks: [NSColor: NSImage] = [:]
 }

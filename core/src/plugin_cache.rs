@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
+use crate::ids::hex;
+
 type HmacSha256 = Hmac<Sha256>;
 
 const KEY_FILE: &str = "hmac.key";
@@ -44,10 +46,10 @@ impl Hasher for ShaHasher {
     }
 }
 
-/// SHA-256 over the wasm bytes and the engine's compatibility hash, hex encoded.
-pub fn cache_name(engine: &wasmtime::Engine, wasm: &[u8]) -> String {
+/// SHA-256 over the wasm's SHA-256 and the engine's compatibility hash, hex encoded.
+pub fn cache_name(engine: &wasmtime::Engine, wasm_sha256: &[u8; 32]) -> String {
     let mut h = ShaHasher(Sha256::new());
-    h.write(&Sha256::digest(wasm));
+    h.write(wasm_sha256);
     std::hash::Hash::hash(&engine.precompile_compatibility_hash(), &mut h);
     hex(&h.0.finalize())
 }
@@ -158,19 +160,14 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), CacheError> 
     Ok(res?)
 }
 
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testdir::TempDir;
     use std::os::unix::fs::PermissionsExt;
 
-    fn tempdir(tag: &str) -> PathBuf {
-        let mut n = [0u8; 8];
-        getrandom::fill(&mut n).unwrap();
-        std::env::temp_dir().join(format!("haunt-cache-{tag}-{}", hex(&n)))
+    fn tempdir(tag: &str) -> TempDir {
+        TempDir::new(&format!("cache-{tag}"))
     }
 
     #[test]
@@ -185,7 +182,6 @@ mod tests {
         }
         // A second open reuses the key, so old entries still verify.
         assert!(CwasmCache::open(&dir).unwrap().get("a").is_some());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -196,7 +192,6 @@ mod tests {
         fs::write(dir.join("a.cwasm"), b"evil code!!").unwrap();
         assert!(c.get("a").is_none());
         assert!(!dir.join("a.cwasm").exists() && !dir.join("a.cwasm.mac").exists());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -205,7 +200,6 @@ mod tests {
         let c = CwasmCache::open(&dir).unwrap();
         fs::write(dir.join("a.cwasm"), b"planted").unwrap();
         assert!(c.get("a").is_none());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -216,7 +210,6 @@ mod tests {
         assert!(matches!(CwasmCache::open(&dir), Err(CacheError::UnsafeDir(_, "group or world writable"))));
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o720)).unwrap();
         assert!(matches!(CwasmCache::open(&dir), Err(CacheError::UnsafeDir(..))));
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -225,6 +218,5 @@ mod tests {
         CwasmCache::open(&dir).unwrap();
         fs::set_permissions(dir.join(KEY_FILE), fs::Permissions::from_mode(0o644)).unwrap();
         assert!(matches!(CwasmCache::open(&dir), Err(CacheError::UnsafeKey(..))));
-        fs::remove_dir_all(dir).unwrap();
     }
 }

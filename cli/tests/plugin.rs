@@ -1,4 +1,5 @@
 //! Phase 2 gate: `haunt plugin new` scaffolds a plugin that builds and installs end to end.
+#![cfg(feature = "plugins")]
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -134,7 +135,7 @@ fn install_hello_prompts_then_core_reports_its_palette_item() {
     let host = PluginHost::new().unwrap();
     let store = Store::open(&home).unwrap();
     let t = Instant::now();
-    let mut set = store.load_all(&host).unwrap();
+    let mut set = store.load_all(&host, None).unwrap();
     eprintln!("load_all (cached compile + instantiate + init): {:.2} ms", t.elapsed().as_secs_f64() * 1e3);
     assert!(set.errors().is_empty(), "{:?}", set.errors());
     let items = set.palette_items(None, "");
@@ -163,7 +164,7 @@ fn tampered_installed_wasm_refuses_to_load() {
     bytes[mid] ^= 0x01;
     std::fs::write(&wasm, bytes).unwrap();
 
-    let mut set = Store::open(&home).unwrap().load_all(&PluginHost::new().unwrap()).unwrap();
+    let mut set = Store::open(&home).unwrap().load_all(&PluginHost::new().unwrap(), None).unwrap();
     assert!(set.ids().is_empty());
     assert!(set.errors()[0].contains("plugin.wasm does not match the lockfile"), "{:?}", set.errors());
     assert!(set.palette_items(None, "").is_empty());

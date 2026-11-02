@@ -1,16 +1,20 @@
 //! `haunt setup`: installs or removes agent adapters through their install.sh, after showing the exact change.
 
 use std::io::{BufRead, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 const USAGE: &str = "usage:
   haunt setup                          ask which agents to set up
-  haunt setup <claude|codex>... [--yes] [--dry-run]
+  haunt setup <claude|codex>... [--yes] [--dry-run] [--expect <sha256>]
   haunt setup none                     just the terminal: record the choice, change nothing
-  haunt setup --remove <claude|codex>... [--yes] [--dry-run]";
+  haunt setup --remove <claude|codex>... [--yes] [--dry-run] [--expect <sha256>]
+
+--dry-run ends with `preview sha256 <hex>`; --expect <hex> applies only if the change still hashes to that.";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Agent {
@@ -56,15 +60,21 @@ struct Opts {
     remove: bool,
     yes: bool,
     dry: bool,
+    expect: Option<String>,
 }
 
 pub fn run(args: &[String]) -> u8 {
-    let mut o = Opts { agents: vec![], none: false, remove: false, yes: false, dry: false };
-    for a in args {
+    let mut o = Opts { agents: vec![], none: false, remove: false, yes: false, dry: false, expect: None };
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
         match a.as_str() {
             "--yes" | "-y" => o.yes = true,
             "--dry-run" => o.dry = true,
             "--remove" => o.remove = true,
+            "--expect" => match it.next() {
+                Some(h) => o.expect = Some(h.to_lowercase()),
+                None => return usage(),
+            },
             "none" => o.none = true,
             s if s.starts_with('-') => return usage(),
             s => match Agent::parse(s) {
@@ -135,7 +145,8 @@ fn choose() -> Option<Vec<Agent>> {
 }
 
 fn setup(o: &Opts) -> Result<(), String> {
-    let state = state_path();
+    let home = haunt_dir();
+    let state = home.join("state.json");
     if o.none {
         println!("Just the terminal: no agent config changes. Haunt records the choice in {}.", state.display());
         if !o.dry {
@@ -143,30 +154,44 @@ fn setup(o: &Opts) -> Result<(), String> {
         }
         return Ok(());
     }
+    // Installs run from a content-addressed copy under ~/.haunt, so moving or rebuilding haunt.app can't break them.
+    // Removal works by name (Claude) or by markers (Codex), so it runs from wherever the adapter is now.
     let mut plans = vec![];
     for &ag in &o.agents {
-        let dir = adapter_dir(ag)?;
+        let src = adapter_dir(ag)?;
+        let dir = if o.remove { src.clone() } else { stage(ag, &src, &home)? };
         let preview = script(&dir, if o.remove { &["--remove", "--dry-run"] } else { &["--dry-run"] })?;
-        plans.push((ag, dir, preview));
+        plans.push((ag, src, dir, preview));
     }
-    for (ag, dir, preview) in &plans {
+    let mut plan = String::new();
+    for (ag, src, dir, preview) in &plans {
+        let from = format!("the adapter from {}, copied to {}", src.display(), dir.display());
         let what = match (ag, o.remove) {
-            (Agent::Claude, false) => format!("Set up Claude Code with the adapter in {}. This runs:", dir.display()),
+            (Agent::Claude, false) => format!("Set up Claude Code with {from}. This runs:"),
             (Agent::Claude, true) => "Remove Claude Code's adapter. This runs:".to_owned(),
-            (Agent::Codex, false) => format!("Set up Codex with the adapter in {}. This changes its config:", dir.display()),
+            (Agent::Codex, false) => format!("Set up Codex with {from}. This changes its config:"),
             (Agent::Codex, true) => "Remove Codex's adapter. This changes its config:".to_owned(),
         };
-        println!("{what}");
+        plan += &what;
+        plan.push('\n');
         for line in preview.lines() {
-            println!("  {line}");
+            plan += &format!("  {line}\n");
         }
-        println!();
+        plan.push('\n');
     }
     let ids: Vec<&str> = o.agents.iter().map(|a| a.id()).collect();
     let (verb, prep) = if o.remove { ("removes", "from") } else { ("records", "in") };
-    println!("Then Haunt {verb} {} {prep} {}.", ids.join(" and "), state.display());
+    plan += &format!("Then Haunt {verb} {} {prep} {}.\n", ids.join(" and "), state.display());
+    print!("{plan}");
+    let sha = hex(&Sha256::digest(plan.as_bytes()));
     if o.dry {
+        println!("preview sha256 {sha}");
         return Ok(());
+    }
+    if let Some(want) = &o.expect
+        && *want != sha
+    {
+        return Err(format!("the change above differs from the preview you approved ({want}); nothing changed"));
     }
     if o.agents.contains(&Agent::Claude) && find_on_path("claude").is_none() {
         return Err("claude is not on PATH; install Claude Code first".into());
@@ -179,13 +204,14 @@ fn setup(o: &Opts) -> Result<(), String> {
     }
     let mut done = vec![];
     let mut failed = None;
-    for (ag, dir, _) in &plans {
+    for (ag, _, dir, _) in &plans {
         let flag = if o.remove { "--remove" } else { "--apply" };
         let ok = Command::new(dir.join("install.sh")).arg(flag).status().is_ok_and(|s| s.success());
         if !ok {
             failed = Some(format!("{} {flag} failed for {}", dir.join("install.sh").display(), ag.name()));
             break;
         }
+        prune(&home, *ag, (!o.remove).then_some(dir.as_path()));
         done.push(*ag);
     }
     if !done.is_empty() {
@@ -195,6 +221,10 @@ fn setup(o: &Opts) -> Result<(), String> {
         println!("{verb} {} {prep} {}", ids.join(" and "), state.display());
     }
     failed.map_or(Ok(()), Err)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Runs install.sh and returns its stdout; it only prints in dry-run mode.
@@ -207,17 +237,19 @@ fn script(dir: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// `$HAUNT_<AGENT>_ADAPTER`, else the copy bundled in haunt.app, else `../haunt-plugins/<repo>` beside this checkout.
+/// `$HAUNT_<AGENT>_ADAPTER`, else the copy bundled in haunt.app, else (debug builds) `../haunt-plugins/<repo>`.
 fn adapter_dir(ag: Agent) -> Result<PathBuf, String> {
     let (env, bundled, repo, marker) = ag.adapter();
     let candidates: Vec<PathBuf> = match std::env::var_os(env) {
         Some(p) => vec![PathBuf::from(p)],
         None => {
             let mut c = vec![];
-            // The CLI sits in haunt.app/Contents/Helpers.
-            if let Some(contents) = std::env::current_exe().ok().and_then(|e| e.parent()?.parent().map(Path::to_owned)) {
+            // The CLI sits in haunt.app/Contents/Helpers; resolved, so a symlink on PATH still finds the bundle.
+            let exe = std::env::current_exe().and_then(std::fs::canonicalize).ok();
+            if let Some(contents) = exe.and_then(|e| e.parent()?.parent().map(Path::to_owned)) {
                 c.push(contents.join("Resources/adapters").join(bundled));
             }
+            #[cfg(debug_assertions)]
             c.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../haunt-plugins").join(repo));
             c
         }
@@ -232,14 +264,85 @@ fn adapter_dir(ag: Agent) -> Result<PathBuf, String> {
         })
 }
 
+/// Copies the adapter to `<haunt>/adapters/<agent>/<content hash>`, once; installs then point there.
+fn stage(ag: Agent, src: &Path, home: &Path) -> Result<PathBuf, String> {
+    if src.components().any(|c| c.as_os_str() == "AppTranslocation") {
+        return Err(format!(
+            "haunt.app is running from a temporary, translocated copy ({}). Move haunt.app to /Applications, open it from there, then set up again.",
+            src.display()
+        ));
+    }
+    let mut files = vec![];
+    walk(src, Path::new(""), &mut files).map_err(|e| format!("{}: {e}", src.display()))?;
+    files.sort();
+    let mut h = Sha256::new();
+    for rel in &files {
+        let p = src.join(rel);
+        let bytes = std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let exec = std::fs::metadata(&p).map(|m| m.permissions().mode() & 0o111 != 0).unwrap_or(false);
+        h.update(rel.to_string_lossy().as_bytes());
+        h.update([0, exec as u8]);
+        h.update((bytes.len() as u64).to_le_bytes());
+        h.update(&bytes);
+    }
+    let rev = &hex(&h.finalize())[..16];
+    let parent = home.join("adapters").join(ag.id());
+    let dest = parent.join(rev);
+    if dest.join("install.sh").is_file() {
+        return Ok(dest);
+    }
+    let tmp = parent.join(format!(".{rev}.{}", std::process::id()));
+    let copy = || -> std::io::Result<()> {
+        let _ = std::fs::remove_dir_all(&tmp);
+        for rel in &files {
+            let to = tmp.join(rel);
+            std::fs::create_dir_all(to.parent().unwrap_or(&tmp))?;
+            std::fs::copy(src.join(rel), &to)?;
+        }
+        std::fs::rename(&tmp, &dest)
+    };
+    copy().map_err(|e| {
+        let _ = std::fs::remove_dir_all(&tmp);
+        format!("copying the {} adapter to {}: {e}", ag.name(), dest.display())
+    })?;
+    Ok(dest)
+}
+
+/// Every file under `dir`, relative to it, leaving out .git.
+fn walk(root: &Path, rel: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for e in std::fs::read_dir(root.join(rel))? {
+        let e = e?;
+        let r = rel.join(e.file_name());
+        let meta = std::fs::metadata(e.path())?;
+        if meta.is_dir() {
+            if e.file_name() != ".git" {
+                walk(root, &r, out)?;
+            }
+        } else {
+            out.push(r);
+        }
+    }
+    Ok(())
+}
+
+/// Drops an agent's staged copies other than `keep`, once nothing points at them any more.
+fn prune(home: &Path, ag: Agent, keep: Option<&Path>) {
+    let parent = home.join("adapters").join(ag.id());
+    let Ok(entries) = std::fs::read_dir(&parent) else { return };
+    for e in entries.flatten() {
+        if keep.is_none_or(|k| e.path() != k) {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+}
+
 fn find_on_path(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(name)).find(|p| p.is_file())
 }
 
-/// state.json beside the app's config: `$HAUNT_CONFIG_DIR`, else `$HAUNT_HOME`, else `~/.haunt`.
-fn state_path() -> PathBuf {
-    let dir = std::env::var_os("HAUNT_CONFIG_DIR").map_or_else(haunt_core::plugin_store::default_home, PathBuf::from);
-    dir.join("state.json")
+/// Beside the app's config: `$HAUNT_CONFIG_DIR`, else `$HAUNT_HOME`, else `~/.haunt`.
+fn haunt_dir() -> PathBuf {
+    std::env::var_os("HAUNT_CONFIG_DIR").map_or_else(haunt_core::model::default_home, PathBuf::from)
 }
 
 /// Adds (or removes) agents in state.json's `agents`, keeping the app's other keys. The key's presence means setup ran.

@@ -1,8 +1,8 @@
 import AppKit
 
-/// Mockup 03's title bar: grey traffic lights we draw ourselves, and ⌕ + ⚙ plus the sidebar glyph on the right.
+/// Mockup 03's title bar: grey traffic lights we draw ourselves, and the `[layout] titlebar_buttons` icons on the right.
 /// With the sidebar hidden it is mockup 10's: a progress line on top, no hairline, and a shortcut hint.
-final class TitleBarView: NSView {
+final class TitleBarView: NSView, NSViewToolTipOwner {
     enum Accessory {
         case icons
         case kbd
@@ -10,34 +10,27 @@ final class TitleBarView: NSView {
         case empty
     }
 
-    enum Icon: CaseIterable {
-        case search, newTab, settings, sidebar
-
-        var glyph: String {
-            switch self {
-            case .search: return "⌕"
-            case .newTab: return "+"
-            case .settings: return "⚙"
-            case .sidebar: return ""
-            }
-        }
-    }
+    typealias Icon = TitlebarButton
 
     enum Hint {
         case agents, search
     }
 
-    var accessory: Accessory = .icons { didSet { needsDisplay = true } }
+    var accessory: Accessory = .icons { didSet { needsDisplay = true; updateToolTips() } }
     /// The `.kbd` accessory's shortcut.
     var kbdLabel = "⌘K" { didSet { needsDisplay = true } }
     var onIcon: ((Icon) -> Void)?
     /// A centred breadcrumb (review versions 01 and 09); the last part is the current place.
     var crumb: [String] = [] { didSet { needsDisplay = true } }
     var onCrumb: (() -> Void)?
+    /// The icons, left to right.
+    var buttons = TitlebarButton.defaults { didSet { if buttons != oldValue { needsDisplay = true; updateToolTips() } } }
+    /// Each icon's shortcut from `[keys]`, shown in its tooltip.
+    var shortcuts: [Icon: String] = [:] { didSet { if shortcuts != oldValue { updateToolTips() } } }
     var onHint: ((Hint) -> Void)?
 
     /// Mockup 10's layout, used while the sidebar is hidden.
-    var zen = false { didSet { needsDisplay = true } }
+    var zen = false { didSet { needsDisplay = true; updateToolTips() } }
     /// Mockup 10's "⌘B agents · ⌘K search", with the configured shortcuts.
     var hints: [(Hint, String)] = [] { didSet { needsDisplay = true } }
     /// The selected agent's progress for the zen line; nil leaves the line out.
@@ -64,21 +57,17 @@ final class TitleBarView: NSView {
 
     /// Grey at rest (the mockups); hovering the group shows macOS's own colours and glyphs.
     /// HAUNT_LIGHTS=hover or hover-option pins that state for a launch capture.
+    #if HAUNT_FIXTURES
     private static let pinned = ProcessInfo.processInfo.environment["HAUNT_LIGHTS"]
+    #else
+    private static let pinned: String? = nil
+    #endif
     private var lightsHover = TitleBarView.pinned?.hasPrefix("hover") == true { didSet { needsDisplay = true } }
     private var optionDown = TitleBarView.pinned == "hover-option" { didSet { if optionDown != oldValue { needsDisplay = true } } }
     private var lightsArea: NSTrackingArea?
     private var flagsMonitor: Any?
 
-    // The system's traffic-light fills and their dark glyph tints.
-    private static let lightFill = [NSColor(srgbRed: 1, green: 0x5F / 255, blue: 0x57 / 255, alpha: 1),
-                                    NSColor(srgbRed: 0xFE / 255, green: 0xBC / 255, blue: 0x2E / 255, alpha: 1),
-                                    NSColor(srgbRed: 0x28 / 255, green: 0xC8 / 255, blue: 0x40 / 255, alpha: 1)]
-    private static let lightGlyph = [NSColor(srgbRed: 0x4D / 255, green: 0, blue: 0, alpha: 1),
-                                     NSColor(srgbRed: 0x99 / 255, green: 0x57 / 255, blue: 0, alpha: 1),
-                                     NSColor(srgbRed: 0, green: 0x65 / 255, blue: 0, alpha: 1)]
-
-    private var lightsGroup: NSRect { lightRect(0).union(lightRect(2)).insetBy(dx: -2, dy: -2) }
+    private var lightsGroup: NSRect { lightRect(0).union(lightRect(2)).insetBy(dx: -Tok.App.lightsSlop, dy: -Tok.App.lightsSlop) }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -108,13 +97,13 @@ final class TitleBarView: NSView {
     private func drawLights() {
         for i in 0..<3 {
             let r = lightRect(i)
-            (lightsHover ? Self.lightFill[i] : Tok.Color.lights).setFill()
+            (lightsHover ? Tok.Lights.fill[i] : Tok.Color.lights).setFill()
             NSBezierPath(ovalIn: r).fill()
             guard lightsHover else { continue }
-            Self.lightGlyph[i].set()
-            let c = NSPoint(x: r.midX, y: r.midY), k = r.width * 0.22
+            Tok.Lights.glyph[i].set()
+            let c = NSPoint(x: r.midX, y: r.midY), k = r.width * Tok.Lights.glyphHalf, bar = k * Tok.Lights.barScale
             let p = NSBezierPath()
-            p.lineWidth = 1.1
+            p.lineWidth = Tok.Lights.glyphStroke
             p.lineCapStyle = .round
             switch i {
             case 0:
@@ -122,16 +111,16 @@ final class TitleBarView: NSView {
                 p.move(to: NSPoint(x: c.x - k, y: c.y + k)); p.line(to: NSPoint(x: c.x + k, y: c.y - k))
                 p.stroke()
             case 1:
-                p.move(to: NSPoint(x: c.x - k * 1.2, y: c.y)); p.line(to: NSPoint(x: c.x + k * 1.2, y: c.y))
+                p.move(to: NSPoint(x: c.x - bar, y: c.y)); p.line(to: NSPoint(x: c.x + bar, y: c.y))
                 p.stroke()
             default:
                 if optionDown {
-                    p.move(to: NSPoint(x: c.x - k * 1.2, y: c.y)); p.line(to: NSPoint(x: c.x + k * 1.2, y: c.y))
-                    p.move(to: NSPoint(x: c.x, y: c.y - k * 1.2)); p.line(to: NSPoint(x: c.x, y: c.y + k * 1.2))
+                    p.move(to: NSPoint(x: c.x - bar, y: c.y)); p.line(to: NSPoint(x: c.x + bar, y: c.y))
+                    p.move(to: NSPoint(x: c.x, y: c.y - bar)); p.line(to: NSPoint(x: c.x, y: c.y + bar))
                     p.stroke()
                 } else {
                     // Full-screen arrows: two corner triangles pointing out along the diagonal (flipped view, y down).
-                    let a = r.width * 0.25, g = r.width * 0.07
+                    let a = r.width * Tok.Lights.arrowHalf, g = r.width * Tok.Lights.arrowGap
                     let tl = NSBezierPath()
                     tl.move(to: NSPoint(x: c.x - a, y: c.y - a)); tl.line(to: NSPoint(x: c.x + a - g * 2, y: c.y - a))
                     tl.line(to: NSPoint(x: c.x - a, y: c.y + a - g * 2)); tl.close(); tl.fill()
@@ -143,24 +132,36 @@ final class TitleBarView: NSView {
         }
     }
 
-    /// No mockup has this glyph; it is drawn as a window outline with its left column split off,
-    /// about the ⚙ glyph's size at the icons' font size.
-    private static let sidebarGlyph = NSSize(width: 12, height: 10)
-
     private func iconLayout() -> [(Icon, CTLine?, NSRect)] {
         let font = Draw.ui(Tok.Size.titlebarIconsFont)
         let lh = Tok.Size.titlebarIconsFont * Tok.Font.baseLine
         let top = rowTop + (rowH - lh) / 2
         var x = bounds.width - Tok.Size.titlebarPadx
         var out: [(Icon, CTLine?, NSRect)] = []
-        for icon in Icon.allCases.reversed() {
+        for icon in buttons.reversed() {
             let line = icon == .sidebar ? nil : Draw.line(icon.glyph, font, Tok.Color.textLabel)
-            let w = line.map(Draw.width) ?? Self.sidebarGlyph.width
+            let w = line.map(Draw.width) ?? Tok.App.sidebarGlyph.width
             x -= w
             out.append((icon, line, NSRect(x: x, y: top, width: w, height: lh)))
             x -= Tok.Size.titlebarIconsGap
         }
         return out.reversed()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateToolTips()
+    }
+
+    private func updateToolTips() {
+        removeAllToolTips()
+        guard !zen, accessory == .icons else { return }
+        for (_, _, r) in iconLayout() { addToolTip(r.insetBy(dx: -Tok.App.hitSlop, dy: -Tok.App.hitSlop), owner: self, userData: nil) }
+    }
+
+    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+        guard let icon = iconLayout().first(where: { $0.2.insetBy(dx: -Tok.App.hitSlop, dy: -Tok.App.hitSlop).contains(point) })?.0 else { return "" }
+        return shortcuts[icon].map { "\(icon.title) (\($0))" } ?? icon.title
     }
 
     private var hintFont: NSFont { Draw.ui(Tok.Size.zenHintFont) }
@@ -247,13 +248,14 @@ final class TitleBarView: NSView {
     }
 
     private func drawSidebarGlyph(centeredIn r: NSRect) {
-        let s = Self.sidebarGlyph
+        let s = Tok.App.sidebarGlyph
         let box = NSRect(x: r.minX, y: (r.midY - s.height / 2).rounded(), width: s.width, height: s.height)
-        let outline = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: 2, yRadius: 2)
+        let rad = Tok.App.sidebarGlyphRadius
+        let outline = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: rad, yRadius: rad)
         outline.lineWidth = 1
         Tok.Color.textLabel.setStroke()
         outline.stroke()
-        Draw.fill(NSRect(x: box.minX + 4, y: box.minY, width: 1, height: box.height), Tok.Color.textLabel)
+        Draw.fill(NSRect(x: box.minX + Tok.App.sidebarGlyphColumn, y: box.minY, width: 1, height: box.height), Tok.Color.textLabel)
     }
 
     private func drawKbd(_ label: String, in ctx: CGContext) {
@@ -274,13 +276,15 @@ final class TitleBarView: NSView {
     override func mouseDown(with event: NSEvent) {
         guard let window else { return }
         let p = convert(event.locationInWindow, from: nil)
-        let actions: [Selector] = [#selector(NSWindow.performClose(_:)), #selector(NSWindow.performMiniaturize(_:)),
-                                   #selector(NSWindow.performZoom(_:))]
-        for i in 0..<3 where lightRect(i).insetBy(dx: -2, dy: -2).contains(p) {
+        // As macOS: green enters full screen, and zooms with ⌥, matching the glyph it shows.
+        let green = event.modifierFlags.contains(.option) ? #selector(NSWindow.performZoom(_:))
+            : #selector(NSWindow.toggleFullScreen(_:))
+        let actions: [Selector] = [#selector(NSWindow.performClose(_:)), #selector(NSWindow.performMiniaturize(_:)), green]
+        for i in 0..<3 where lightRect(i).insetBy(dx: -Tok.App.lightsSlop, dy: -Tok.App.lightsSlop).contains(p) {
             NSApp.sendAction(actions[i], to: window, from: self)
             return
         }
-        if zen, let hit = hintLayout().parts.first(where: { $0.2.insetBy(dx: -4, dy: -4).contains(p) }) {
+        if zen, let hit = hintLayout().parts.first(where: { $0.2.insetBy(dx: -Tok.App.hitSlop, dy: -Tok.App.hitSlop).contains(p) }) {
             onHint?(hit.0)
             return
         }
@@ -288,7 +292,7 @@ final class TitleBarView: NSView {
             onCrumb()
             return
         }
-        if !zen, accessory == .icons, let hit = iconLayout().first(where: { $0.2.insetBy(dx: -4, dy: -4).contains(p) }) {
+        if !zen, accessory == .icons, let hit = iconLayout().first(where: { $0.2.insetBy(dx: -Tok.App.hitSlop, dy: -Tok.App.hitSlop).contains(p) }) {
             onIcon?(hit.0)
             return
         }
@@ -296,6 +300,27 @@ final class TitleBarView: NSView {
             window.performZoom(nil)
         } else {
             window.performDrag(with: event)
+        }
+    }
+}
+
+extension TitlebarButton {
+    var glyph: String {
+        switch self {
+        case .search: return "⌕"
+        case .newTab: return "+"
+        case .settings: return "⚙"
+        case .sidebar: return ""
+        }
+    }
+
+    /// The icons only show while the sidebar does, so the sidebar one always hides it.
+    var title: String {
+        switch self {
+        case .search: return "Search"
+        case .newTab: return "New Tab"
+        case .settings: return "Settings"
+        case .sidebar: return "Hide Sidebar"
         }
     }
 }
