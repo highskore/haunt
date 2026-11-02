@@ -31,6 +31,6 @@ It copies the Claude theme to `~/.claude/themes/haunt.json` and prints the lines
 | `zsh/haunt.zsh` | Defines `haunt_active`; points `STARSHIP_CONFIG` at `starship.toml`; clears `ZSH_HIGHLIGHT_HIGHLIGHTERS` before the first prompt so commands are plain white; aliases `claude` to pass `--settings` with the haunt theme and status line. |
 | `starship.toml` | Minimal prompt: dim `#6f6f6f` path and branch, `❯` in `#e8e8e8` on the next line. |
 | `claude/haunt-theme.json` | Claude Code custom theme `custom:haunt`: greys with Claude orange. |
-| `claude/statusline.sh` | Runs your normal `statusLine.command` from `~/.claude/settings.json` and recolours it to greys. `haunt.zsh` reads the command once per shell (`HAUNT_USER_STATUSLINE`), so a change shows in new tabs. |
+| `claude/statusline.sh` | Runs your normal `statusLine.command` from `~/.claude/settings.json` and recolours it to greys. It reads the command again whenever `settings.json` changes, caching it in your private `$TMPDIR` in between. `haunt.zsh` passes it only if you have a status line, checked once per shell, so adding one shows in new tabs. |
 
 The highlighters are cleared from a one-shot `precmd` hook because zsh-syntax-highlighting resets an empty list to `(main)` each time it is sourced.

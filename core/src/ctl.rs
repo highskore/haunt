@@ -103,6 +103,19 @@ mod tests {
         drop(stuck);
     }
 
+    #[test]
+    fn one_read_queues_at_most_about_a_mebibyte_of_replies() {
+        let d = TempDir::new("hc-amp");
+        let ctl = Ctl::bind(&d, Arc::new(|_: &str| "r".repeat(64 * 1024))).unwrap();
+        let mut s = UnixStream::connect(ctl.path()).unwrap();
+        s.write_all(&b"x\n".repeat(4096)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut got = Vec::new();
+        s.read_to_end(&mut got).unwrap();
+        assert!(got.len() <= (1 << 20) + 2 * 64 * 1024, "{} bytes", got.len());
+        assert!(got.len() > 1 << 20, "replies up to the cap are still sent");
+    }
+
     fn closed_within(s: &mut UnixStream, limit: Duration) -> bool {
         let t = Instant::now();
         s.set_read_timeout(Some(limit * 2)).unwrap();

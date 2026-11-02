@@ -11,9 +11,8 @@ typeset -g HAUNT_SHELL_DIR=${${(%):-%x}:A:h:h}
 
 export STARSHIP_CONFIG=$HAUNT_SHELL_DIR/starship.toml
 
-# Your own status line command, read once per shell so a refresh runs no jq.
-export HAUNT_USER_STATUSLINE=$(jq -r '.statusLine.command // empty' ~/.claude/settings.json 2>/dev/null)
-if [[ -n $HAUNT_USER_STATUSLINE ]]; then
+# Haunt's status line wraps yours, so it is passed only if you have one.
+if [[ -n $(jq -r '.statusLine.command // empty' ~/.claude/settings.json 2>/dev/null) ]]; then
   alias claude="command claude --settings '{\"theme\":\"custom:haunt\",\"statusLine\":{\"type\":\"command\",\"command\":\"$HAUNT_SHELL_DIR/claude/statusline.sh\"}}'"
 else
   alias claude="command claude --settings '{\"theme\":\"custom:haunt\"}'"

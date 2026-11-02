@@ -708,7 +708,8 @@ impl PluginHost {
 
     /// Compiles `wasm`, or loads it from `cache` when an HMAC-verified artefact exists. The caller
     /// passes the SHA-256 it already took of `wasm`, so the bytes are hashed once.
-    pub fn compile_cached(&self, wasm: &[u8], wasm_sha256: &[u8; 32], cache: &CwasmCache) -> Result<(Component, bool), PluginError> {
+    pub(crate) fn compile_cached(&self, wasm: &[u8], wasm_sha256: &[u8; 32], cache: &CwasmCache) -> Result<(Component, bool), PluginError> {
+        debug_assert_eq!(<[u8; 32]>::from(Sha256::digest(wasm)), *wasm_sha256, "the digest names the cache entry");
         let name = cache_name(&self.engine, wasm_sha256);
         if let Some(art) = cache.get(&name) {
             // Safety: the bytes verified under our per-install key, so we serialised them.

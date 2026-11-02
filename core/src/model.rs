@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -21,6 +22,8 @@ use crate::sync::{lock, write};
 
 const MAX_SURFACES: usize = 512;
 const MAX_PROPOSALS: usize = 256;
+/// Hand-offs queued per worker; past this a stalled worker's jobs are dropped, never waited on.
+const OFFLOAD_QUEUE: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Error))]
@@ -132,18 +135,18 @@ impl State {
         Some(r)
     }
 
-    /// One intake delivery; the intake already checked the nonce and the rate limit. `agent_branch`
-    /// is the branch at the agent cwd after it, looked up before the lock (`Branches::agent`).
-    fn deliver(&mut self, d: &Delivery, agent_branch: Option<Option<String>>, now: Instant) -> bool {
+    /// One intake delivery; the intake already checked the nonce and the rate limit.
+    fn deliver(&mut self, d: &Delivery, now: Instant) -> bool {
         let Some(event) = &d.event else { return false };
-        self.with_surface(&d.surface_id, |s| {
-            let mut changed = s.session.apply(event, d.verified, now);
-            if let Some(b) = agent_branch {
-                changed |= b != s.agent_branch;
-                s.agent_branch = b;
-            }
-            changed
-        }) == Some(true)
+        self.with_surface(&d.surface_id, |s| s.session.apply(event, d.verified, now)) == Some(true)
+    }
+
+    /// None once the surface is gone.
+    fn set_agent_branch(&mut self, surface_id: &str, branch: Option<String>) -> Option<bool> {
+        let s = self.surface(surface_id)?;
+        let changed = s.agent_branch != branch;
+        s.agent_branch = branch;
+        Some(changed)
     }
 
     /// A socket line as the intake would deliver it, minus the socket and the rate limit.
@@ -153,7 +156,11 @@ impl State {
         let cwd = d.event.as_ref().and_then(|e| e.cwd.clone()).filter(|c| c.starts_with('/'));
         let known = self.surfaces.iter().find(|s| s.id == d.surface_id).and_then(|s| s.session.cwd.clone());
         let branch = d.verified.then(|| cwd.or(known)).flatten().map(|c| crate::git::branch(&c));
-        self.deliver(&d, branch, now)
+        let mut changed = self.deliver(&d, now);
+        if let Some(b) = branch {
+            changed |= self.set_agent_branch(&d.surface_id, b) == Some(true);
+        }
+        changed
     }
 
     fn apply_unverified(&mut self, id: &str, event: &AgentEvent, now: Instant) -> bool {
@@ -259,21 +266,56 @@ pub struct Core {
     servers: Mutex<Option<Servers>>,
 }
 
-/// One intake delivery. The branch lookup goes first and the event goes to the tap after, both
-/// outside the state lock: the lookup reads files a hook-chosen cwd points at, and plugins call
-/// back into the core.
-fn deliver(state: &Mutex<State>, branches: &Branches, d: &Delivery) -> bool {
-    let branch = match &d.event {
-        Some(e) if d.verified => branches.agent(&d.surface_id, e.cwd.as_deref()),
-        _ => None,
-    };
+/// The two slow steps of a delivery, each on its own thread so neither holds up the socket or the
+/// other: the branch lookup reads files a hook-chosen cwd points at (a dead mount can hang it), and
+/// plugins run code and call back into the core.
+#[derive(Clone)]
+struct Offload {
+    branch: SyncSender<(String, Option<String>)>,
+    tap: SyncSender<(EventTap, AgentEvent, bool)>,
+}
+
+impl Offload {
+    fn spawn(state: Arc<Mutex<State>>, branches: Arc<Branches>) -> std::io::Result<Self> {
+        let branch = worker("haunt-branch", move |(surface, cwd): (String, Option<String>)| {
+            let Some(b) = branches.agent(&surface, cwd.as_deref()) else { return };
+            let mut gone = false;
+            update_state(&state, |st, _| {
+                let changed = st.set_agent_branch(&surface, b);
+                gone = changed.is_none();
+                changed == Some(true)
+            });
+            // Unregistered meanwhile: drop the cache entry the lookup made.
+            if gone {
+                branches.forget(&surface);
+            }
+        })?;
+        let tap = worker("haunt-tap", |(tap, event, verified): (EventTap, AgentEvent, bool)| tap(&event, verified))?;
+        Ok(Self { branch, tap })
+    }
+}
+
+/// A thread running `f` on each job sent, until every sender is gone.
+fn worker<T: Send + 'static>(name: &str, mut f: impl FnMut(T) + Send + 'static) -> std::io::Result<SyncSender<T>> {
+    let (tx, rx) = mpsc::sync_channel(OFFLOAD_QUEUE);
+    std::thread::Builder::new().name(name.into()).spawn(move || rx.into_iter().for_each(&mut f))?;
+    Ok(tx)
+}
+
+/// One intake delivery: the state now, the branch lookup and the plugins after, off this thread.
+fn deliver(state: &Mutex<State>, offload: &Offload, d: Delivery) -> bool {
     let mut tap = None;
     let changed = update_state(state, |st, now| {
         tap = st.tap_for(&d.surface_id);
-        st.deliver(d, branch, now)
+        st.deliver(&d, now)
     });
-    if let (Some(tap), Some(event)) = (tap, &d.event) {
-        tap(event, d.verified);
+    if let Some(event) = d.event {
+        if d.verified {
+            let _ = offload.branch.try_send((d.surface_id, event.cwd.clone()));
+        }
+        if let Some(tap) = tap {
+            let _ = offload.tap.try_send((tap, event, d.verified));
+        }
     }
     changed
 }
@@ -299,7 +341,7 @@ const DEFAULT_LIMIT: u64 = 50;
 const MAX_LIMIT: u64 = 1000;
 
 /// One ctl request: `dump`, `event` (a hook line, nonce still required) or `decisions`.
-fn ctl_request(state: &Mutex<State>, branches: &Branches, line: &str) -> String {
+fn ctl_request(state: &Mutex<State>, offload: &Offload, line: &str) -> String {
     let Ok(req) = serde_json::from_str::<Value>(line) else { return ctl::error("invalid json") };
     match req.get("cmd").and_then(Value::as_str) {
         Some("dump") => {
@@ -323,8 +365,8 @@ fn ctl_request(state: &Mutex<State>, branches: &Branches, line: &str) -> String 
             };
             let nonces = lock(state).nonces.clone();
             let d = crate::intake::decode(&hook_line, &nonces);
-            let changed = d.as_ref().is_some_and(|d| deliver(state, branches, d));
-            let verified = d.is_some_and(|d| d.verified);
+            let verified = d.as_ref().is_some_and(|d| d.verified);
+            let changed = d.is_some_and(|d| deliver(state, offload, d));
             json!({ "ok": true, "verified": verified, "changed": changed }).to_string()
         }
         Some("decisions") => {
@@ -357,9 +399,10 @@ impl Core {
         if servers.is_some() {
             return Ok(());
         }
-        let (state, branches) = (self.state.clone(), self.branches.clone());
+        let offload = Offload::spawn(self.state.clone(), self.branches.clone()).map_err(|e| CoreError::Io { reason: e.to_string() })?;
+        let (state, o) = (self.state.clone(), offload.clone());
         let sink = Arc::new(move |d: Delivery| {
-            deliver(&state, &branches, &d);
+            deliver(&state, &o, d);
         });
         // Binding the intake first secures the dir the log and ctl live in.
         let nonces = lock(&self.state).nonces.clone();
@@ -371,8 +414,8 @@ impl Core {
                 Some(_) => CoreError::Io { reason },
             }
         })?;
-        let (state, branches) = (self.state.clone(), self.branches.clone());
-        let ctl = Ctl::bind(&self.dir, Arc::new(move |line: &str| ctl_request(&state, &branches, line))).map_err(CoreError::from)?;
+        let state = self.state.clone();
+        let ctl = Ctl::bind(&self.dir, Arc::new(move |line: &str| ctl_request(&state, &offload, line))).map_err(CoreError::from)?;
         *servers = Some(Servers { intake, _ctl: ctl });
         Ok(())
     }
@@ -856,23 +899,30 @@ mod tests {
         let env = c.register_surface(&project).unwrap();
         let perm = format!(r#""event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"cargo test"}}"#);
         let ran = r#""event":"tool_ran","tool_name":"Bash","tool_input":{"command":"cargo test"}"#;
+        let start = r#""event":"tool_start","tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"cargo test"}"#;
+        let ran_t1 = r#""event":"tool_ran","tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"cargo test"}"#;
         let send = |nonce: Option<&str>, body: &str| c.with_state(|st| st.handle_line(&line(&env, nonce, body), Instant::now()));
         for _ in 0..3 {
             send(None, &perm);
             send(None, ran);
         }
         assert!(c.handle().approvals(1).is_empty(), "unverified approvals never count");
+        send(Some(&env.nonce), start);
         send(Some(&env.nonce), &perm);
         answer(&c, &env.surface_id, true).unwrap();
+        send(Some(&env.nonce), ran_t1);
         for _ in 0..3 {
+            send(Some(&env.nonce), start);
             send(Some(&env.nonce), &perm);
-            send(Some(&env.nonce), ran);
+            send(Some(&env.nonce), ran_t1);
         }
         let counts = |min| c.handle().approvals(min).into_iter().map(|a| (a.command, a.count)).collect::<Vec<_>>();
         assert_eq!(counts(1), [("cargo test".to_owned(), 1)], "answers in the terminal never count");
         for _ in 0..2 {
+            send(Some(&env.nonce), start);
             send(Some(&env.nonce), &perm);
             answer(&c, &env.surface_id, true).unwrap();
+            send(Some(&env.nonce), ran_t1);
         }
         assert_eq!(counts(3), [("cargo test".to_owned(), 3)]);
         assert!(c.allow_suggestions().is_empty(), "the core never suggests on its own");
@@ -973,19 +1023,46 @@ mod tests {
     }
 
     #[test]
+    fn a_stuck_plugin_never_holds_up_deliveries() {
+        let c = core();
+        let env = c.register_surface("/w").unwrap();
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let wait = Mutex::new(wait);
+        c.set_event_tap(Some(Arc::new(move |_: &AgentEvent, _| {
+            let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(3));
+        })));
+        let st = c.state.clone();
+        let offload = Offload::spawn(st.clone(), c.branches.clone()).unwrap();
+        let t = Instant::now();
+        let nonces = lock(&st).nonces.clone();
+        for body in [r#""event":"prompt_submit","query":"x""#, r#""event":"stop""#] {
+            let d = crate::intake::decode(&line(&env, Some(&env.nonce), body), &nonces).unwrap();
+            assert!(deliver(&st, &offload, d), "{body}");
+        }
+        assert!(t.elapsed() < Duration::from_secs(1));
+        assert_eq!(c.with_state(|st| st.surface(&env.surface_id).unwrap().session.status), crate::session::Status::Done);
+        drop(release);
+    }
+
+    #[test]
     fn the_event_tap_sees_events_for_registered_surfaces_only() {
         let c = core();
         let env = c.register_surface("/w").unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let s = seen.clone();
         c.set_event_tap(Some(Arc::new(move |e: &AgentEvent, verified| s.lock().unwrap().push((e.kind.name().to_owned(), verified)))));
-        let (st, branches) = (c.state.clone(), c.branches.clone());
+        let st = c.state.clone();
+        let offload = Offload::spawn(st.clone(), c.branches.clone()).unwrap();
         let nonces = lock(&st).nonces.clone();
         let stranger = SurfaceEnv { surface_id: "nope".into(), ..env.clone() };
         for (e, nonce) in [(&env, Some(env.nonce.as_str())), (&env, None), (&stranger, None)] {
             if let Some(d) = crate::intake::decode(&line(e, nonce, r#""event":"stop""#), &nonces) {
-                deliver(&st, &branches, &d);
+                deliver(&st, &offload, d);
             }
+        }
+        let t = Instant::now();
+        while seen.lock().unwrap().len() < 2 && t.elapsed() < Duration::from_secs(2) {
+            std::thread::yield_now();
         }
         c.on_osc_notification(&env.surface_id, "haunt://cli-agent", r#"{"v":1,"event":"stop"}"#);
         assert_eq!(*seen.lock().unwrap(), [("stop".to_owned(), true), ("stop".to_owned(), false), ("stop".to_owned(), false)]);
@@ -1098,13 +1175,17 @@ mod tests {
         let c = core();
         let env = c.register_surface(&project).unwrap();
         let perm = format!(r#""agent":"codex","event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"cargo test"}}"#);
-        let ran = r#""agent":"codex","event":"tool_ran","tool_name":"Bash","tool_input":{"command":"cargo test"}"#;
+        let start = r#""agent":"codex","event":"tool_start","tool_name":"Bash","tool_use_id":"c1","tool_input":{"command":"cargo test"}"#;
+        let ran_c1 = r#""agent":"codex","event":"tool_ran","tool_name":"Bash","tool_use_id":"c1","tool_input":{"command":"cargo test"}"#;
         let send = |body: &str| c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), body), Instant::now()));
         for _ in 0..3 {
+            send(start);
             send(&perm);
             answer(&c, &env.surface_id, true).unwrap();
+            send(ran_c1);
+            send(start);
             send(&perm);
-            send(ran);
+            send(ran_c1);
         }
         assert_eq!(c.decisions("", 10).len(), 6);
         assert!(c.handle().approvals(1).is_empty());
