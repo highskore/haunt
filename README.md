@@ -92,13 +92,13 @@ cursor-style = "bar"
 
 `[keys]` sets shortcuts by action name (the generated `config.toml` lists them with their defaults). A plugin's palette command is named `"<plugin id>/<item id>"`, for example `"dev.haunt.tabs/move-up" = "alt+cmd+up"`; a plugin's default key must include cmd and never takes one of Haunt's or a chord the terminal or macOS uses (a chord set here has no such limit), and bound plugin commands appear in the Window menu.
 
-`[ghostty]` is passed through to libghostty, except for what would get a paste past Haunt's paste check or slip in config Haunt never sees. These are dropped and logged: `right-click-action = paste` or `copy-or-paste`, `middle-click-action = clipboard-paste`, any `keybind` to `paste_from_clipboard` or `paste_from_selection`, `config-file`, `config-default-files`, and any key or value with a line break. Haunt also always unbinds Ghostty's ⌘V, ⇧⌘V and Paste key, so every paste goes through its own Edit menu.
+`[ghostty]` is passed through to libghostty, except for what would get a paste past Haunt's paste check or slip in config Haunt never sees. These are dropped and logged: `right-click-action = paste` or `copy-or-paste`, any `middle-click-action` (Haunt pastes on middle click itself), any `keybind` to `paste_from_clipboard` or `paste_from_selection`, `config-file`, `config-default-files`, and any key or value with a line break. Haunt also always unbinds Ghostty's ⌘V, ⇧⌘V and Paste key, so every paste goes through its own Edit menu.
 
 ## Use
 
 - **Tabs:** ⌘T new, ⌘W close, ⌘1–⌘9 select, ⇧⌘] and ⇧⌘[ next and previous. **Rename Tab** is in the Window menu (no default key; set `rename_tab` in `[keys]`), on a row's right-click menu, or a double-click on its name. An empty name goes back to the automatic one.
 - **Agents view:** ⌘⇧A shrinks the window to a narrow strip of agent rows docked to the right of the screen, with shell tabs counted at the foot. Click a row to get the full window back on that tab, or press ⌘⇧A again. It is remembered across launches.
-- **Paste:** ⌘V pastes the clipboard and ⇧⌘V (Edit ▸ Paste Selection, `paste_selection`) the selection. Haunt shows a paste that carries an escape, another control or a hidden character in full, characters spelled out, and asks first; Ghostty's own paste protection asks before a multi-line one that isn't bracketed.
+- **Paste:** ⌘V pastes the clipboard and ⇧⌘V (Edit ▸ Paste Selection, `paste_selection`) the selection. Haunt shows a paste that carries an escape, another control or a hidden character in full, characters spelled out, and asks first; Ghostty's own paste protection asks before a multi-line one that isn't bracketed. A middle click pastes the selection too, except in an app that takes the mouse (vim or tmux with mouse mode on), where the click goes to the app; there shift+middle click doesn't paste either.
 
 ## CLI
 

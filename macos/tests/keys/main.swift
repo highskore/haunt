@@ -154,7 +154,7 @@ for c in [conf, moved] {
         check(c.contains(line + "\n"), "ghostty config has \(line)")
     }
 }
-for (entry, key) in [("middle-click-action = clipboard-paste", "middle-click-action"),
+for (entry, key) in [("middle-click-action = clipboard-paste", "clipboard-paste"), ("middle-click-action = primary-paste", "primary-paste"),
                      ("keybind = super+p=paste_from_clipboard", "paste_from_clipboard"),
                      ("keybind = \"global:ctrl+b>v=paste_from_selection\"", "paste_from_selection"),
                      ("config-file = /tmp/other.conf", "config-file"),
@@ -165,9 +165,10 @@ for (entry, key) in [("middle-click-action = clipboard-paste", "middle-click-act
     check(!out.contains(key), "\(entry) refused")
     check(!HauntConfig.refusedGhostty(TOML.parse(text)["ghostty"]!).isEmpty, "\(entry) reported")
 }
-let kept = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\nmiddle-click-action = ignore\nkeybind = [\"super+j=paste_from_clipboard\", \"super+u=copy_to_clipboard\"]\n"),
+check(conf.contains("middle-click-action = ignore\n"), "Ghostty never pastes on middle click itself")
+let kept = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\ncursor-style = bar\nkeybind = [\"super+j=paste_from_clipboard\", \"super+u=copy_to_clipboard\"]\n"),
                                      defaultSize: 11, keys: defaults)
-check(kept.contains("middle-click-action = ignore\n") && kept.contains("keybind = super+u=copy_to_clipboard\n"), "safe passthrough kept")
+check(kept.contains("cursor-style = bar\n") && kept.contains("keybind = super+u=copy_to_clipboard\n"), "safe passthrough kept")
 check(!HauntConfig.ghosttyConfig(TOML.parse("font = \"Mono\\nconfig-file = /x\"\n"), defaultSize: 11, keys: defaults).contains("config-file"),
       "a line break in font is refused")
 

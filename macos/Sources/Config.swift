@@ -91,6 +91,8 @@ final class HauntConfig {
             "window-colorspace = srgb",
             "confirm-close-surface = true",
             "resize-overlay = never",
+            // Haunt pastes on middle click itself, the text it checked (HauntSurfaceView).
+            "middle-click-action = ignore",
         ]
         // haunt owns tabs and windows, and its shortcuts must reach the menu instead of Ghostty.
         var unbind: [String] = (["t", "w", "n", "d", "shift+d"] + (1...9).flatMap { ["digit_\($0)", "\($0)"] }).map { "super+" + $0 }
@@ -124,7 +126,7 @@ final class HauntConfig {
         value = value.trimmingCharacters(in: ws).lowercased()
         switch key {
         case "right-click-action": return ["paste", "copy-or-paste"].contains(value)
-        case "middle-click-action": return value == "clipboard-paste"
+        case "middle-click-action": return true
         case "keybind": return ["paste_from_clipboard", "paste_from_selection"].contains { value.lowercased().contains($0) }
         case "config-file", "config-default-files": return true
         default: return false
