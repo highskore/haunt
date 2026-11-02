@@ -194,12 +194,32 @@ enum GitRunner {
         var text: String { String(decoding: data, as: UTF8.self) }
     }
 
-    /// No external diff or textconv driver, no fsmonitor hook, no pager, no network.
+    /// No external diff or textconv driver, no fsmonitor hook, no pager, no network, no attributes file,
+    /// and every other program git could be configured to run pinned empty.
     static let safeConfig = [
         "core.fsmonitor=false", "core.untrackedCache=false", "core.pager=cat", "core.quotePath=false",
-        "core.hooksPath=/dev/null", "diff.external=", "diff.noprefix=false", "diff.mnemonicPrefix=false",
-        "diff.relative=false", "color.ui=false", "submodule.recurse=false", "protocol.allow=never",
+        "core.hooksPath=/dev/null", "core.attributesFile=/dev/null", "diff.external=", "diff.noprefix=false",
+        "diff.mnemonicPrefix=false", "diff.relative=false", "color.ui=false", "submodule.recurse=false",
+        "protocol.allow=never", "core.sshCommand=", "core.askPass=", "credential.helper=", "gpg.program=",
+        "gpg.openpgp.program=", "gpg.x509.program=", "gpg.ssh.program=", "core.editor=true", "sequence.editor=true",
     ]
+
+    /// `-c` values that turn off every filter driver the repo's config names (`.gitattributes` would run
+    /// `filter.<name>.clean` or `.process` on the working tree). Reading config runs nothing.
+    static func filterOverrides(cwd: String) -> [String]? {
+        guard let o = run(["config", "--name-only", "-z", "--get-regexp", #"^filter\."#], cwd: cwd) else { return nil }
+        // 1 is "no match": no filters.
+        if o.status == 1 { return [] }
+        guard o.status == 0, !o.truncated, !o.timedOut else { return nil }
+        var names: [String] = []
+        for key in o.data.split(separator: 0).map({ String(decoding: $0, as: UTF8.self) }) {
+            let k = key.trimmingCharacters(in: .newlines)
+            guard k.hasPrefix("filter."), let dot = k.lastIndex(of: "."), dot > k.index(k.startIndex, offsetBy: 6) else { continue }
+            let name = String(k[k.index(k.startIndex, offsetBy: 7)..<dot])
+            if !name.isEmpty, !names.contains(name) { names.append(name) }
+        }
+        return names.flatMap { n in ["clean", "smudge", "process"].map { "filter.\(n).\($0)=" } + ["filter.\(n).required=false"] }
+    }
 
     static let gitPath: String? = {
         let fm = FileManager.default
@@ -212,17 +232,19 @@ enum GitRunner {
     static func environment() -> [String: String] {
         let env = ProcessInfo.processInfo.environment
         var out = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C", "GIT_OPTIONAL_LOCKS": "0",
-                   "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "PAGER": "cat", "GIT_CONFIG_NOSYSTEM": "1"]
+                   "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "PAGER": "cat", "GIT_CONFIG_NOSYSTEM": "1",
+                   "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_ATTR_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1"]
         if let home = env["HOME"] { out["HOME"] = home }
         return out
     }
 
     /// Blocks the calling thread; call it off the main thread. Output past `maxBytes` is cut and the process killed.
-    static func run(_ args: [String], cwd: String, timeout: TimeInterval = 10, maxBytes: Int = 16 << 20) -> Output? {
+    static func run(_ args: [String], cwd: String, config: [String] = [], timeout: TimeInterval = 10,
+                    maxBytes: Int = 16 << 20) -> Output? {
         guard let git = gitPath else { return nil }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: git)
-        p.arguments = safeConfig.flatMap { ["-c", $0] } + ["--no-pager"] + args
+        p.arguments = (safeConfig + config).flatMap { ["-c", $0] } + ["--no-pager"] + args
         p.currentDirectoryURL = URL(fileURLWithPath: cwd)
         p.environment = environment()
         let pipe = Pipe()
@@ -291,7 +313,11 @@ enum ReviewLoader {
             return .failure(.notARepo(cwd))
         }
         let root = top.text.trimmingCharacters(in: .newlines)
-        func git(_ args: [String]) -> GitRunner.Output? { GitRunner.run(args, cwd: root) }
+        // Without the list, a working-tree diff could run a filter driver, so there is no diff.
+        guard let filters = GitRunner.filterOverrides(cwd: root) else {
+            return .failure(.failed("Haunt couldn't read this repository's filter settings, so it doesn't diff the working tree."))
+        }
+        func git(_ args: [String]) -> GitRunner.Output? { GitRunner.run(args, cwd: root, config: filters) }
         func line(_ args: [String]) -> String? {
             guard let o = git(args), o.status == 0 else { return nil }
             let s = o.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -316,9 +342,8 @@ enum ReviewLoader {
 
         let diffArgs = ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
                         "--submodule=short", "-M", base, "--"]
-        guard let out = git(diffArgs), out.status == 0 || out.truncated else {
-            return .failure(.failed("git diff didn't finish"))
-        }
+        guard let out = git(diffArgs) else { return .failure(.failed("git diff didn't start.")) }
+        guard out.status == 0 || out.truncated else { return .failure(.failed("git diff failed (exit \(out.status)).")) }
         if out.timedOut { notes.append("git diff timed out; the list may be incomplete.") }
         if out.truncated { notes.append("The diff is over 16 MB and was cut.") }
         var files = DiffParser.parse(out.text)

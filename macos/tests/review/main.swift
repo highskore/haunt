@@ -188,5 +188,38 @@ check(!FileManager.default.fileExists(atPath: repo + "/PWNED"), "no external dif
 check(ReviewLoader.load(cwd: "/", headAtStart: nil) == .failure(.notARepo("/")), "not a repo")
 try? FileManager.default.removeItem(atPath: repo)
 
+// Hostile filter drivers named by .gitattributes: a working-tree diff would run `clean` or `process`.
+try! FileManager.default.createDirectory(atPath: repo, withIntermediateDirectories: true)
+write("a.txt", "one\n")
+write("b.md", "one\n")
+write("c.cfg", "one\n")
+write(".gitattributes", "*.txt filter=evil\n*.md filter=Ev.il\n*.cfg filter=proc\n")
+sh(["git", "init", "-q", "-b", "main"], repo)
+sh(["git", "add", "-A"], repo)
+sh(["git", "commit", "-q", "-m", "one"], repo)
+write("evil.sh", "#!/bin/sh\ntouch \(repo)/FILTERED\ncat\n")
+sh(["chmod", "+x", "evil.sh"], repo)
+for (k, v) in [("filter.evil.clean", repo + "/evil.sh"), ("filter.Ev.il.clean", repo + "/evil.sh"),
+               ("filter.proc.process", repo + "/evil.sh"), ("filter.proc.required", "true")] {
+    sh(["git", "config", k, v], repo)
+}
+sleep(1)
+for f in ["a.txt", "b.md", "c.cfg"] { write(f, "one\ntwo\n") }
+// The fixture really is hostile: plain git runs the filter.
+sh(["git", "diff"], repo)
+check(FileManager.default.fileExists(atPath: repo + "/FILTERED"), "plain git diff runs the hostile filter (test is live)")
+try? FileManager.default.removeItem(atPath: repo + "/FILTERED")
+sh(["touch", "a.txt", "b.md", "c.cfg"], repo)
+switch ReviewLoader.load(cwd: repo, headAtStart: nil) {
+case let .success(d):
+    check(Set(d.files.map(\.path)).isSuperset(of: ["a.txt", "b.md", "c.cfg"]), "filtered files still diffed \(d.files.map(\.path))")
+case let .failure(e):
+    check(false, "load with filters failed: \(e)")
+}
+check(!FileManager.default.fileExists(atPath: repo + "/FILTERED"), "no filter driver ran")
+check(GitRunner.filterOverrides(cwd: repo).map(Set.init) == Set(["evil", "Ev.il", "proc"].flatMap { n in
+    ["filter.\(n).clean=", "filter.\(n).smudge=", "filter.\(n).process=", "filter.\(n).required=false"] }), "overrides every driver")
+try? FileManager.default.removeItem(atPath: repo)
+
 if failures > 0 { print("review: \(failures) failed"); exit(1) }
 print("review: ok")

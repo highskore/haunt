@@ -11,12 +11,17 @@ Reviews the selected tab's latest agent turn: the diff (mockup 01), line comment
 
 ## git safety (`GitRunner`)
 
-git runs as a `Process` without a shell, with a 10 s timeout (SIGTERM, then SIGKILL) and a 16 MB output cap. Its environment is minimal: `GIT_OPTIONAL_LOCKS=0`, `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM=1`, `LC_ALL=C`, and a pager of `cat`. Every call passes the following:
+git runs as a `Process` without a shell, with a 10 s timeout (SIGTERM, then SIGKILL) and a 16 MB output cap. Its environment is minimal: `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_ATTR_NOSYSTEM=1`, `GIT_OPTIONAL_LOCKS=0`, `GIT_TERMINAL_PROMPT=0`, `GIT_NO_REPLACE_OBJECTS=1`, `LC_ALL=C`, and a pager of `cat`. Every call passes the following:
 
-- `-c core.fsmonitor=false`, `core.untrackedCache=false`, `core.hooksPath=/dev/null`, `diff.external=`, `color.ui=false`, `submodule.recurse=false`, `protocol.allow=never` (and prefix and quoting options for stable parsing);
-- `diff --no-ext-diff --no-textconv --no-color`.
+- `-c core.fsmonitor=false`, `core.untrackedCache=false`, `core.hooksPath=/dev/null`, `core.attributesFile=/dev/null`, `diff.external=`, `color.ui=false`, `submodule.recurse=false`, `protocol.allow=never`;
+- every other configurable program pinned: `core.sshCommand=`, `core.askPass=`, `credential.helper=`, `gpg.program=` (and the openpgp, x509 and ssh variants), and `core.editor=true`/`sequence.editor=true`, since an empty editor would fall back to vi;
+- prefix and quoting options for stable parsing.
 
-`/usr/bin/git` is used only when the developer tools are installed, so it never triggers the install prompt. `macos/tests/review.sh` checks that a repo's own `diff.external` and `core.fsmonitor` don't run.
+Diffs also pass `--no-ext-diff --no-textconv --no-color`, so `diff.<driver>.command` and `textconv` don't run.
+
+**Filter drivers.** A working-tree diff runs `filter.<name>.clean` or `.process` for any path whose `.gitattributes` names that filter. Before diffing, Haunt reads `git config --name-only -z --get-regexp '^filter\.'`; reading config runs nothing. Every driver it lists is then overridden on all later calls with `filter.<name>.clean=`, `.smudge=`, `.process=` and `.required=false`, and git skips a filter whose command is empty. If that list can't be read, Haunt shows no diff and says why.
+
+`/usr/bin/git` is used only when the developer tools are installed, so it never triggers the install prompt. `macos/tests/review.sh` checks that a repo's own `diff.external` and `core.fsmonitor` don't run, and that hostile clean and process filters named by `.gitattributes` don't run either. The test first checks that plain git does run them, so the test is live.
 
 ## Sending a follow-up (06)
 
