@@ -12,6 +12,13 @@ pub struct SidebarSnapshot {
     pub groups: Vec<SidebarGroup>,
     /// How `Row.color` is drawn.
     pub color_style: ColorStyle,
+    /// Bumped on every change; `snapshot_if_newer` compares it.
+    #[cfg_attr(feature = "ffi", uniffi(default = 0))]
+    pub version: u64,
+    /// Milliseconds until a running subagent's elapsed time reads differently; None when no text
+    /// depends on the clock, so nothing needs to redraw until the listener fires.
+    #[cfg_attr(feature = "ffi", uniffi(default = None))]
+    pub next_tick_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -56,7 +63,7 @@ pub struct PendingRequest {
     pub key: u64,
     pub tool: String,
     pub preview: String,
-    /// Multi-line or with hidden characters: show it, but offer no Allow/Deny; the terminal answers.
+    /// Terminal-only (`Session::terminal_only`): show it, but offer no Allow/Deny; the terminal answers.
     pub suspicious: bool,
 }
 
@@ -91,7 +98,7 @@ pub struct SurfaceView<'a> {
 }
 
 /// Groups rows as NEEDS YOU, RUNNING, IDLE (done, failed and shells included); empty groups are left out,
-/// and a shells-only group has no label.
+/// and a sidebar of shells alone has no label.
 /// `surfaces` come in tab order; within a group the latest status change comes first.
 pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, shell: Option<&str>, now: Instant) -> SidebarSnapshot {
     let mut groups: Vec<SidebarGroup> = [(NEEDS_YOU_ID, NEEDS_YOU), (RUNNING_ID, RUNNING), (IDLE_ID, IDLE)]
@@ -110,13 +117,28 @@ pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, shell: Option<&str
         groups[g].rows.push(row(s, home, shell, now));
     }
     groups.retain(|g| !g.rows.is_empty());
-    // Plain shells aren't agents, so a shells-only group gets no label.
-    for g in &mut groups {
-        if g.rows.iter().all(|r| r.kind == RowKind::Shell) {
-            g.label.clear();
-        }
+    // IDLE over plain shells says nothing until there are agents; with agents it separates the shells from them.
+    if let [g] = groups.as_mut_slice()
+        && g.rows.iter().all(|r| r.kind == RowKind::Shell)
+    {
+        g.label.clear();
     }
-    SidebarSnapshot { groups, color_style: ColorStyle::Dot }
+    SidebarSnapshot { groups, color_style: ColorStyle::Dot, version: 0, next_tick_ms: next_tick(surfaces, now) }
+}
+
+/// `precise` changes every second below an hour, every minute after.
+fn next_tick(surfaces: &[SurfaceView], now: Instant) -> Option<u64> {
+    surfaces
+        .iter()
+        .filter(|s| s.session.is_agent && matches!(s.session.status, Status::Running | Status::NeedsYou))
+        .flat_map(|s| &s.session.progress.subagents)
+        .filter(|a| a.duration.is_none())
+        .map(|a| {
+            let ms = a.elapsed(now).as_millis() as u64;
+            let step = if ms < 3_600_000 { 1_000 } else { 60_000 };
+            step - ms % step
+        })
+        .min()
 }
 
 fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -> Row {
@@ -184,7 +206,7 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
         pending: session
             .live_permission()
             .filter(|p| p.agent.answer_bytes(true).is_some())
-            .map(|p| PendingRequest { key: p.key(), tool: p.tool.clone(), preview: p.preview(), suspicious: p.suspicious() }),
+            .map(|p| PendingRequest { key: p.key(), tool: p.tool.clone(), preview: p.preview(), suspicious: session.terminal_only(p) }),
         color: None,
     }
 }
@@ -319,6 +341,16 @@ mod tests {
     }
 
     #[test]
+    fn the_next_tick_is_when_a_running_subagent_clock_changes() {
+        let (mut surfaces, now) = mockup();
+        let ms = Duration::from_millis;
+        assert_eq!(render(&surfaces, now + ms(300)).next_tick_ms, Some(700));
+        assert_eq!(render(&surfaces, now + ms(3_600_000 - 72_000 + 250)).next_tick_ms, Some(59_750));
+        feed(&mut surfaces[0].3, &[r#"{"event":"subagent_stop","agent_id":"e1"}"#], now);
+        assert_eq!(render(&surfaces, now).next_tick_ms, None, "finished subagents show a fixed duration");
+    }
+
+    #[test]
     fn groups_and_rows_match_mockup_06() {
         let (surfaces, now) = mockup();
         let snap = render(&surfaces, now);
@@ -364,6 +396,21 @@ mod tests {
         assert_eq!(snap.groups.len(), 1);
         assert_eq!(snap.groups[0].label, "", "shells alone get no IDLE label");
         assert_eq!((snap.groups[0].rows[0].name.as_str(), snap.groups[0].rows[0].meta.as_str()), ("~", "~ · zsh"));
+    }
+
+    #[test]
+    fn shells_keep_the_idle_label_when_agents_are_listed() {
+        let t = Instant::now();
+        let shell = Session::new(t);
+        let mut agent = Session::new(t);
+        agent.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"git push"}}"#), true, t);
+        let views = [
+            SurfaceView { id: "a", cwd: "/a", branch: None, session: &agent, selected: false },
+            SurfaceView { id: "b", cwd: "/b", branch: None, session: &shell, selected: false },
+        ];
+        let snap = snapshot(&views, HOME, Some("zsh"), t);
+        let groups: Vec<_> = snap.groups.iter().map(|g| (g.label.as_str(), g.rows.len())).collect();
+        assert_eq!(groups, [("NEEDS YOU", 1), ("IDLE", 1)], "the shell must not read as needing you");
     }
 
     #[test]

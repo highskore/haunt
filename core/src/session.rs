@@ -8,6 +8,10 @@ use crate::progress::Progress;
 
 const MAX_PROMPT_CHARS: usize = 120;
 const MAX_RECENT_STARTS: usize = 16;
+const MAX_UNRESOLVED: usize = 16;
+/// Tools whose one command or file path is the whole of what the call may touch. Any other tool
+/// (`apply_patch`, MCP tools) can do more than its preview shows, so only the terminal answers it.
+const SINGLE_TARGET: [&str; 6] = ["Bash", "Edit", "MultiEdit", "Write", "NotebookEdit", "Read"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -54,6 +58,20 @@ pub enum Outcome {
     Superseded,
 }
 
+impl Outcome {
+    /// The serde tag, without serializing.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::AllowedInHaunt => "allowed_in_haunt",
+            Self::DeniedInHaunt => "denied_in_haunt",
+            Self::AllowedByPlugin { .. } => "allowed_by_plugin",
+            Self::DeniedByPlugin { .. } => "denied_by_plugin",
+            Self::AnsweredInTerminal => "answered_in_terminal",
+            Self::Superseded => "superseded",
+        }
+    }
+}
+
 impl Permission {
     /// None when the input is missing: the user has to answer in the terminal then.
     fn from_call(t: &ToolCall, e: &AgentEvent, generation: u64) -> Option<Self> {
@@ -98,10 +116,13 @@ impl Permission {
         crate::event::visible(&text)
     }
 
-    /// A multi-line input, or one with control or invisible characters: what runs may not be what
-    /// a one-line preview suggests, so it is answered only in the terminal.
+    /// Answered only in the terminal, because what runs may not be what the preview suggests: a
+    /// multi-line input, one with control or invisible characters, or a tool not known to touch
+    /// just the one target it shows (Bash by its command, the file tools by their path). A U+FFFD
+    /// means some hop replaced bytes it couldn't decode, so the shown input may not be what runs.
     pub fn suspicious(&self) -> bool {
-        self.input.as_deref().is_some_and(|i| i.chars().any(crate::event::is_hidden))
+        let single = SINGLE_TARGET.contains(&self.tool.as_str()) && (self.tool == "Bash") == self.raw_command.is_some();
+        !single || self.input.as_deref().is_some_and(|i| i.chars().any(|c| crate::event::is_hidden(c) || c == '\u{FFFD}'))
     }
 }
 
@@ -130,6 +151,13 @@ pub struct Session {
     recent_starts: VecDeque<ToolCall>,
     /// Requests that ended since the last `take_ended`, for the decision log.
     ended: Vec<(Permission, Outcome)>,
+    /// Superseded requests whose call hasn't been seen to run: the agent may still show their
+    /// prompt (Codex queues parallel approvals), so no other request is answerable until their call runs
+    /// or the turn ends.
+    unresolved: Vec<Permission>,
+    /// More requests went unresolved than `unresolved` holds: every request stays terminal-only
+    /// until a verified turn end, rather than forgetting one that may still be on screen.
+    overflowed: bool,
 }
 
 impl Session {
@@ -148,6 +176,8 @@ impl Session {
             status_changed: now,
             recent_starts: VecDeque::new(),
             ended: Vec::new(),
+            unresolved: Vec::new(),
+            overflowed: false,
         }
     }
 
@@ -157,7 +187,8 @@ impl Session {
         let mut changed = !self.is_agent;
         self.is_agent = true;
         changed |= self.progress.apply(e, now);
-        let before = (self.status, self.permission.clone(), self.prompt.clone());
+        // A replaced request always has a new generation, so the generation stands for the request.
+        let before = self.fingerprint();
         let main = e.agent_id.is_none();
         if verified
             && let Some(c) = e.cwd.as_ref().filter(|c| c.starts_with('/'))
@@ -173,11 +204,16 @@ impl Session {
 
         match &e.kind {
             EventKind::PromptSubmit { query } => {
-                self.prompt = query.as_deref().map(one_line);
+                let prompt = query.as_deref().map(one_line);
+                changed |= prompt != self.prompt;
+                self.prompt = prompt;
                 self.progress.new_turn();
                 self.turn_started = Some(now);
                 self.turn_finished = None;
                 self.set(Status::Running, now);
+                if verified {
+                    self.clear_unresolved();
+                }
             }
             EventKind::ToolStart { tool } => {
                 if verified {
@@ -191,15 +227,25 @@ impl Session {
                 }
             }
             EventKind::ToolDone { tool } | EventKind::ToolFailed { tool } | EventKind::ToolRan { tool } => {
+                // Only an exact tool_use_id on the same thread retires an unresolved request; one
+                // without an id can't be told apart from a lookalike call and waits for the turn end.
+                let earlier = verified
+                    && !e.truncated
+                    && self
+                        .unresolved
+                        .iter()
+                        .position(|p| p.tool == tool.tool_name && p.thread == e.agent_id && p.tool_use_id.is_some() && p.tool_use_id == tool.tool_use_id)
+                        .map(|i| self.unresolved.remove(i))
+                        .is_some();
                 if self.status == Status::NeedsYou {
                     let resolved = match &self.permission {
-                        Some(p) => verified && p.matches(tool, e.truncated),
+                        Some(p) => !earlier && verified && p.matches(tool, e.truncated),
                         None => main,
                     };
                     if resolved {
                         self.end_permission(Outcome::AnsweredInTerminal);
                         self.set(Status::Running, now);
-                    } else if self.moved_on(e, tool, verified) {
+                    } else if !earlier && self.moved_on(e, tool, verified) {
                         self.set(Status::Running, now);
                     }
                 }
@@ -220,10 +266,10 @@ impl Session {
             EventKind::Notification { notification_type: Some(t), .. } if t == "permission_prompt" => {
                 self.set(Status::NeedsYou, now);
             }
-            EventKind::Stop => self.finish(Status::Done, now),
+            EventKind::Stop => self.finish(Status::Done, verified, now),
             // Names the official Warp plugin uses; status only.
             EventKind::Unknown { event } => match event.as_str() {
-                "stop_failure" => self.finish(Status::Failed, now),
+                "stop_failure" => self.finish(Status::Failed, verified, now),
                 "permission_request" | "question_asked" | "agent_needs_input" => self.set(Status::NeedsYou, now),
                 "permission_replied" | "tool_complete" if self.status == Status::NeedsYou && self.permission.is_none() => {
                     self.set(Status::Running, now)
@@ -232,7 +278,11 @@ impl Session {
             },
             _ => {}
         }
-        changed || before != (self.status, self.permission.clone(), self.prompt.clone())
+        changed || before != self.fingerprint()
+    }
+
+    fn fingerprint(&self) -> (Status, Option<u64>, usize, bool) {
+        (self.status, self.permission.as_ref().map(|p| p.generation), self.unresolved.len(), self.overflowed)
     }
 
     /// A verified call other than the pending one, on the thread that asked: the prompt is gone. Only
@@ -261,15 +311,21 @@ impl Session {
         }
     }
 
+    /// The live request may be shown but not answered from haunt: it is suspicious, or another
+    /// verified request may still be on screen ahead of it.
+    pub fn terminal_only(&self, p: &Permission) -> bool {
+        p.suspicious() || self.overflowed || !self.unresolved.is_empty()
+    }
+
     /// Consumes the live permission if `key` names it; false for a stale or unknown key, and for a
-    /// suspicious request, which stays live for the terminal to answer.
+    /// terminal-only request, which stays live for the terminal to answer.
     pub fn answer(&mut self, key: u64, allow: bool, now: Instant) -> bool {
         self.answer_as(key, if allow { Outcome::AllowedInHaunt } else { Outcome::DeniedInHaunt }, now)
     }
 
     /// `answer`, logging `outcome` (an `…InHaunt` or `…ByPlugin` one).
     pub fn answer_as(&mut self, key: u64, outcome: Outcome, now: Instant) -> bool {
-        if self.live_permission().is_none_or(|p| p.key() != key || p.suspicious()) {
+        if self.live_permission().is_none_or(|p| p.key() != key || self.terminal_only(p)) {
             return false;
         }
         self.end_permission(outcome);
@@ -280,6 +336,7 @@ impl Session {
     /// Ends the request, if any, as superseded: the surface is going away.
     pub fn close(&mut self) {
         self.end_permission(Outcome::Superseded);
+        self.clear_unresolved();
     }
 
     #[cfg(test)]
@@ -293,13 +350,30 @@ impl Session {
 
     fn end_permission(&mut self, outcome: Outcome) {
         if let Some(p) = self.permission.take() {
+            if outcome == Outcome::Superseded {
+                if self.unresolved.len() < MAX_UNRESOLVED {
+                    self.unresolved.push(p.clone());
+                } else {
+                    self.overflowed = true;
+                }
+            }
             self.ended.push((p, outcome));
         }
     }
 
-    fn finish(&mut self, status: Status, now: Instant) {
+    /// A turn end. Only a verified one clears the unresolved requests: a forged stop may end the
+    /// live request, but never unblocks another.
+    fn finish(&mut self, status: Status, verified: bool, now: Instant) {
         self.turn_finished = Some(now);
         self.set(status, now);
+        if verified {
+            self.clear_unresolved();
+        }
+    }
+
+    fn clear_unresolved(&mut self) {
+        self.unresolved.clear();
+        self.overflowed = false;
     }
 
     /// Leaving NeedsYou always drops the request; entering it starts a new generation.
@@ -339,6 +413,8 @@ mod tests {
 
     const PERM: &str = r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"git push"}}"#;
     const RAN: &str = r#"{"event":"tool_ran","tool_name":"Bash","tool_input":{"command":"git push"}}"#;
+    const START_T1: &str = r#"{"event":"tool_start","tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"git push"}}"#;
+    const RAN_T1: &str = r#"{"event":"tool_ran","tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"git push"}}"#;
 
     fn running() -> (Session, Instant) {
         let now = Instant::now();
@@ -612,6 +688,7 @@ mod tests {
     #[test]
     fn a_stale_key_is_refused_after_the_prompt_changed() {
         let (mut s, now) = running();
+        s.apply(&ev(START_T1), true, now);
         s.apply(&ev(PERM), true, now);
         let old = s.live_permission().unwrap().key();
         s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}"#), true, now);
@@ -619,7 +696,9 @@ mod tests {
         assert_eq!(s.status, Status::NeedsYou, "the refused answer changed nothing");
         let new = s.live_permission().unwrap().key();
         assert_ne!(old, new);
-        assert!(s.answer(new, false, now));
+        assert!(!s.answer(new, false, now), "git push may still be on screen ahead of it");
+        s.apply(&ev(RAN_T1), true, now);
+        assert!(s.answer(new, false, now), "the only request left");
     }
 
     #[test]
@@ -632,6 +711,7 @@ mod tests {
             s.answer(key, allow, now);
         };
         s.apply(&ev(r#"{"event":"permission_seen","cwd":"/p","tool_name":"Bash","tool_input":{"command":"git push"}}"#), true, now);
+        s.apply(&ev(r#"{"event":"prompt_submit","query":"next"}"#), true, now);
         s.apply(&ev(PERM), true, now);
         s.apply(&ev(RAN), true, now);
         answer(&mut s, true);
@@ -667,6 +747,165 @@ mod tests {
         assert_eq!(s.status, Status::Running);
         s.apply(&ev(r#"{"event":"stop_failure"}"#), false, now);
         assert_eq!(s.status, Status::Failed);
+    }
+
+    #[test]
+    fn only_single_target_tools_are_answerable() {
+        let answerable = |body: &str| {
+            let (mut s, now) = running();
+            s.apply(&ev(body), true, now);
+            let p = s.live_permission().cloned().expect(body);
+            (s.answer(p.key(), true, now), p.preview())
+        };
+        let perm = |agent: &str, tool: &str, input: &str| {
+            format!(r#"{{"agent":"{agent}","event":"permission_seen","tool_name":"{tool}","tool_input":{input}}}"#)
+        };
+        for (tool, input) in [("Bash", r#"{"command":"git push"}"#), ("Edit", r#"{"file_path":"/w/a.rs"}"#), ("MultiEdit", r#"{"file_path":"/w/a.rs"}"#), ("Write", r#"{"file_path":"/w/a.rs"}"#)] {
+            assert!(answerable(&perm("claude", tool, input)).0, "{tool}");
+        }
+        assert!(answerable(&perm("codex", "Bash", r#"{"command":"git push"}"#)).0);
+        for (agent, tool, input) in [
+            ("codex", "apply_patch", r#"{"file_path":"/w/src/zz_main.rs"}"#),
+            ("claude", "mcp__fs__write", r#"{"file_path":"/w/a.rs"}"#),
+            ("claude", "mcp__sh__run", r#"{"command":"ls"}"#),
+            ("claude", "Bash", r#"{"file_path":"/w/a.rs"}"#),
+            ("claude", "Edit", r#"{"command":"ls","file_path":"/w/a.rs"}"#),
+        ] {
+            assert!(!answerable(&perm(agent, tool, input)).0, "{tool} {input}");
+        }
+        let many = answerable(&perm("codex", "apply_patch", r#"{"file_path":"/w/src/zz_main.rs\n/Users/me/.zshenv"}"#));
+        assert_eq!(many, (false, "apply_patch /w/src/zz_main.rs⏎/Users/me/.zshenv".to_owned()), "every path shows");
+    }
+
+    const CODEX_START_B: &str = r#"{"agent":"codex","event":"tool_start","tool_name":"Bash","tool_use_id":"c2","tool_input":{"command":"rm -rf build"}}"#;
+    const CODEX_PERM_B: &str = r#"{"agent":"codex","event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}"#;
+    const CODEX_DONE_A: &str = r#"{"agent":"codex","event":"tool_done","tool_name":"Bash","tool_use_id":"c1","tool_input":{"command":"git push"}}"#;
+
+    #[test]
+    fn parallel_requests_are_answerable_only_once_one_is_left() {
+        for order in [[CODEX_START, CODEX_PERM, CODEX_START_B, CODEX_PERM_B], [CODEX_START, CODEX_START_B, CODEX_PERM, CODEX_PERM_B]] {
+            let (mut s, now) = running();
+            for e in order {
+                s.apply(&ev(e), true, now);
+            }
+            let b = s.live_permission().cloned().expect("the newest is shown");
+            assert_eq!(b.preview(), "rm -rf build");
+            assert!(s.terminal_only(&b), "git push may still be on screen ahead of it");
+            assert!(!s.answer(b.key(), true, now) && !s.answer(b.key(), false, now));
+            assert!(s.apply(&ev(CODEX_DONE_A), true, now), "the change reaches the UI");
+            assert_eq!(s.live_permission(), Some(&b), "the earlier call ran; that is no sign the newer prompt is gone");
+            assert!(!s.terminal_only(&b));
+            assert!(s.answer(b.key(), true, now));
+        }
+    }
+
+    #[test]
+    fn an_unresolved_request_blocks_answers_until_the_turn_ends() {
+        let (mut s, now) = running();
+        s.apply(&ev(PERM), true, now);
+        s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}"#), true, now);
+        s.apply(&ev(r#"{"event":"tool_ran","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}"#), true, now);
+        assert_eq!(s.status, Status::Running);
+        s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"ls"}}"#), true, now);
+        let p = s.live_permission().cloned().unwrap();
+        assert!(s.terminal_only(&p), "git push never ran, so its prompt may be up");
+        s.apply(&ev(RAN), false, now);
+        assert!(s.terminal_only(&p), "a forged tool_ran doesn't clear it");
+        s.apply(&ev(r#"{"event":"prompt_submit","query":"next"}"#), true, now);
+        s.apply(&ev(PERM), true, now);
+        let p = s.live_permission().cloned().unwrap();
+        assert!(s.answer(p.key(), true, now), "a new turn starts clean");
+    }
+
+    #[test]
+    fn a_forged_turn_end_never_unblocks_a_request() {
+        for end in [r#"{"event":"stop"}"#, r#"{"event":"stop_failure"}"#, r#"{"event":"prompt_submit","query":"x"}"#] {
+            let (mut s, now) = running();
+            s.apply(&ev(PERM), true, now);
+            s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"ls"}}"#), true, now);
+            s.apply(&ev(end), false, now);
+            s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm -rf ~"}}"#), true, now);
+            let p = s.live_permission().cloned().unwrap();
+            assert!(s.terminal_only(&p), "{end}: git push and ls may still be on screen");
+            assert!(!s.answer(p.key(), true, now), "{end}");
+            s.apply(&ev(end), true, now);
+            s.apply(&ev(r#"{"event":"prompt_submit","query":"y"}"#), true, now);
+            s.apply(&ev(PERM), true, now);
+            let p = s.live_permission().cloned().unwrap();
+            assert!(!s.terminal_only(&p), "{end}: a verified turn end clears them");
+        }
+    }
+
+    #[test]
+    fn overflowing_the_unresolved_list_stays_terminal_only_until_the_turn_ends() {
+        let (mut s, now) = running();
+        s.apply(&ev(START_T1), true, now);
+        s.apply(&ev(PERM), true, now);
+        for i in 0..MAX_UNRESOLVED + 4 {
+            s.apply(&ev(&format!(r#"{{"event":"permission_seen","tool_name":"Bash","tool_use_id":"f{i}","tool_input":{{"command":"echo {i}"}}}}"#)), true, now);
+        }
+        for i in 0..MAX_UNRESOLVED + 4 {
+            s.apply(&ev(&format!(r#"{{"event":"tool_ran","tool_name":"Bash","tool_use_id":"f{i}","tool_input":{{"command":"echo {i}"}}}}"#)), true, now);
+        }
+        s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm -rf ~"}}"#), true, now);
+        let p = s.live_permission().cloned().unwrap();
+        assert!(s.terminal_only(&p), "a request pushed past the cap is never forgotten");
+        s.apply(&ev(r#"{"event":"stop"}"#), true, now);
+        s.apply(&ev(r#"{"event":"prompt_submit","query":"y"}"#), true, now);
+        s.apply(&ev(PERM), true, now);
+        let p = s.live_permission().cloned().unwrap();
+        assert!(!s.terminal_only(&p));
+    }
+
+    #[test]
+    fn only_the_same_id_on_the_same_thread_retires_an_unresolved_request() {
+        let (mut s, now) = running();
+        s.apply(&ev(START_T1), true, now);
+        s.apply(&ev(PERM), true, now);
+        s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"ls"}}"#), true, now);
+        let p = s.live_permission().cloned().unwrap();
+        for ran in [
+            RAN,
+            r#"{"event":"tool_ran","tool_name":"Bash","tool_use_id":"t2","tool_input":{"command":"git push"}}"#,
+            r#"{"event":"tool_ran","tool_name":"Bash","tool_use_id":"t1","agent_id":"sub","tool_input":{"command":"git push"}}"#,
+        ] {
+            s.apply(&ev(ran), true, now);
+            assert!(s.terminal_only(&p), "{ran}");
+        }
+        s.apply(&ev(RAN_T1), true, now);
+        assert!(!s.terminal_only(&p));
+
+        let (mut s, now) = running();
+        s.apply(&ev(PERM), true, now);
+        s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"ls"}}"#), true, now);
+        s.apply(&ev(RAN), true, now);
+        let p = s.live_permission().cloned().unwrap();
+        assert!(s.terminal_only(&p), "an id-less request waits for the turn end");
+    }
+
+    #[test]
+    fn requests_match_their_call_byte_for_byte() {
+        for (asked, ran) in [("git push", "git push "), ("git\u{200b}push", "gitpush"), ("rm a\u{a0}b", "rm a b"), ("caf\u{e9}", "cafe\u{301}")] {
+            let (mut s, now) = running();
+            let call = |ev_name: &str, cmd: &str| ev(&serde_json::json!({"event": ev_name, "tool_name": "Bash", "tool_input": {"command": cmd}}).to_string());
+            s.apply(&call("permission_seen", asked), true, now);
+            assert_eq!(s.live_permission().unwrap().raw_command.as_deref(), Some(asked), "stored exactly as sent");
+            s.apply(&call("tool_ran", ran), true, now);
+            assert!(s.live_permission().is_some(), "{asked:?} is not answered by {ran:?}");
+        }
+        let (mut s, now) = running();
+        s.apply(&ev(r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm �"}}"#), true, now);
+        let p = s.live_permission().cloned().unwrap();
+        assert!(p.suspicious(), "a replacement character means bytes were lost on the way");
+    }
+
+    #[test]
+    fn outcome_names_are_the_serde_tags() {
+        let p = || "p".to_owned();
+        for o in [Outcome::AllowedInHaunt, Outcome::DeniedInHaunt, Outcome::AllowedByPlugin { plugin_id: p() }, Outcome::DeniedByPlugin { plugin_id: p() }, Outcome::AnsweredInTerminal, Outcome::Superseded] {
+            let json = serde_json::to_string(&o).unwrap();
+            assert!(json.starts_with(&format!("\"{}\"", o.as_str())) || json.starts_with(&format!("{{\"{}\"", o.as_str())), "{json}");
+        }
     }
 
     #[test]

@@ -166,7 +166,9 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     override func menu(for event: NSEvent) -> NSMenu? {
         guard let (row, _) = row(at: convert(event.locationInWindow, from: nil)) else { return nil }
         let menu = NSMenu()
-        for (title, action) in [("Rename Tab…", #selector(renameFromMenu(_:))), ("Close Tab", #selector(closeFromMenu(_:)))] {
+        // The agents view's list has nowhere to keep a name, so it offers no rename.
+        let own = (panel ? [] : [("Rename Tab…", #selector(renameFromMenu(_:)))]) + [("Close Tab", #selector(closeFromMenu(_:)))]
+        for (title, action) in own {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
             item.representedObject = row.surfaceId
@@ -468,7 +470,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         // Only where the × is drawn: on the hovered row.
         if row.surfaceId == hoverId, closeRect(top: top).insetBy(dx: -Tok.App.hitSlop, dy: -Tok.App.hitSlop).contains(p) {
             onClose?(row.surfaceId)
-        } else if event.clickCount == 2, nameRect(top: top).contains(p) {
+        } else if !panel, event.clickCount == 2, nameRect(top: top).contains(p) {
             beginRename(row.surfaceId)
         } else {
             onSelect?(row.surfaceId)

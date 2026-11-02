@@ -95,10 +95,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         c.window?.center()
         c.showWindow(nil)
         if let startError { c.showStartError(startError) }
-        // HAUNT_INACTIVE=1 lets the fidelity script capture the unfocused window state.
+        // A real launch leaves focus to the launcher. Fixtures are for the fidelity script, which captures
+        // them focused, or unfocused with HAUNT_INACTIVE=1.
         if ProcessInfo.processInfo.environment["HAUNT_INACTIVE"] == "1" {
             NSApp.deactivate()
-        } else {
+        } else if fixture != nil {
             NSApp.activate(ignoringOtherApps: true)
         }
 
@@ -223,6 +224,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if item.action == #selector(toggleAgentsOnlyView(_:)) {
             item.state = controller?.isAgentsViewOn == true ? .on : .off
         }
+        // The sidebar's editor is hidden behind the agents view.
+        if item.action == #selector(renameHauntTab(_:)), controller?.isAgentsViewOn == true { return false }
         // While a tab name is being edited, Haunt's own shortcuts stay out of the way; disabled items
         // don't take their key equivalents, so the keys reach the text field.
         return !(controller?.isRenaming == true && Self.renameBlocked.contains(item.action))
@@ -263,7 +266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             # Title bar icons, left to right: any of "search", "new_tab", "settings", "sidebar".
             # titlebar_buttons = [\(TitlebarButton.defaults.map { "\"\($0.rawValue)\"" }.joined(separator: ", "))]
 
-            # Raw Ghostty keys, passed through as is.
+            # Raw Ghostty keys, passed through, except ones that paste past Haunt's check (see the README).
             [ghostty]
 
             """
@@ -334,6 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         submenu("Edit", [
             item("Copy", #selector(Ghostty.SurfaceView.copy(_:)), .copy),
             item("Paste", #selector(Ghostty.SurfaceView.paste(_:)), .paste),
+            item("Paste Selection", #selector(Ghostty.SurfaceView.pasteSelection(_:)), .pasteSelection),
             item("Select All", #selector(NSResponder.selectAll(_:)), .selectAll),
         ])
         submenu("View", [

@@ -1,4 +1,5 @@
 //! The first-party decision-log and allowlist plugins, installed with the CLI and fed by a real core.
+#![cfg(feature = "plugins")]
 
 use std::io::Write;
 use std::os::unix::net::UnixStream;

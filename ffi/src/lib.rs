@@ -23,7 +23,8 @@ pub use haunt_core::{
     SurfaceEnv,
 };
 
-/// Called after any change to the snapshot, on the thread that caused it (often the socket thread).
+/// Called after a change to the snapshot, on the thread that caused it (often the socket thread);
+/// then not again until the next `snapshot`.
 #[uniffi::export(callback_interface)]
 pub trait CoreListener: Send + Sync {
     fn changed(&self);
@@ -70,6 +71,10 @@ impl HauntCore {
         self.core.snapshot()
     }
 
+    pub fn snapshot_if_newer(&self, version: u64) -> Option<SidebarSnapshot> {
+        self.core.snapshot_if_newer(version)
+    }
+
     pub fn set_listener(&self, listener: Box<dyn CoreListener>) {
         self.core.set_listener(std::sync::Arc::new(move || listener.changed()));
     }
@@ -85,6 +90,11 @@ impl HauntCore {
 
     pub fn decisions(&self, query: String, limit: u32) -> Vec<Decision> {
         self.core.decisions(&query, limit)
+    }
+
+    /// `decisions` of one tab when `surface_id` is set; the filter applies before the limit.
+    pub fn decisions_in(&self, query: String, surface_id: Option<String>, limit: u32) -> Vec<Decision> {
+        self.core.decisions_in(&query, surface_id.as_deref(), limit)
     }
 
     pub fn allow_suggestions(&self) -> Vec<AllowSuggestion> {
@@ -157,34 +167,34 @@ impl HauntPlugins {
     }
 
     pub fn load_errors(&self) -> Vec<String> {
-        self.set.lock().unwrap().errors().to_vec()
+        haunt_core::sync::lock(&self.set).errors().to_vec()
     }
 
     /// No mode: registered commands and modes. A mode word: that mode's items for `query`.
     pub fn palette_items(&self, mode: Option<String>, query: String) -> Vec<PaletteItem> {
-        self.set.lock().unwrap().palette_items(mode.as_deref(), &query)
+        haunt_core::sync::lock(&self.set).palette_items(mode.as_deref(), &query)
     }
 
     pub fn invoke_palette_item(&self, plugin_id: String, item_id: String) -> Result<(), HostError> {
-        Ok(self.set.lock().unwrap().invoke(&plugin_id, &item_id)?)
+        Ok(haunt_core::sync::lock(&self.set).invoke(&plugin_id, &item_id)?)
     }
 
     /// Notifications and pty writes plugins asked for since the last call.
     pub fn take_requests(&self) -> Vec<HostRequest> {
-        self.set.lock().unwrap().take_requests()
+        haunt_core::sync::lock(&self.set).take_requests()
     }
 
     /// Plugin entries for a row's context menu, built when the menu opens.
     pub fn row_menu_items(&self, surface_id: String) -> Vec<RowMenuItem> {
-        self.set.lock().unwrap().row_menu(&surface_id)
+        haunt_core::sync::lock(&self.set).row_menu(&surface_id)
     }
 
     pub fn invoke_row_menu_item(&self, plugin_id: String, item_id: String, surface_id: String) -> Result<(), HostError> {
-        Ok(self.set.lock().unwrap().invoke_row_item(&plugin_id, &item_id, &surface_id)?)
+        Ok(haunt_core::sync::lock(&self.set).invoke_row_item(&plugin_id, &item_id, &surface_id)?)
     }
 
     /// A drag dropped `surface_id` into `SidebarGroup.id` `group_id`, above `before_surface_id` (nil: at the end).
     pub fn row_moved(&self, surface_id: String, group_id: String, before_surface_id: Option<String>) {
-        self.set.lock().unwrap().row_moved(&surface_id, &group_id, before_surface_id.as_deref());
+        haunt_core::sync::lock(&self.set).row_moved(&surface_id, &group_id, before_surface_id.as_deref());
     }
 }

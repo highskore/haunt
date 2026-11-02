@@ -196,7 +196,7 @@ pub fn arrange(snap: SidebarSnapshot, a: &Arrangement) -> SidebarSnapshot {
         groups.extend(state);
     }
     groups.retain(|g| !g.rows.is_empty());
-    SidebarSnapshot { groups, color_style: a.color_style }
+    SidebarSnapshot { groups, color_style: a.color_style, ..snap }
 }
 
 #[cfg(test)]
@@ -228,6 +228,8 @@ mod tests {
                 group(IDLE_ID, IDLE, vec![row("i1", RowKind::Claude, false), row("s1", RowKind::Shell, false)]),
             ],
             color_style: ColorStyle::Dot,
+            version: 0,
+            next_tick_ms: None,
         }
     }
 

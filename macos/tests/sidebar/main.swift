@@ -30,5 +30,14 @@ for y in stride(from: CGFloat(0), to: 600, by: 1) {
 check(seen == ["none", "pinned:p1", "pinned:p2", "pinned:end", "idle:i", "idle:end"], "drop targets top to bottom: \(seen)")
 check(!seen.contains { $0.hasPrefix("needs-you") }, "nothing lands in NEEDS YOU")
 
+// Leaving the agents view: the old frame comes back only if a screen still shows it.
+let main = NSRect(x: 0, y: 0, width: 1440, height: 875), gone = NSRect(x: 1440, y: 0, width: 1200, height: 800)
+check(AgentsView.restoredFrame(NSRect(x: 100, y: 100, width: 900, height: 600), screens: [main], current: main)
+      == NSRect(x: 100, y: 100, width: 900, height: 600), "an on-screen frame is kept")
+check(AgentsView.restoredFrame(NSRect(x: 1500, y: 100, width: 900, height: 600), screens: [main], current: main)
+      == NSRect(x: 270, y: 137.5, width: 900, height: 600), "a frame on a lost screen is centred on the current one")
+check(AgentsView.restoredFrame(gone.insetBy(dx: -200, dy: -200), screens: [], current: NSRect(x: 0, y: 0, width: 800, height: 600))
+      == NSRect(x: 0, y: 0, width: 800, height: 600), "and capped to it")
+
 print(failures == 0 ? "sidebar: all passed" : "sidebar: \(failures) failed")
 exit(failures == 0 ? 0 : 1)
