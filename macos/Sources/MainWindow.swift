@@ -114,7 +114,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var observers: [NSObjectProtocol] = []
     /// The core's branch lookup can stall on a dead mount the shell's cwd points at; serial keeps each surface's updates in order.
     private let infoQueue = DispatchQueue(label: "haunt.surface-info", qos: .utility)
-    /// One-shot, for when a running subagent's elapsed time next reads differently.
+    /// For when a running subagent's elapsed time next reads differently: one timer, its fire date moved
+    /// to each deadline and parked in the distant future between them.
     private var ticker: Timer?
     /// The version of the snapshot on screen; 0 is older than any the core makes.
     private var shownVersion: UInt64 = 0
@@ -371,14 +372,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// Fires when the core says the next elapsed time changes, and only while the window can be seen;
     /// becoming visible again catches up with a full refresh.
     private func scheduleTick(in ms: UInt64?) {
-        ticker?.invalidate()
-        ticker = nil
-        guard let ms, window?.occlusionState.contains(.visible) == true else { return }
-        let interval = TimeInterval(ms) / 1000
-        let t = Timer(timeInterval: interval, repeats: false) { [weak self] _ in self?.refresh() }
-        t.tolerance = min(interval * 0.1, 0.1)
+        guard let ms, window?.occlusionState.contains(.visible) == true else {
+            if let t = ticker, t.fireDate != .distantFuture { t.fireDate = .distantFuture }
+            return
+        }
+        let interval = TimeInterval(ms) / 1000, slack = min(interval * 0.1, 0.1)
+        let due = Date(timeIntervalSinceNow: interval)
+        let t = ticker ?? makeTicker()
+        guard abs(t.fireDate.timeIntervalSince(due)) > slack else { return }
+        t.tolerance = slack
+        t.fireDate = due
+    }
+
+    /// Repeats only so that it can be rescheduled; its interval never comes round.
+    private func makeTicker() -> Timer {
+        let t = Timer(fire: .distantFuture, interval: 1e9, repeats: true) { [weak self] _ in self?.refresh() }
         RunLoop.main.add(t, forMode: .common)
         ticker = t
+        return t
     }
 
     private func show(_ raw: SidebarSnapshot) {
