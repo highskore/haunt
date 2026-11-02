@@ -243,6 +243,14 @@ struct Servers {
     _ctl: Ctl,
 }
 
+/// `$HAUNT_HOME`, else `~/.haunt`.
+pub fn default_home() -> PathBuf {
+    if let Some(h) = std::env::var_os("HAUNT_HOME") {
+        return PathBuf::from(h);
+    }
+    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".haunt")
+}
+
 /// Thread-safe; the listener fires on whichever thread caused the change, never under the lock.
 pub struct Core {
     dir: PathBuf,

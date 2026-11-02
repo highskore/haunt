@@ -85,7 +85,7 @@ impl FsScope {
     pub fn new(read: &[String], write: &[String], haunt_dir: Option<&Path>) -> Self {
         let valid = |gs: &[String]| gs.iter().filter(|g| validate_glob(g).is_ok()).cloned().collect();
         let home = std::env::var_os("HOME").and_then(|h| Path::new(&h).canonicalize().ok());
-        let haunt = haunt_dir.map_or_else(crate::plugin_store::default_home, Path::to_owned);
+        let haunt = haunt_dir.map_or_else(crate::model::default_home, Path::to_owned);
         let haunt = haunt.canonicalize().unwrap_or(haunt);
         Self { read: valid(read), write: valid(write), cwds: Vec::new(), home, haunt }
     }

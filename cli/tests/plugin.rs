@@ -1,4 +1,5 @@
 //! Phase 2 gate: `haunt plugin new` scaffolds a plugin that builds and installs end to end.
+#![cfg(feature = "plugins")]
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;

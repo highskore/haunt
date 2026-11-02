@@ -1,5 +1,6 @@
 //! `haunt`: talks to a running haunt over `~/.haunt/ctl` (or `$HAUNT_CTL`); `haunt plugin` works with the app closed.
 
+#[cfg(feature = "plugins")]
 mod plugin;
 mod setup;
 
@@ -54,7 +55,13 @@ fn run(args: &[String]) -> Result<(), String> {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "plugin") {
+        #[cfg(feature = "plugins")]
         return ExitCode::from(plugin::run(&args[1..]));
+        #[cfg(not(feature = "plugins"))]
+        {
+            eprintln!("haunt: this build has no plugin support (the `plugins` feature)");
+            return ExitCode::FAILURE;
+        }
     }
     if args.first().is_some_and(|a| a == "setup") {
         return ExitCode::from(setup::run(&args[1..]));

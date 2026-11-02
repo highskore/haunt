@@ -587,14 +587,6 @@ pub fn attach(core: &crate::Core, set: &Arc<Mutex<PluginSet>>) {
     })));
 }
 
-/// `$HAUNT_HOME`, else `~/.haunt`.
-pub fn default_home() -> PathBuf {
-    if let Some(h) = std::env::var_os("HAUNT_HOME") {
-        return PathBuf::from(h);
-    }
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".haunt")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
