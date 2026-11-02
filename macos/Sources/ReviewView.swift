@@ -1314,7 +1314,7 @@ final class OverviewCenter: NSView {
                     x += RV.text(u, code, Tok.Color.textSub, x: x, top: y, lineHeight: sl, in: ctx) + gap
                 }
             }
-            let where_ = (d.isWorktree ? "worktree " : "") + (d.root as NSString).abbreviatingWithTildeInPath
+            let where_ = (d.isWorktree ? "worktree " : "") + Visible.text((d.root as NSString).abbreviatingWithTildeInPath)
             let st = d.uncommitted ? "uncommitted" : "clean"
             let commits = d.commits > 0 ? " · " + RV.plural(d.commits, "commit") + " in the turn" : ""
             RV.text("· \(where_) · \(st)\(commits)", sf, Tok.Color.textLabel, x: x, top: y, lineHeight: sl, maxWidth: x0 + w - x, in: ctx)

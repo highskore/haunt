@@ -47,10 +47,18 @@ final class ReviewCoordinator {
     /// The inbox with the selected tab's entry selected. Fixtures for 01, 06 and 09 open that version directly.
     func open() {
         guard let sel = host.reviewSelection else { return NSSound.beep() }
+        forgetClosedTabs()
         if let f = host.reviewFixture, f.isReview, !f.isInbox {
             return openDetail(sel.surfaceId, row: sel.row, mode: nil)
         }
         openInbox(selecting: sel.surfaceId)
+    }
+
+    /// Reviews of tabs that were closed since: nothing can show them again.
+    private func forgetClosedTabs() {
+        let live = Set(host.reviewRows.map(\.surfaceId))
+        reviews = reviews.filter { live.contains($0.key) }
+        sent = sent.filter { live.contains($0.key) }
     }
 
     private func turn(for row: Row) -> ReviewTurn? {
@@ -113,7 +121,7 @@ final class ReviewCoordinator {
         let st = state(for: id, turn: row.flatMap { turn(for: $0) })
         if let mode { st.mode = mode }
         let v = ReviewView(state: st)
-        v.crumbName = row?.name
+        v.crumbName = row.map { Visible.text($0.name) }
         v.onClose = { [weak self] in
             guard let self else { return }
             if self.fromInbox { self.openInbox(selecting: id) } else { self.close() }
@@ -166,7 +174,7 @@ final class ReviewCoordinator {
                 case .failure(.noGit):
                     state.loadError = "git isn't installed (looked in /opt/homebrew/bin, /usr/local/bin and the developer tools)."
                 case let .failure(.notARepo(p)):
-                    state.loadError = "\((p as NSString).abbreviatingWithTildeInPath) isn't in a git repository."
+                    state.loadError = "\(Visible.text((p as NSString).abbreviatingWithTildeInPath)) isn't in a git repository."
                 case let .failure(.failed(why)):
                     state.loadError = why
                 }
@@ -222,15 +230,7 @@ final class ReviewCoordinator {
         case let .blocked(why): refusal = why
         case let .ok(t):
             clean = t
-            if row == nil {
-                refusal = "The reviewed tab is gone."
-            } else if row?.kind == .shell {
-                refusal = "This tab isn't running an agent, so there's nothing to send the prompt to."
-            } else if row?.needsYou == true {
-                refusal = "The agent is waiting on a prompt in the terminal. Answer it there first, then send."
-            } else {
-                refusal = nil
-            }
+            refusal = SendBack.refusal(surfaceId: id, row: row, selected: host.reviewSelection?.surfaceId)
         }
         if let refusal {
             let alert = NSAlert()
@@ -244,11 +244,6 @@ final class ReviewCoordinator {
         v.state.comments = []
         v.state.editedDraft = nil
         v.state.note = ""
-        if host.reviewSelection?.surfaceId != id {
-            switching = true
-            host.selectTab(id)
-            switching = false
-        }
         if keepReviewing {
             v.setMode(.files)
         } else {

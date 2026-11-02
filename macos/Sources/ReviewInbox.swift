@@ -427,7 +427,7 @@ private final class InboxDetail: NSView {
         let bl = IB.baseline(mf, top: mt, lineHeight: ml)
         RV.agentMark(t?.agent ?? .claude, in: NSRect(x: x, y: bl + 2 - ms, width: ms, height: ms), ctx: ctx)
         x += ms
-        var tail = [" " + e.row.name]
+        var tail = [" " + e.tabName]
         if let c = s.diff?.commits, c > 0 { tail.append(RVText.plural(c, "commit")) }
         if let f = t?.finishedMs { tail.append("finished " + IB.ago(f)) } else if t != nil { tail.append("running") }
         RV.text(tail.joined(separator: " · "), mf, Tok.Color.textMeta, x: x, top: mt, lineHeight: ml, maxWidth: textRight - x, in: ctx)

@@ -67,6 +67,8 @@ let long = "diff --git a/l b/l\n--- a/l\n+++ b/l\n@@ -1,0 +1,10 @@\n" + (0..<10)
 let cut = DiffParser.parse(long, maxLines: 4)[0]
 check(cut.hunks[0].lines.count == 4 && cut.droppedLines == 6 && cut.additions == 10, "per-file cut counts the rest")
 check(DiffParser.hunkStarts("@@ -5 +7,2 @@") ?? (0, 0) == (5, 7), "hunk without counts")
+let minified = DiffParser.parse("diff --git a/m b/m\n--- a/m\n+++ b/m\n@@ -0,0 +1 @@\n+" + String(repeating: "x", count: 5000) + "\n")[0]
+check(minified.hunks[0].lines[0].text == String(repeating: "x", count: 2000) + " … 3000 more", "long lines are cut with a count")
 
 let crlf = DiffParser.parse("diff --git a/w b/w\r\n--- a/w\r\n+++ b/w\r\n@@ -1 +1 @@\r\n-a\r\n+b\r\n")
 check(crlf.first?.hunks.first?.lines.map(\.text) == ["a", "b"] && crlf.first?.hiddenChars == false, "CRLF lines split cleanly")
@@ -108,6 +110,22 @@ let turnChecks = Checks.fromTurn([
 ])
 check(turnChecks == [Check(command: "swift build", state: .passed), Check(command: "swift test --filter NotifyTests", state: .unknown)],
       "latest run wins: \(turnChecks)")
+// A pass is the check's only when nothing after it decides the exit status.
+for (cmd, passed) in [("cargo test", true), ("cd core && cargo test --workspace", true), ("cargo test 2>&1", true),
+                      ("cargo test;", true), ("cargo test -- 'a|b'", true), ("FOO=1 cargo test &>log", true),
+                      ("cargo test | tail -5", false), ("cargo test |& tee log", false), ("cargo test || true", false),
+                      ("cargo test; echo done", false), ("cargo test &", false), ("cargo test && echo ok", false)] {
+    let got = Checks.fromTurn([TurnCommand(command: cmd, outcome: .passed)]).first?.state
+    check(got == (passed ? .passed : .unknown), "\(cmd): \(String(describing: got))")
+}
+check(Checks.fromTurn([TurnCommand(command: "cargo test | tail", outcome: .failed)]).first?.state == .failed, "a failure still counts")
+check(Checks.checkSegment("cd macos && FOO=1 swift test --filter X 2>&1 | tail -5") == "FOO=1 swift test --filter X 2>&1", "the check itself")
+let rr = ReviewState(surfaceId: "r")
+rr.checks = Checks.fromTurn([TurnCommand(command: "cd core && cargo test -p haunt-core 2>&1 | tail -20", outcome: .passed)])
+check(rr.checks.first?.state == .unknown && rr.rerun == "cargo test -p haunt-core 2>&1", "Rerun names only the check: \(rr.rerun ?? "nil")")
+let spelled = Visible.turn(turn(1, finished: true, [TurnCommand(command: "cargo test ⟨x⟩", outcome: .unknown)]))
+check(Checks.fromTurn(spelled.commands).first?.command == "cargo test ⟨U+27E8⟩x⟩", "spelled out once, not twice")
+
 let exp = Checks.expected(files: ["Package.swift", ".swiftlint.yml", "package.json", "yarn.lock"], packageScripts: ["test"])
 check(exp.map(\.0) == ["swift test", "yarn test", "swiftlint"], "expected \(exp)")
 let merged = Checks.merge(turn: turnChecks, expected: exp)
@@ -136,8 +154,23 @@ check(draft == """
     """, "draft \(draft)")
 check(Draft.build(comments: [], note: "Looks fine", rerun: nil) == "Looks fine", "note only")
 
-check(SendBack.check(draft + "\n\n") == .ok(draft), "trailing newlines are dropped, never sent as Return")
-check(SendBack.check("a\r\nb") == .ok("a\nb"), "CRLF")
+// Newlines would act as Return without bracketed paste, which libghostty can't report: one line.
+check(SendBack.check(draft + "\n\n") == .ok(SendBack.oneLine(draft)), "trailing newlines are dropped, never sent as Return")
+if case let .ok(t) = SendBack.check(draft) { check(!t.contains("\n") && t.hasPrefix("Two changes from review: 1. HauntNotifier.swift:64 Keep"), "one line \(t)") }
+check(SendBack.check("a\r\nb") == .ok("a b"), "CRLF")
+
+func row(_ id: String, kind: RowKind = .claude, needsYou: Bool = false, pending: PendingRequest? = nil) -> Row {
+    Row(surfaceId: id, kind: kind, name: id, meta: "", statusText: "", needsYou: needsYou, progress: nil, subagents: [],
+        selected: true, pending: pending)
+}
+check(SendBack.refusal(surfaceId: "a", row: row("a"), selected: "a") == nil, "the reviewed agent tab, selected and idle")
+check(SendBack.refusal(surfaceId: "a", row: nil, selected: "a") != nil, "tab gone")
+check(SendBack.refusal(surfaceId: "a", row: row("a"), selected: "b") != nil, "another tab selected")
+check(SendBack.refusal(surfaceId: "a", row: row("a", kind: .shell), selected: "a") != nil, "shell tab")
+check(SendBack.refusal(surfaceId: "a", row: row("a", needsYou: true), selected: "a") != nil, "needs you")
+let live = PendingRequest(key: 1, tool: "Bash", preview: "rm", suspicious: false)
+check(SendBack.refusal(surfaceId: "a", row: row("a", pending: live), selected: "a") != nil,
+      "a live request refuses even when an unverified event cleared needsYou")
 check(SendBack.check("  \n") == .blocked("The prompt is empty."), "empty")
 if case .blocked = SendBack.check("ok\u{1B}[201~rm -rf ~") {} else { check(false, "paste end blocks") }
 if case .blocked = SendBack.check("x\u{1B}[31m") {} else { check(false, "escape blocks") }
@@ -167,6 +200,14 @@ let sent = entry("sent", turn(5, finished: false, []))
 sent.sentBack = Inbox.sentBack(notes: 2, sentTurn: 4, turn: sent.state.turn)
 let approved = entry("approved", turn(2, finished: true, [TurnCommand(command: "swift test", outcome: .unknown)]))
 approved.state.approved = true
+let named = entry("n", turn(1, finished: true, []))
+named.row.name = "tab\u{202E}evil"
+check(named.meta.contains("tab⟨U+202E⟩evil") && named.tabName == "tab⟨U+202E⟩evil", "a tab name is spelled out \(named.meta)")
+let treeState = ReviewState(surfaceId: "t")
+treeState.diff = ReviewDiff(root: "/r", files: [FileDiff(path: "a/x")], branch: nil, upstream: nil, commits: 0, baseNote: "HEAD", uncommitted: false)
+_ = treeState.tree
+treeState.diff?.files.append(FileDiff(path: "b"))
+check(treeState.tree.fileOrder.count == 2, "the cached tree follows a new diff")
 check(ready.status == .ready && ready.meta == "haunt · tab-ready · 2 files · tests ✓", "ready \(ready.meta)")
 check(waiting.status == .waiting && waiting.meta == "haunt · tab-waiting · cargo test -p core running", "waiting \(waiting.meta)")
 check(busy.status == .ready, "a running non-check isn't waiting on checks")
@@ -182,6 +223,13 @@ check(hs == [.keyword, .string, .comment], "highlight \(hs)")
 check(Highlight.spans("letter = selfish").allSatisfy { $0.1 == .plain }, "keywords only as whole words")
 
 // MARK: A real repository
+
+// The app takes only a root-owned git (GitRunner.trusted); the tests use a newer one if there is one,
+// so the working-tree paths that need git 2.40 run too.
+let appGit = GitRunner.gitPath
+if let newer = ["/opt/homebrew/bin/git", "/usr/local/bin/git"].first(where: FileManager.default.isExecutableFile(atPath:)) {
+    GitRunner.gitPath = newer
+}
 
 func sh(_ args: [String], _ dir: String) {
     let p = Process()
@@ -393,6 +441,61 @@ if GitRunner.supportsAttrSource, case let .success(d) = ReviewLoader.load(cwd: r
     check(GitRunner.supportsAttrSource == false, "load with look-alike names failed")
 }
 try? FileManager.default.removeItem(atPath: repo)
+
+// MARK: The runner
+
+// A timeout kills the whole process group, including a child that would keep the pipe open.
+let t0 = Date()
+let hung = GitRunner.spawn("/bin/sh", ["-c", "sleep 30 & echo $!; sleep 30"], cwd: "/", env: [:], timeout: 1, maxBytes: 1 << 20)
+let bgPid = pid_t(hung?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+check(hung?.timedOut == true && Date().timeIntervalSince(t0) < 4, "timed out promptly")
+usleep(200_000)
+check(bgPid > 0 && kill(bgPid, 0) != 0, "the background child was killed with its group")
+let t1 = Date()
+let orphan = GitRunner.spawn("/bin/sh", ["-c", "sleep 30 & echo started"], cwd: "/", env: [:], timeout: 1, maxBytes: 1 << 20)
+check(orphan?.text == "started\n" && orphan?.status == 0 && Date().timeIntervalSince(t1) < 4, "a child left holding the pipe is killed")
+let big = GitRunner.spawn("/bin/sh", ["-c", "yes | head -c 5000000"], cwd: "/", env: [:], timeout: 5, maxBytes: 1000)
+check(big?.truncated == true && big?.data.count == 1000, "output cut at the cap")
+check(GitRunner.spawn("/bin/sh", ["-c", "pwd; echo $HOME"], cwd: "/tmp", env: ["HOME": "/h"], timeout: 5, maxBytes: 100)?.text
+      == "/private/tmp\n/h\n", "cwd and env reach the child")
+
+// Only a root-owned git in a root-owned folder is used, links resolved.
+check(GitRunner.trusted("/usr/bin/git") == "/usr/bin/git", "/usr/bin/git is trusted")
+let mine = FileManager.default.temporaryDirectory.appendingPathComponent("haunt-fake-git-\(getpid())").path
+FileManager.default.createFile(atPath: mine, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
+check(GitRunner.trusted(mine) == nil, "a git the user owns isn't")
+let link = mine + "-link"
+try? FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: "/usr/bin/git")
+check(GitRunner.trusted(link) == "/usr/bin/git", "a link is judged, and run, by its target")
+try? FileManager.default.removeItem(atPath: mine)
+try? FileManager.default.removeItem(atPath: link)
+if let g = appGit { check(GitRunner.trusted(g) == g || g == "/usr/bin/git", "the app's own pick is trusted: \(g)") }
+
+// A submodule with its own filter: the parent's config is clean, so only never looking inside keeps it from running.
+fresh()
+let inner = repo + "-inner"
+try? FileManager.default.removeItem(atPath: inner)
+try! FileManager.default.createDirectory(atPath: inner, withIntermediateDirectories: true)
+try! "a\n".write(toFile: inner + "/f", atomically: true, encoding: .utf8)
+sh(["git", "init", "-q", "-b", "main"], inner)
+sh(["git", "add", "f"], inner)
+sh(["git", "commit", "-q", "-m", "i"], inner)
+sh(["git", "init", "-q", "-b", "main"], repo)
+sh(["git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", inner, "sub"], repo)
+sh(["git", "commit", "-q", "-m", "o"], repo)
+let subGit = GitRunner.run(["rev-parse", "--absolute-git-dir"], cwd: repo + "/sub")!.text.trimmingCharacters(in: .newlines)
+sh(["git", "config", "filter.evil.clean", "sh -c 'touch \(repo)/SUBPWNED; cat'"], repo + "/sub")
+try! FileManager.default.createDirectory(atPath: subGit + "/info", withIntermediateDirectories: true)
+try! "* filter=evil\n".write(toFile: subGit + "/info/attributes", atomically: true, encoding: .utf8)
+try! "b\n".write(toFile: repo + "/sub/f", atomically: true, encoding: .utf8)
+sh(["git", "diff", "HEAD"], repo)
+check(exists("SUBPWNED"), "plain git runs the submodule's filter (test is live)")
+try? FileManager.default.removeItem(atPath: repo + "/SUBPWNED")
+check(GitRunner.definesDrivers(cwd: repo) == false, "the parent's own config is clean")
+if case .failure = ReviewLoader.load(cwd: repo, headAtStart: nil) { check(false, "load with a submodule failed") }
+check(!exists("SUBPWNED"), "no submodule filter ran")
+try? FileManager.default.removeItem(atPath: repo)
+try? FileManager.default.removeItem(atPath: inner)
 
 if failures > 0 { print("review: \(failures) failed"); exit(1) }
 print("review: ok")

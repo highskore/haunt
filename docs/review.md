@@ -11,7 +11,7 @@ There is one entry per agent tab whose latest turn has a verified cwd. Entries a
 - **Approved**: approved in this review, in memory.
 - **Ready for review**: everything else, including a turn that is still running something that isn't a check.
 
-There is no "Merged today" group, because Haunt doesn't know what was merged. Row stats and the file count come from each entry's git diff, loaded in the background. "tests ✓" means every check the agent ran passed. A check with an unknown result, as from Codex, reads "tests ran".
+There is no "Merged today" group, because Haunt doesn't know what was merged. Row stats and the file count come from each entry's git diff, loaded in the background. "tests ✓" means every check the agent ran passed, by the rule under Checks below. A check with an unknown result, as from Codex, reads "tests ran".
 
 Keys: `j`/`k` (or the arrow keys) move between entries, Enter opens one, `a` approves, `r` opens the follow-up prompt (06) for it. There is no snooze (`x`), because it would hide data without a reason Haunt can show. Opening an entry switches to its tab, so a follow-up is pasted where the user can see it.
 
@@ -27,13 +27,13 @@ The detail pane shows the following:
 ## Data
 
 - **Turn**: `HauntCore::review_turn(surface_id)`, built only from nonce-verified hook events (`core/src/turn.rs`). It holds the prompt, tasks, Bash commands with their outcome, edited files, subagents and `head_at_start` (HEAD read from `.git` when the prompt arrived; no git process).
-- **Checks**: test and build commands the agent ran (`Checks.isCheck`). An outcome is `passed` only when Claude's hooks reported a success and no failure. Other agents give `result unknown`, and a command still running at the stop also gives `result unknown`. The project's standard checks (Cargo.toml, Package.swift, go.mod, package.json `test`, .swiftlint.yml) are listed as `not run` when the turn didn't run them. A narrowed run (`--filter`, `-k`, `-p`, ...) doesn't count as the full suite.
-- **Diff**: git runs in the turn's verified cwd, off the main thread. It diffs the working tree and index against `head_at_start` when that commit is an ancestor of HEAD, so commits made during the turn are included. Otherwise it diffs against HEAD and says so in a note. Untracked files are included, up to 100. Each file is truncated at 2000 lines with a note. Binary files are listed, not rendered.
-- **Viewed, comments, verdict**: kept per tab in memory, until the tab's next turn.
+- **Checks**: test and build commands the agent ran (`Checks.isCheck`). An outcome is `passed` only when Claude's hooks reported a success and no failure, and the check decides the command's exit status. That means it is the last piece of the command, with no `|`, `|&`, `||`, `;`, `&` or `&&` after it (`cargo test | tail` exits with tail's status). Otherwise the result is `result unknown`. Claude Code's hooks reference shows a Bash command that exits non-zero arriving as `PostToolUseFailure`, with an `error` whose first line is `Exit code N`, and a successful one as `PostToolUse`. The core maps those to failed and passed. The reference doesn't state this as a rule, only through that example. "Rerun …" in the drafted prompt names only the check's own piece of the command. Other agents give `result unknown`, and a command still running at the stop also gives `result unknown`. The project's standard checks (Cargo.toml, Package.swift, go.mod, package.json `test`, .swiftlint.yml) are listed as `not run` when the turn didn't run them. A narrowed run (`--filter`, `-k`, `-p`, ...) doesn't count as the full suite.
+- **Diff**: git runs in the turn's verified cwd, off the main thread. It diffs the working tree and index against `head_at_start` when that commit is an ancestor of HEAD, so commits made during the turn are included. Otherwise it diffs against HEAD and says so in a note. Untracked files are included, up to 100. Each file is truncated at 2000 lines with a note, and each line at 2000 characters, ending "… N more". Binary files are listed, not rendered.
+- **Viewed, comments, verdict**: kept per tab in memory, until the tab's next turn. A closed tab's review is dropped the next time the review screen opens.
 
 ## git safety (`GitRunner`)
 
-git runs as a `Process` without a shell, with a 10 s timeout (SIGTERM, then SIGKILL) and a 16 MB output cap. Its environment is minimal: `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_ATTR_NOSYSTEM=1`, `GIT_ATTR_SOURCE=<empty tree>`, `GIT_OPTIONAL_LOCKS=0`, `GIT_TERMINAL_PROMPT=0`, `GIT_NO_REPLACE_OBJECTS=1`, `GIT_NO_LAZY_FETCH=1`, `LC_ALL=C`, and a pager of `cat`. Every call passes the following:
+git runs through `posix_spawn` without a shell, in a process group of its own and with none of the app's descriptors. It has a 10 s timeout and a 16 MB output cap (2 MB for an untracked file's diff). Either one kills the whole group, SIGTERM then SIGKILL, so nothing git started outlives it. Output a straggler writes after that is dropped, not raced on. A list of untracked files that was cut says so. Its environment is minimal: `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_ATTR_NOSYSTEM=1`, `GIT_ATTR_SOURCE=<empty tree>`, `GIT_OPTIONAL_LOCKS=0`, `GIT_TERMINAL_PROMPT=0`, `GIT_NO_REPLACE_OBJECTS=1`, `GIT_NO_LAZY_FETCH=1`, `LC_ALL=C`, and a pager of `cat`. Every call passes the following:
 
 - `-c core.fsmonitor=false`, `core.untrackedCache=false`, `core.hooksPath=/dev/null`, `core.attributesFile=/dev/null`, `diff.external=`, `color.ui=false`, `submodule.recurse=false`;
 - `protocol.allow=never` plus `protocol.{ext,file,ssh,http,https}.allow=never`, so a partial clone's promisor remote is never fetched from;
@@ -47,13 +47,15 @@ Diffs also pass `--no-ext-diff --no-textconv --no-color`, so `diff.<driver>.comm
 - If any filter, textconv, diff command or external diff is configured, or the list can't be read, the working tree and untracked files aren't read. Only the committed range is diffed (`git diff <base> <head>`, which compares blobs and runs no filter), and the screen says why.
 - Otherwise, the working tree is read. `GIT_ATTR_SOURCE` points attributes at the empty tree, so a `.gitattributes` written after the check can't name a filter either.
 - `GIT_ATTR_SOURCE` needs git 2.40 or newer. With an older git (Apple's `/usr/bin/git` is 2.39), Haunt shows committed changes only and says so.
-- Residual: `$GIT_DIR/info/attributes` is still read under `GIT_ATTR_SOURCE`. It can only name a filter that is configured, and a configured filter turns the working tree off, so a filter set up between the check and the diff (milliseconds) is the remaining window.
+- Submodules have their own config and `info/attributes`, which the check above never reads, and a dirty-submodule check runs `git status` inside them. So Haunt never looks inside a submodule: every diff passes `--ignore-submodules=all`, and the config pins `diff.ignoreSubmodules=all` and `status.submoduleSummary=false`. A submodule's changes, including a moved gitlink, don't appear in the review.
+- Residual: `$GIT_DIR/info/attributes` is still read under `GIT_ATTR_SOURCE`. It can only pick a filter from the parent repository's config, and the check refuses the working tree when that config has one. So the remaining window is a filter set up in that config between the check and the diff (milliseconds).
+- Residual: git itself runs with the user's rights and no sandbox. A bug in git's own handling of a hostile repository (its parsers, not its configurable programs) isn't contained. Running git under a sandbox profile with no network and no writes is a possible later step; it isn't done now.
 
 **Untracked files.** Each path from `git ls-files --others` is `lstat`ed first. Only regular files are diffed with `git diff --no-index`. A symlink shows its target, read without git and without following it. Anything else (a FIFO, socket or device) is listed as "special" with a note and never handed to git, which would block reading it. git's own listing already skips FIFOs; the check covers one that replaces a file after the listing.
 
 **Hidden characters (Trojan Source).** Every repo-derived string drawn on screen goes through `Visible.text`: paths, hunk headers, diff lines, branch, upstream and repo names, and the turn's prompt, commands, tasks and files. It replaces each character `PastePreview.hidden` flags with a visible `⟨U+202E⟩`. That covers C0/C1 controls, format characters (bidi overrides and isolates, zero-width characters, the BOM, soft hyphens), any whitespace but the space (U+2028/2029, NBSP) and default-ignorables that draw as nothing (Hangul fillers, variation selectors). A literal `⟨` is escaped too, as `⟨U+27E8⟩`, so every `⟨` on screen starts a placeholder and a filename can't fake one. A file whose path or lines hold a hidden character is tagged "hidden chars" in its header and "hidden" in the file lists, and those lines are flagged. Paths are only escaped where drawn: viewed state, comments and de-duplication use the raw path, so two files never share state through a look-alike name.
 
-`/usr/bin/git` is used only when the developer tools are installed, so it never triggers the install prompt. `macos/tests/review.sh` covers the following. Each hostile fixture is first run through plain git to show it really fires, so the test is live.
+**Which git.** Haunt uses `/opt/homebrew/bin/git` or `/usr/local/bin/git` only when, links resolved, root owns the binary and its folder and no one else can write to either. It then runs the resolved path. Otherwise it uses `/usr/bin/git`, and only when the developer tools are installed, so it never triggers the install prompt. A Homebrew git is owned by the user, so on most Macs this is Apple's git. That git is older than 2.40, so only committed changes are shown. `macos/tests/review.sh` covers the following. Each hostile fixture is first run through plain git to show it really fires, so the test is live.
 
 - A repo's own `core.fsmonitor` doesn't run. A repo's `diff.external` limits the review to the committed range and doesn't run either.
 - `diff.<x>.textconv`, `diff.<x>.command` and `diff.external` each count as drivers. `diff.renames` and Haunt's own `-c` pins don't.
@@ -63,16 +65,21 @@ Diffs also pass `--no-ext-diff --no-textconv --no-color`, so `diff.<driver>.comm
 - A FIFO among the untracked files doesn't stall loading. A symlink shows its target.
 - Bidi, zero-width and escape characters in lines, names and hunk headers are spelled out and flagged. So are separators, Hangul fillers and variation selectors.
 - A file named with a literal `⟨U+202E⟩` next to one holding a real U+202E: both are listed, drawn differently, flagged correctly, and don't share viewed state.
-- CRLF lines split cleanly.
+- CRLF lines split cleanly. A 5000-character line is cut with a count.
+- A submodule with its own filter in its config and `info/attributes`: plain git runs it, the review doesn't.
+- The runner: a timeout kills a background child holding the pipe, output is cut at the cap, and cwd and env reach git. Only a root-owned git is trusted, judged and run by its link target.
+- Checks: which commands' passes count, and which piece "Rerun" names.
+- Sending: the prompt goes as one line, and the refusals listed below.
 
 ## Sending a follow-up (06)
 
 The drafted prompt is shown in full in an editable text view. Nothing is sent until the user clicks Send to agent (or presses ⌘⇧S). Then:
 
 1. `SendBack.check` normalises CRLF and trims surrounding whitespace, then blocks the send with a message for empty text, a bracketed-paste end (`ESC[201~`), or anything `PastePreview` flags as a control or invisible character (tabs are allowed).
-2. The send is refused unless the reviewed tab is still selected and is an agent row, not a shell. It is also refused while the row needs you, so the text can't land in a permission prompt.
-3. `core.onUserInput(surface)` runs first, because a send counts as user input and retires any pending permission request. Then the text goes through `ghostty_surface_text`, the same path as a paste. Ghostty wraps it in bracketed paste when the program enabled that mode. Claude Code and Codex do enable it, which is one reason sending is limited to agent rows: Haunt can't query the mode.
-4. No newline or Enter is appended. The user presses Return in the terminal.
+2. The prompt is joined into one line: each line trimmed, blank lines dropped, joined with spaces. libghostty has no way to ask whether the program enabled bracketed paste, and without it every newline would act as Return and submit part of the prompt.
+3. `SendBack.refusal` refuses the send unless the reviewed tab is still selected and is an agent row, not a shell. It is also refused while the row needs you or carries a pending permission request, so the text can't land in a permission prompt. Only a verified event or Haunt can end a pending request, while an unverified one can clear "needs you". The core doesn't yet expose an "unresolved request" check (requests the agent may still show after they ended); the send will use it once it does.
+4. `core.onUserInput(surface)` runs first, because a send counts as user input and retires any pending permission request. Then the text goes through `ghostty_surface_text`, the same path as a paste.
+5. No newline or Enter is appended. The user presses Return in the terminal.
 
 ## Not built yet
 

@@ -99,6 +99,7 @@ cursor-style = "bar"
 - **Tabs:** ⌘T new, ⌘W close, ⌘1–⌘9 select, ⇧⌘] and ⇧⌘[ next and previous. **Rename Tab** is in the Window menu (no default key; set `rename_tab` in `[keys]`), on a row's right-click menu, or a double-click on its name. An empty name goes back to the automatic one.
 - **Agents view:** ⌘⇧A shrinks the window to a narrow strip of agent rows docked to the right of the screen, with shell tabs counted at the foot. Click a row to get the full window back on that tab, or press ⌘⇧A again. It is remembered across launches.
 - **Paste:** ⌘V pastes the clipboard and ⇧⌘V (Edit ▸ Paste Selection, `paste_selection`) the selection. Haunt shows a paste that carries an escape, another control or a hidden character in full, characters spelled out, and asks first; Ghostty's own paste protection asks before a multi-line one that isn't bracketed. A middle click pastes the selection too, except in an app that takes the mouse (vim or tmux with mouse mode on), where the click goes to the app; there shift+middle click doesn't paste either. `[ghostty] middle-click-action = ignore` turns middle-click paste off.
+- **Review changes:** ⌘⇧R (View ▸ Review Changes, or the ⌘K palette) shows what the selected agent changed in its repository: files and diffs, the checks it ran, comments you can send back to it as a prompt, and an inbox of tabs with changes to review. It only reads; approving has no git side effects. See `docs/review.md`.
 
 ## CLI
 
@@ -129,6 +130,7 @@ HAUNT_REQUIRE_ADAPTERS=1 cargo test --workspace   # ...and fail instead
 ../haunt-plugins/haunt-codex/tests/run.sh
 macos/tests/keys.sh      # [keys], [layout], the generated Ghostty config and its refusals
 macos/tests/paste.sh     # the paste preview and what needs confirming
+macos/tests/review.sh    # the review screen's git runner, diff parser, checks and send-back
 macos/tests/sidebar.sh   # sidebar drop targets, the agents view's restored frame
 macos/tests/loginpath.sh # the login-shell PATH lookup
 macos/fidelity.sh        # pixel check against the mockups (HAUNT_INACTIVE=1 for the unfocused window)

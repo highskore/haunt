@@ -91,7 +91,7 @@ enum DiffParser {
                     new += 1
                 }
                 if kept < maxLines {
-                    dl.text = expandTabs(dl.text)
+                    dl.text = expandTabs(capped(dl.text))
                     f.hunks[f.hunks.count - 1].lines.append(dl)
                     kept += 1
                 } else {
@@ -197,6 +197,15 @@ enum DiffParser {
         return String(decoding: bytes, as: UTF8.self)
     }
 
+    static let maxLineChars = 2000
+
+    /// A minified or generated line cut to `maxLineChars`, saying how much is left out.
+    static func capped(_ s: String) -> String {
+        guard s.utf16.count > maxLineChars else { return s }
+        let n = s.count
+        return n > maxLineChars ? String(s.prefix(maxLineChars)) + " … \(n - maxLineChars) more" : s
+    }
+
     static func expandTabs(_ s: String, width: Int = 4) -> String {
         guard s.contains("\t") else { return s }
         var out = ""
@@ -254,20 +263,44 @@ enum GitRunner {
     }
 
     /// git 2.40 added `GIT_ATTR_SOURCE`; older versions ignore it, so working-tree attributes would still apply.
-    static let supportsAttrSource: Bool = {
-        guard let o = run(["version"], cwd: "/"), o.status == 0 else { return false }
-        let nums = o.text.split(separator: " ").dropFirst(2).first?.split(separator: ".").compactMap { Int($0) } ?? []
-        guard nums.count >= 2 else { return false }
-        return (nums[0], nums[1]) >= (2, 40)
-    }()
+    static var supportsAttrSource: Bool {
+        if let known = attrSourceKnown, known.path == gitPath { return known.ok }
+        var ok = false
+        if let o = run(["version"], cwd: "/"), o.status == 0 {
+            let nums = o.text.split(separator: " ").dropFirst(2).first?.split(separator: ".").compactMap { Int($0) } ?? []
+            ok = nums.count >= 2 && (nums[0], nums[1]) >= (2, 40)
+        }
+        attrSourceKnown = (gitPath, ok)
+        return ok
+    }
+    private static var attrSourceKnown: (path: String?, ok: Bool)?
 
-    static let gitPath: String? = {
-        let fm = FileManager.default
-        for p in ["/opt/homebrew/bin/git", "/usr/local/bin/git"] where fm.isExecutableFile(atPath: p) { return p }
+    /// Set once at first use; the review tests point it at a newer git.
+    static var gitPath: String? = defaultGit()
+
+    private static func defaultGit() -> String? {
+        for p in ["/opt/homebrew/bin/git", "/usr/local/bin/git"] { if let t = trusted(p) { return t } }
         // /usr/bin/git is a shim that pops an install dialog when the developer tools are missing.
+        let fm = FileManager.default
         let tools = ["/Library/Developer/CommandLineTools/usr/bin/git", "/Applications/Xcode.app/Contents/Developer/usr/bin/git"]
         return tools.contains(where: fm.isExecutableFile(atPath:)) ? "/usr/bin/git" : nil
-    }()
+    }
+
+    /// `path` with links resolved, if root owns it and its folder and no one else can write to either;
+    /// a git anyone else can replace would run with the user's rights on every review.
+    static func trusted(_ path: String) -> String? {
+        guard let c = realpath(path, nil) else { return nil }
+        let real = String(cString: c)
+        free(c)
+        func rootOnly(_ p: String) -> Bool {
+            var st = stat()
+            return stat(p, &st) == 0 && st.st_uid == 0 && st.st_mode & (S_IWGRP | S_IWOTH) == 0 && access(p, W_OK) != 0
+        }
+        var st = stat()
+        guard stat(real, &st) == 0, st.st_mode & S_IFMT == S_IFREG, access(real, X_OK) == 0,
+              rootOnly(real), rootOnly((real as NSString).deletingLastPathComponent) else { return nil }
+        return real
+    }
 
     static func environment() -> [String: String] {
         let env = ProcessInfo.processInfo.environment
@@ -280,46 +313,89 @@ enum GitRunner {
         return out
     }
 
-    /// Blocks the calling thread; call it off the main thread. Output past `maxBytes` is cut and the process killed.
+    /// Blocks the calling thread; call it off the main thread. Output past `maxBytes` is cut and git killed.
     static func run(_ args: [String], cwd: String, timeout: TimeInterval = 10, maxBytes: Int = 16 << 20) -> Output? {
         guard let git = gitPath else { return nil }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: git)
-        p.arguments = safeConfig.flatMap { ["-c", $0] } + ["--no-pager"] + args
-        p.currentDirectoryURL = URL(fileURLWithPath: cwd)
-        p.environment = environment()
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = FileHandle.nullDevice
-        p.standardInput = FileHandle.nullDevice
-        do { try p.run() } catch { return nil }
+        return spawn(git, safeConfig.flatMap { ["-c", $0] } + ["--no-pager"] + args, cwd: cwd, env: environment(),
+                     timeout: timeout, maxBytes: maxBytes)
+    }
 
-        var data = Data()
-        var truncated = false
+    /// Runs `exe` without a shell in a process group of its own, so a timeout or the output cap kills
+    /// whatever it started too. No other descriptor of the app is inherited.
+    static func spawn(_ exe: String, _ args: [String], cwd: String, env: [String: String], timeout: TimeInterval,
+                      maxBytes: Int) -> Output? {
+        var fds: [Int32] = [0, 0]
+        guard pipe(&fds) == 0 else { return nil }
+        let (rd, wr) = (fds[0], fds[1])
+        var actions: posix_spawn_file_actions_t?
+        var attr: posix_spawnattr_t?
+        posix_spawn_file_actions_init(&actions)
+        posix_spawnattr_init(&attr)
+        defer {
+            posix_spawn_file_actions_destroy(&actions)
+            posix_spawnattr_destroy(&attr)
+        }
+        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_adddup2(&actions, wr, 1)
+        posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0)
+        posix_spawn_file_actions_addchdir_np(&actions, cwd)
+        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
+        posix_spawnattr_setpgroup(&attr, 0)
+        var none = sigset_t(), defaults = sigset_t()
+        sigemptyset(&none)
+        sigemptyset(&defaults)
+        sigaddset(&defaults, SIGPIPE)
+        posix_spawnattr_setsigmask(&attr, &none)
+        posix_spawnattr_setsigdefault(&attr, &defaults)
+
+        let argv = ([exe] + args).map { strdup($0) } + [nil]
+        let envp = env.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer { (argv + envp).forEach { free($0) } }
+        var pid: pid_t = 0
+        let spawned = posix_spawn(&pid, exe, &actions, &attr, argv, envp)
+        close(wr)
+        guard spawned == 0 else { close(rd); return nil }
+
+        final class Sink: @unchecked Sendable {
+            let lock = NSLock()
+            var data = Data(), truncated = false, abandoned = false
+        }
+        let sink = Sink()
         let reader = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .utility).async {
-            let h = pipe.fileHandleForReading
+            var buf = [UInt8](repeating: 0, count: 64 << 10)
             while true {
-                let chunk = h.availableData
-                if chunk.isEmpty { break }
-                if data.count + chunk.count > maxBytes {
-                    data.append(chunk.prefix(maxBytes - data.count))
-                    truncated = true
-                    p.terminate()
+                let n = read(rd, &buf, buf.count)
+                if n < 0, errno == EINTR { continue }
+                if n <= 0 { break }
+                sink.lock.lock()
+                defer { sink.lock.unlock() }
+                if sink.abandoned { break }
+                if sink.data.count + n > maxBytes {
+                    sink.data.append(contentsOf: buf[..<(maxBytes - sink.data.count)])
+                    sink.truncated = true
+                    kill(-pid, SIGKILL)
                     break
                 }
-                data.append(chunk)
+                sink.data.append(contentsOf: buf[..<n])
             }
+            close(rd)
             reader.signal()
         }
         let timedOut = reader.wait(timeout: .now() + timeout) == .timedOut
         if timedOut {
-            p.terminate()
-            kill(p.processIdentifier, SIGKILL)
+            kill(-pid, SIGTERM)
+            kill(-pid, SIGKILL)
+            // A child that left the group may still hold the pipe; its output is dropped, not raced on.
             _ = reader.wait(timeout: .now() + 1)
         }
-        p.waitUntilExit()
-        return Output(status: p.terminationStatus, data: data, truncated: truncated, timedOut: timedOut)
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) < 0, errno == EINTR {}
+        sink.lock.lock()
+        defer { sink.lock.unlock() }
+        sink.abandoned = true
+        return Output(status: status & 0x7f == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f), data: sink.data,
+                      truncated: sink.truncated, timedOut: timedOut)
     }
 }
 
@@ -349,6 +425,7 @@ struct ReviewDiff: Equatable {
 enum ReviewLoader {
     static let maxUntracked = 100
     static let maxUntrackedBytes = 1 << 20
+    static let maxNoIndexBytes = 2 << 20
 
     enum LoadError: Error, Equatable { case noGit, notARepo(String), failed(String) }
 
@@ -405,7 +482,7 @@ enum ReviewLoader {
             let diffArgs = ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
                             "--submodule=short", "--ignore-submodules=all", "-M"] + range + ["--"]
             guard let out = git(diffArgs) else { return .failure(.failed("git diff didn't start.")) }
-            guard out.status == 0 || out.truncated else { return .failure(.failed("git diff failed (exit \(out.status)).")) }
+            guard out.status == 0 || out.truncated || out.timedOut else { return .failure(.failed("git diff failed (exit \(out.status)).")) }
             if out.timedOut { notes.append("git diff timed out; the list may be incomplete.") }
             if out.truncated { notes.append("The diff is over 16 MB and was cut.") }
             files = DiffParser.parse(out.text)
@@ -413,8 +490,14 @@ enum ReviewLoader {
         let tracked = Set(files.map(\.path))
         let dirty = readTree ? (head.map { git(["diff", "--quiet", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", $0, "--"])?.status == 1 } ?? !files.isEmpty) : false
 
-        if readTree, let u = git(["ls-files", "--others", "--exclude-standard", "-z"]), u.status == 0 {
-            let paths = u.data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }.filter { !tracked.contains($0) }
+        if readTree, let u = git(["ls-files", "--others", "--exclude-standard", "-z"]), u.status == 0 || u.truncated || u.timedOut {
+            var names = u.data.split(separator: 0, omittingEmptySubsequences: false)
+            if u.truncated || u.timedOut {
+                // The last name may be cut mid-way.
+                if u.data.last != 0 { names = names.dropLast() }
+                notes.append("git's list of untracked files was cut, so some aren't shown.")
+            }
+            let paths = names.filter { !$0.isEmpty }.map { String(decoding: $0, as: UTF8.self) }.filter { !tracked.contains($0) }
             for (i, p) in paths.enumerated() {
                 if i >= maxUntracked {
                     notes.append("\(paths.count - maxUntracked) more untracked files aren't shown.")
@@ -446,8 +529,10 @@ enum ReviewLoader {
                     continue
                 }
                 // Exit status 1 means "differs", the normal case here.
-                guard let d = git(["diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",
-                                   "--dst-prefix=b/", "--", "/dev/null", p]), d.status <= 1 else { continue }
+                guard let d = GitRunner.run(["diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",
+                                             "--dst-prefix=b/", "--", "/dev/null", p], cwd: root, maxBytes: maxNoIndexBytes),
+                      d.status <= 1 || d.truncated else { continue }
+                if d.truncated { notes.append("\(shown)'s diff is over 2 MB and was cut.") }
                 var parsed = DiffParser.parse(d.text)
                 for k in parsed.indices { parsed[k].status = .added; parsed[k].path = p; parsed[k].hiddenChars = parsed[k].hiddenChars || Visible.hasHidden(p) }
                 files += parsed.isEmpty ? [DiffParser.visible(FileDiff(path: p, status: .added))] : parsed

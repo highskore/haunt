@@ -33,28 +33,69 @@ enum Checks {
     private static let runScripts: Set<String> = ["test", "build", "lint", "check", "typecheck", "tsc"]
     private static let wrappers: Set<String> = ["npx", "bunx", "uv", "poetry", "env", "time", "nice"]
 
-    /// The command's segments (split on `&&`, `||`, `;` and `|`) without env assignments and `cd`.
-    static func segments(_ cmd: String) -> [[String]] {
-        var segs: [[String]] = []
-        var cur: [String] = []
-        for w in cmd.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).map(String.init) {
-            if ["&&", "||", ";", "|"].contains(w) {
-                if !cur.isEmpty { segs.append(cur) }
-                cur = []
-                continue
+    /// The command split on `&&`, `||`, `|`, `|&`, `;`, `&` and newlines outside quotes, each piece with
+    /// the operator after it. `&` inside a redirect (`2>&1`, `&>f`) doesn't split.
+    static func pieces(_ cmd: String) -> [(text: String, op: String?)] {
+        var out: [(String, String?)] = []
+        var cur = ""
+        var quote: Character?
+        let cs = Array(cmd)
+        var i = 0
+        func cut(_ op: String) { out.append((cur, op)); cur = "" }
+        while i < cs.count {
+            let c = cs[i], next: Character? = i + 1 < cs.count ? cs[i + 1] : nil
+            if let q = quote {
+                if c == q { quote = nil } else if c == "\\", q == "\"", let n = next { cur.append(c); cur.append(n); i += 2; continue }
+                cur.append(c)
+            } else if c == "'" || c == "\"" {
+                quote = c
+                cur.append(c)
+            } else if c == "\\", let n = next {
+                cur.append(c); cur.append(n); i += 2; continue
+            } else if c == "|" {
+                if next == "|" { cut("||"); i += 1 } else if next == "&" { cut("|&"); i += 1 } else { cut("|") }
+            } else if c == "&", next == "&" {
+                cut("&&"); i += 1
+            } else if c == "&", next != ">", !(cur.last == ">" || cur.last == "<") {
+                cut("&")
+            } else if c == ";" || c == "\n" {
+                cut(";")
+            } else {
+                cur.append(c)
             }
-            var word = w
-            let end = word.hasSuffix(";")
-            if end { word.removeLast() }
-            if !(cur.isEmpty && word.contains("=") && !word.hasPrefix("-")) && !word.isEmpty { cur.append(word) }
-            if end, !cur.isEmpty { segs.append(cur); cur = [] }
+            i += 1
         }
-        if !cur.isEmpty { segs.append(cur) }
-        return segs.filter { $0.first != "cd" }
+        out.append((cur, nil))
+        return out.filter { !$0.0.trimmingCharacters(in: .whitespaces).isEmpty }
+    }
+
+    /// A piece's words without leading env assignments.
+    private static func words(_ piece: String) -> [String] {
+        var w = piece.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        while let f = w.first, f.contains("="), !f.hasPrefix("-") { w.removeFirst() }
+        return w
+    }
+
+    /// The command's segments as words, without env assignments and `cd`.
+    static func segments(_ cmd: String) -> [[String]] {
+        pieces(cmd).map { words($0.text) }.filter { !$0.isEmpty && $0.first != "cd" }
     }
 
     static func isCheck(_ cmd: String) -> Bool {
         segments(cmd).contains(where: isCheckSegment)
+    }
+
+    /// The last check in the command, as written, for "Rerun …".
+    static func checkSegment(_ cmd: String) -> String? {
+        pieces(cmd).last { isCheckSegment(words($0.text)) }?.text.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Whether the command's exit status is the check's: it is the last piece, with no pipe, `||`, `;`
+    /// or `&` after it (`cargo test | tail` exits with tail's status).
+    static func exitIsCheck(_ cmd: String) -> Bool {
+        guard let last = pieces(cmd).last, isCheckSegment(words(last.text)) else { return false }
+        // A trailing `;` or newline has nothing after it; a trailing `&` puts the check in the background.
+        return last.op == nil || last.op == ";"
     }
 
     private static func isCheckSegment(_ seg: [String]) -> Bool {
@@ -79,12 +120,14 @@ enum Checks {
         for c in commands where isCheck(c.command) {
             let state: Check.State
             switch c.outcome {
-            case .passed: state = .passed
+            // A pass only counts when the check's own status is the command's.
+            case .passed: state = exitIsCheck(c.command) ? .passed : .unknown
             case .failed: state = .failed
             case .running: state = .running
             case .unknown: state = .unknown
             }
-            let cmd = Visible.text(c.command)
+            // Commands arrive already spelled out (Visible.turn).
+            let cmd = c.command
             out.removeAll { $0.command == cmd }
             out.append(Check(command: cmd, state: state))
         }
@@ -185,8 +228,8 @@ enum Draft {
     }
 }
 
-/// What "Send to agent" may type. It goes in as a paste (Ghostty frames it when the program enabled
-/// bracketed paste), never with a Return of its own.
+/// What "Send to agent" may type. It goes in as a paste, never with a Return of its own, and on one
+/// line: libghostty can't say whether bracketed paste is on, and without it each newline is a Return.
 enum SendBack {
     enum Verdict: Equatable {
         case ok(String)
@@ -199,7 +242,24 @@ enum SendBack {
         let p = PastePreview(text)
         if p.hasPasteEnd { return .blocked("The prompt contains a bracketed paste end (^[[201~), so it isn't sent.") }
         if p.hasControls { return .blocked("The prompt contains control or invisible characters, so it isn't sent: \(p.text)") }
-        return .ok(text)
+        return .ok(oneLine(text))
+    }
+
+    static func oneLine(_ s: String) -> String {
+        s.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    /// Why the prompt can't go to `row`'s tab now, or nil. Only the tab being reviewed, still selected,
+    /// running an agent, and with no permission request live (`needsYou` alone can be cleared by an
+    /// unverified event; a pending request only by a verified one or by Haunt).
+    static func refusal(surfaceId: String, row: Row?, selected: String?) -> String? {
+        guard let row else { return "The reviewed tab is gone." }
+        if selected != surfaceId { return "The reviewed tab isn't selected any more. Select it, then send." }
+        if row.kind == .shell { return "This tab isn't running an agent, so there's nothing to send the prompt to." }
+        if row.needsYou || row.pending != nil {
+            return "The agent is waiting on a prompt in the terminal. Answer it there first, then send."
+        }
+        return nil
     }
 }
 
@@ -261,7 +321,7 @@ final class ReviewState {
 
     let surfaceId: String
     var turn: ReviewTurn?
-    var diff: ReviewDiff?
+    var diff: ReviewDiff? { didSet { cachedTree = nil } }
     var loadError: String?
     var checks: [Check] = []
     var mode: Mode = .files
@@ -279,12 +339,19 @@ final class ReviewState {
     }
 
     var files: [FileDiff] { diff?.files ?? [] }
-    var tree: FileTree { FileTree(paths: files.map(\.shown)) }
+    /// Built once per diff: drawing and j/k ask for it often.
+    var tree: FileTree {
+        if let t = cachedTree { return t }
+        let t = FileTree(paths: files.map(\.shown))
+        cachedTree = t
+        return t
+    }
+    private var cachedTree: FileTree?
 
     var totals: (Int, Int) { files.reduce((0, 0)) { ($0.0 + $1.additions, $0.1 + $1.deletions) } }
 
     /// The last check the agent ran, for "Rerun …".
-    var rerun: String? { checks.last { $0.state != .notRun }?.command }
+    var rerun: String? { checks.last { $0.state != .notRun }.map { Checks.checkSegment($0.command) ?? $0.command } }
 
     var draft: String { editedDraft ?? Draft.build(comments: comments, note: note, rerun: rerun) }
 
@@ -320,8 +387,10 @@ final class InboxEntry {
         return state.approved ? .approved : .ready
     }
 
-    var name: String { state.diff?.branch ?? row.name }
-    var repo: String { state.diff?.repo ?? state.turn?.cwd.map { ($0 as NSString).lastPathComponent } ?? row.name }
+    /// The tab's name as drawn: it can come from a title the terminal program set.
+    var tabName: String { Visible.text(row.name) }
+    var name: String { state.diff?.branch ?? tabName }
+    var repo: String { state.diff?.repo ?? state.turn?.cwd.map { Visible.text(($0 as NSString).lastPathComponent) } ?? tabName }
 
     /// "tests ✓" only when every check the agent ran passed; Haunt never guesses a result.
     var tests: String {
@@ -334,7 +403,7 @@ final class InboxEntry {
     }
 
     var meta: String {
-        var parts = [repo, row.name]
+        var parts = [repo, tabName]
         switch status {
         case .changesRequested:
             let n = RVText.plural(sentBack?.notes ?? 0, "note")
