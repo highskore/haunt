@@ -5,7 +5,7 @@ import os
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, GhosttyAppDelegate {
     static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "dev.haunt.Haunt", category: "app")
 
-    let fixture = Fixture.current
+    let fixture: Fixture? = Fixture.current
     let config: HauntConfig
     let ghostty: Ghostty.App
     private let core: CoreAPI
@@ -39,10 +39,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private static func makeCore(fixture: Fixture?, configDir: String) -> CoreAPI {
+        #if HAUNT_FIXTURES
         #if HAUNT_REAL_CORE
         if fixture == nil { return HauntCore(configDir: configDir) }
         #endif
         return MockCore(fixture: fixture)
+        #else
+        return HauntCore(configDir: configDir)
+        #endif
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -60,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         controller = c
         c.onSidebarToggle = { [weak self] in self?.updateSidebarItem() }
         updateSidebarItem()
+        #if HAUNT_FIXTURES
         if fixture != nil {
             // Lets a launch check confirm who answers the item and what it reads, once the window is key.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
@@ -71,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 FileHandle.standardError.write(line.data(using: .utf8)!)
             }
         }
+        #endif
         var startError: Error?
         do {
             try core.start()
@@ -108,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             }
             c.drainPluginRequests()
         }
+        #if HAUNT_FIXTURES
         // HAUNT_RENAME=<n>:<text> opens the rename editor on the nth row with <text>; <n>=<text> names it.
         if let spec = ProcessInfo.processInfo.environment["HAUNT_RENAME"],
            let sep = spec.firstIndex(where: { $0 == ":" || $0 == "=" }), let n = Int(spec[..<sep]) {
@@ -125,7 +132,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if fixture == .pasteConfirm {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak c] in c?.showPasteFixture() }
         }
+        #endif
         showSetupIfNeeded(on: c)
+        #if HAUNT_FIXTURES
         // HAUNT_PALETTE, like HAUNT_INACTIVE, lets a launch check capture the palette without synthetic keys.
         // It opens once activation has settled, or the main window taking key would close it again.
         if let text = fixture?.paletteQuery ?? ProcessInfo.processInfo.environment["HAUNT_PALETTE"] {
@@ -135,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 if fixture == .palette { c?.paletteFixtureSelectNext() }
             }
         }
+        #endif
     }
 
     /// Load errors are logged, and listed in the palette, rather than put in front of the user.
@@ -152,9 +162,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// First launch, before any agent choice is recorded, asks which agents to set up; fixtures show each screen.
     private func showSetupIfNeeded(on c: MainWindowController) {
         guard let window = c.window else { return }
-        let show: (() -> Void)?
+        var show: (() -> Void)? = fixture == nil && setup.recorded == nil ? { [setup] in setup.showPicker(on: window) } : nil
+        #if HAUNT_FIXTURES
         switch fixture {
-        case nil: show = setup.recorded == nil ? { [setup] in setup.showPicker(on: window) } : nil
         case .setupPicker: show = { [setup] in setup.showPicker(on: window) }
         case .setupChange: show = { [setup] in setup.confirm([.claude, .codex], remove: false, on: window, back: {}, done: {}) }
         case .settings:
@@ -165,8 +175,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 self.config.saveState(state)
                 self.openSettings(nil)
             }
-        default: show = nil
+        default: break
         }
+        #endif
         if let show { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: show) }
     }
 

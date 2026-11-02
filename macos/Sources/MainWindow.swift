@@ -179,6 +179,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let core: CoreAPI
     private let ghostty: Ghostty.App
     private let fixture: Fixture?
+    /// The mockups' window size in points.
+    private static let defaultSize = NSSize(width: 900, height: Tok.Size.windowH)
     private let config: HauntConfig
     private let plugins: PluginsAPI?
     private lazy var palette: PaletteController = {
@@ -202,7 +204,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.fixture = fixture
         self.config = config
         self.plugins = plugins
-        let size = Fixture.windowSize
+        let size = Self.defaultSize
         let win = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                            backing: .buffered, defer: false)
@@ -389,6 +391,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         return alert
     }
 
+    #if HAUNT_FIXTURES
     /// The paste-risky fixture: a real paste through the surface's Services entry, from a pasteboard of
     /// its own so no clipboard the user has is touched.
     func pasteRiskyFixture() {
@@ -406,6 +409,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             surface: view, contents: Fixture.pasteText, kind: .paste) { _, _, _ in }
     }
 
+    func paletteFixtureSelectNext() { palette.edit(.down) }
+
     private func fixtureCommand() -> String? {
         guard fixture != nil else { return nil }
         let dir = FileManager.default.temporaryDirectory
@@ -416,6 +421,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         try? "/bin/cat '\(text.path)'\nexec /bin/sleep 2147483647\n".write(to: script, atomically: true, encoding: .utf8)
         return "/bin/sh '\(script.path)'"
     }
+    #else
+    private func fixtureCommand() -> String? { nil }
+    #endif
 
     private static let gitQueue = DispatchQueue(label: "dev.haunt.git", qos: .utility)
 
@@ -621,8 +629,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         palette.open(over: window, top: TitleBarView.height(zen: root.sidebarHidden) + Tok.Size.paletteTop, text: text)
     }
 
-    func paletteFixtureSelectNext() { palette.edit(.down) }
-
     /// Writes bytes the core handed back for a surface, as `ghostty_surface_text` does for typed text.
     private func write(_ bytes: Data, to surfaceId: String) {
         guard !bytes.isEmpty, let surface = tabs.first(where: { $0.env.surfaceId == surfaceId })?.view.surface else { return }
@@ -718,7 +724,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             root.agentsOn = true
             refresh()
             window.minSize = NSSize(width: Tok.Size.narrowW - 2, height: 200)
-            let frame = AgentsView.dockedFrame(on: window.screen ?? NSScreen.main, height: fixture.map { _ in Fixture.narrowHeight })
+            let frame = AgentsView.dockedFrame(on: window.screen ?? NSScreen.main, height: fixture == nil ? nil : Fixture.narrowHeight)
             window.setFrame(frame, display: true, animate: animate)
             window.makeFirstResponder(root.agents)
         } else {

@@ -15,10 +15,14 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     // No mockup has row hover: a × in the status slot, meta grey, primary while the pointer is on it.
     // HAUNT_ROW_HOVER=<n> pins hover on the nth row (1-based); <n>x also pins it on the ×.
     private static let pinned: (index: Int, onClose: Bool)? = {
+        #if HAUNT_FIXTURES
         guard var v = ProcessInfo.processInfo.environment["HAUNT_ROW_HOVER"] else { return nil }
         let x = v.hasSuffix("x")
         if x { v.removeLast() }
         return Int(v).map { ($0 - 1, x) }
+        #else
+        return nil
+        #endif
     }()
     private var hoverId: String? {
         didSet { if hoverId != oldValue { invalidateRow(oldValue); invalidateRow(hoverId) } }

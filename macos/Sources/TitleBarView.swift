@@ -52,7 +52,11 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
 
     /// Grey at rest (the mockups); hovering the group shows macOS's own colours and glyphs.
     /// HAUNT_LIGHTS=hover or hover-option pins that state for a launch capture.
+    #if HAUNT_FIXTURES
     private static let pinned = ProcessInfo.processInfo.environment["HAUNT_LIGHTS"]
+    #else
+    private static let pinned: String? = nil
+    #endif
     private var lightsHover = TitleBarView.pinned?.hasPrefix("hover") == true { didSet { needsDisplay = true } }
     private var optionDown = TitleBarView.pinned == "hover-option" { didSet { if optionDown != oldValue { needsDisplay = true } } }
     private var lightsArea: NSTrackingArea?
