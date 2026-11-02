@@ -1,0 +1,10 @@
+[package]
+name = "uniffi-bindgen"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+publish = false
+
+# The Swift bindings generator, kept out of haunt-ffi so the app's static lib never builds the CLI.
+[dependencies]
+uniffi = { workspace = true, features = ["cli"] }

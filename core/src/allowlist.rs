@@ -207,7 +207,7 @@ fn is_symlink_at(dir: &OwnedFd, name: &CStr) -> bool {
 
 /// Writes a temp file next to the settings and renames it over them; rename never follows a link.
 fn write_replace(dir: &OwnedFd, content: &str, mode: u32) -> Result<(), AllowError> {
-    let tmp = CString::new(format!(".settings.local.json.haunt-{}-{}", std::process::id(), crate::model::hex(&crate::model::random_bytes()[..4])))
+    let tmp = CString::new(format!(".settings.local.json.haunt-{}-{}", std::process::id(), crate::ids::hex(&crate::ids::random::<4>())))
         .expect("no NUL");
     let fd = open_at(Some(dir), &tmp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW)?;
     let mut f = File::from(fd);
@@ -232,14 +232,11 @@ fn write_replace(dir: &OwnedFd, content: &str, mode: u32) -> Result<(), AllowErr
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
 
-    fn project(tag: &str) -> PathBuf {
-        let d = PathBuf::from(format!("/tmp/ha-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        // /tmp is a symlink on macOS, and project paths must be canonical.
-        fs::canonicalize(d).unwrap()
+    use crate::testdir::TempDir;
+
+    fn project(tag: &str) -> TempDir {
+        TempDir::created(tag)
     }
 
     fn approval(cwd: &str, cmd: &str, outcome: Outcome) -> Decision {
@@ -299,7 +296,6 @@ mod tests {
         assert_eq!(v["permissions"]["deny"], json!(["Bash(rm)"]));
         assert_eq!(v["permissions"]["allow"], json!(["Read", "Bash(cargo test)"]));
         assert_eq!(fs::read_dir(d.join(".claude")).unwrap().count(), 1, "no temp file left");
-        fs::remove_dir_all(d).unwrap();
     }
 
     #[test]
@@ -314,7 +310,6 @@ mod tests {
             assert_eq!(fs::read_to_string(&path).unwrap(), bad, "never overwritten");
         }
         assert!(matches!(add_rule(Path::new("rel"), "Bash(ls)"), Err(AllowError::Invalid(_))));
-        fs::remove_dir_all(d).unwrap();
     }
 
     #[test]
@@ -328,8 +323,6 @@ mod tests {
         assert!(matches!(add_rule(&d, "Bash(ls)"), Err(AllowError::Symlink(_))));
         assert_eq!(fs::read_to_string(&target).unwrap(), "{}", "the link target is untouched");
         assert!(fs::symlink_metadata(d.join(".claude/settings.local.json")).unwrap().file_type().is_symlink());
-        fs::remove_dir_all(d).unwrap();
-        fs::remove_dir_all(outside).unwrap();
     }
 
     #[test]
@@ -339,8 +332,6 @@ mod tests {
         std::os::unix::fs::symlink(&outside, d.join(".claude")).unwrap();
         assert!(matches!(add_rule(&d, "Bash(ls)"), Err(AllowError::Symlink(_))));
         assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
-        fs::remove_dir_all(d).unwrap();
-        fs::remove_dir_all(outside).unwrap();
     }
 
     #[test]
@@ -390,7 +381,6 @@ mod tests {
         fs::write(d.join("file"), b"").unwrap();
         assert!(matches!(check_project(&format!("{s}/file")), Err(AllowError::Invalid(_))));
         assert!(matches!(check_project(&format!("{s}/missing")), Err(AllowError::Io(_))));
-        fs::remove_dir_all(d).unwrap();
     }
 
     #[test]
@@ -405,7 +395,5 @@ mod tests {
         let nested = parent.join("proj/sub");
         fs::create_dir(real.join("sub")).unwrap();
         assert!(matches!(check_project(nested.to_str().unwrap()), Err(AllowError::Unsafe(_))), "a symlink higher up counts too");
-        fs::remove_dir_all(real).unwrap();
-        fs::remove_dir_all(parent).unwrap();
     }
 }

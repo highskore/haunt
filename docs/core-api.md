@@ -10,14 +10,16 @@ object HauntCore {
   fn start() -> Result<(), CoreError>             // binds sock and ctl, opens decisions.jsonl; a second call is a no-op
   fn register_surface(cwd: string) -> Result<SurfaceEnv, CoreError>   // Invalid past 512 surfaces
   fn unregister_surface(surface_id: string)
-  fn set_surface_info(surface_id: string, title: string, cwd: string, git_branch: Option<string>)
+  fn set_surface_info(surface_id: string, title: string, cwd: string, git_branch: Option<string>)   // git_branch is ignored
   fn select_surface(surface_id: string)           // marks Row.selected
   fn on_osc_notification(surface_id: string, title: string, body: string)
   fn snapshot() -> SidebarSnapshot
+  fn snapshot_if_newer(version: u64) -> Option<SidebarSnapshot>   // nil while snapshot.version is still `version`
   fn set_listener(listener: CoreListener)
   fn answer_permission(surface_id: string, request_key: u64, allow: bool) -> Option<bytes>
   fn on_user_input(surface_id: string)           // every keyDown routed to that surface
   fn decisions(query: string, limit: u32) -> sequence<Decision>     // newest first
+  fn decisions_in(query: string, surface_id: Option<string>, limit: u32) -> sequence<Decision>   // one tab's, filtered before the limit
   fn allow_suggestions() -> sequence<AllowSuggestion>              // plugin proposals that pass every check
   fn accept_allow_suggestion(project: string, command: string) -> Result<(), CoreError>
   fn dismiss_allow_suggestion(project: string, command: string)
@@ -64,10 +66,10 @@ In Swift, the generated `Progress` struct shadows `Foundation.Progress` inside t
    | `HAUNT_HOOK_NONCE` | `env.nonce` (128-bit random, hex) |
    | `HAUNT_SOCK` | `env.socketPath` |
 
-3. On `PWD` and title changes, and whenever the git branch is known, call `setSurfaceInfo`. On tab selection, call `selectSurface`. When a tab closes, call `unregisterSurface`.
+3. On `PWD` and title changes, call `setSurfaceInfo`, from any thread, with `gitBranch: nil`: the core reads the branch itself. On tab selection, call `selectSurface`. When a tab closes, call `unregisterSurface`.
 4. On `GHOSTTY_ACTION_DESKTOP_NOTIFICATION` with title `haunt://cli-agent` or `warp://cli-agent`, call `onOscNotification`. The core ignores other titles, so the UI can pass every notification through and still show the non-agent ones itself.
-5. `changed()` fires on whatever thread made the change. That is often the socket thread. Hop to the main actor, then call `snapshot()`. It is never called while the core holds its lock, so calling back into the core is safe.
-6. Allow/Deny: a row with `pending` has a nonce-verified request. If `pending.suspicious` is set, show the preview with a warning and no Allow/Deny: the command is multi-line or has hidden characters, so it is answered only in the terminal, and `answerPermission` returns `nil` for it. Keep `pending.key` with whatever offers the answer (the button, a notification's `userInfo`) and pass it back: `answerPermission(surfaceId, requestKey, allow)` returns the asking agent's keys for `ghostty_surface_text`: `"1"` (allow) or `"\u{1b}"` (deny) for Claude Code, `"y"` or `"\u{1b}"` for Codex (see [agent-events.md](agent-events.md#agent-ids)). An agent haunt has no keys for gets no `pending` at all. For Claude Code, `1` picks Claude Code's first option, "Yes", wherever the highlight is, where Enter would pick the highlighted one ("Yes, and don't ask again" or "No" if the highlight moved). In a prompt that defaults to No, Claude Code hides the indexes and ignores digits, so `1` does nothing there rather than answering No. It returns them only while that key is still the surface's live request, and consumes the request, so a second call, or a key from a prompt that has since changed, returns `nil`. If it returns `nil`, write nothing.
+5. `changed()` fires on whatever thread made the change. That is often the socket thread. Hop to the main actor, then call `snapshot()`. It is never called while the core holds its lock, so calling back into the core is safe. It fires once per burst: after a call, further changes don't call it again until the next `snapshot()` or `snapshotIfNewer` that returns one, so a UI that stops taking snapshots stops being called.
+6. Allow/Deny: a row with `pending` has a nonce-verified request. If `pending.suspicious` is set, show the preview with a warning and no Allow/Deny: the request is terminal-only (see Nonce gating below: hidden characters, a tool that may touch more than it shows, or another request possibly still on screen), and `answerPermission` returns `nil` for it. It can clear while the key stays the same, once the request is the only one left. Keep `pending.key` with whatever offers the answer (the button, a notification's `userInfo`) and pass it back: `answerPermission(surfaceId, requestKey, allow)` returns the asking agent's keys for `ghostty_surface_text`: `"1"` (allow) or `"\u{1b}"` (deny) for Claude Code, `"y"` or `"\u{1b}"` for Codex (see [agent-events.md](agent-events.md#agent-ids)). An agent haunt has no keys for gets no `pending` at all. For Claude Code, `1` picks Claude Code's first option, "Yes", wherever the highlight is, where Enter would pick the highlighted one ("Yes, and don't ask again" or "No" if the highlight moved). In a prompt that defaults to No, Claude Code hides the indexes and ignores digits, so `1` does nothing there rather than answering No. It returns them only while that key is still the surface's live request, and consumes the request, so a second call, or a key from a prompt that has since changed, returns `nil`. If it returns `nil`, write nothing.
 
 ### UI must call
 
@@ -75,7 +77,7 @@ In Swift, the generated `Progress` struct shadows `Foundation.Progress` inside t
 - `try registerSurface(cwd:)`: it throws now (past 512 surfaces), so `CoreAPI.registerSurface` must be `throws` and its callers need `try`.
 - `gatePluginRequest(request:)` for every `.ptyAnswer` from `HauntPlugins.takeRequests()`, writing only the bytes it returns (see Plugins).
 
-Elapsed times in subrow meta are computed when `snapshot()` runs. A UI that wants them to tick can call `snapshot()` once a second while any row is running.
+Elapsed times in subrow meta are computed when `snapshot()` runs. `snapshot.nextTickMs` is the time until one of them next reads differently (a running subagent's clock), or `nil` when nothing on screen depends on the clock: schedule one `snapshot()` then instead of a steady timer. `snapshot.version` goes up with every change, so `snapshotIfNewer(version)` can skip a redraw that changes nothing; a clock tick still needs `snapshot()`.
 
 ## Decision log
 
@@ -90,7 +92,7 @@ Every verified permission request is recorded once, when it ends, with its outco
 
 Requests only exist for verified events, so unverified events never add an entry; they can only end a verified request, which is then logged as `Superseded`. Entries live in memory (the last 10,000) and in `<config_dir>/decisions.jsonl`, one JSON object per line, appended. `start` opens it with `O_NOFOLLOW`, refuses a symlink or a file of another uid, keeps it 0600, and loads the existing lines. Loading is strict: a line with an unknown field or outcome, an empty surface id or tool, or a `command` that isn't a Bash command whose `preview` shows exactly that command is skipped. Before `start` the log is memory-only.
 
-`decisions(query, limit)` returns them newest first; `query` is a case-insensitive substring of tool, preview, cwd, outcome (`allowed_in_haunt`, …) or surface id, and empty matches all. The ⌘K `log` mode is not built in: it is the first-party plugin `dev.haunt.decision-log` (`~/code/haunt-plugins/haunt-decision-log`), which reads the same records through the `decisions` import (see Plugins).
+`decisions(query, limit)` returns them newest first; `query` is a case-insensitive substring of tool, preview, cwd, outcome (`allowed_in_haunt`, …), surface id, agent id (`codex`) or plugin id, and empty matches all. `decisions_in` keeps only one surface's, before the limit, so a tab filter never misses its older decisions behind other tabs' newer ones. The ⌘K `log` mode is not built in: it is the first-party plugin `dev.haunt.decision-log` (`~/code/haunt-plugins/haunt-decision-log`), which reads the same records through the `decisions` import (see Plugins). Lines reach `decisions.jsonl` after the state lock is released, in order; a line that fails to write stays in memory and is counted in `haunt dump`.
 
 ## Allowlist suggestions
 
@@ -108,14 +110,14 @@ A plugin with `allowlist_suggest` reads the counts (`allowlist.approvals(min-cou
 
 ## Snapshot format (mockup layout 06, grouped flat)
 
-Groups, in order: `NEEDS YOU`, `RUNNING`, `IDLE`. Done, failed and shell rows go in `IDLE`. Empty groups are left out. Within a group, the most recent status change comes first. Ties keep tab (registration) order.
+Groups, in order: `NEEDS YOU`, `RUNNING`, `IDLE`. Done, failed and shell rows go in `IDLE`. Empty groups are left out. The `IDLE` label is empty only when the sidebar holds nothing but shells; once any agent row is listed, `IDLE` keeps its label even over shells alone, so they never read as part of the group above. Within a group, the most recent status change comes first. Ties keep tab (registration) order.
 
 | field | shell | agent (Claude, Codex) |
 |---|---|---|
 | `name` | last path component of the cwd (`~` for home) | same, of the agent cwd |
 | `meta` | `~cwd · <shell>`, e.g. `~/code/vibes · zsh` (the basename of `$SHELL`) | `branch · task`; the agent cwd stands in for a missing branch |
 
-The agent cwd is the latest verified hook event's `cwd`, falling back to the surface cwd from `setSurfaceInfo`. A Claude launched as the surface's command never changes the shell's `PWD`, so the hook is the only place its cwd shows up. Once there is an agent cwd, the core reads the branch from `.git/HEAD` above it on every verified event and ignores the `git_branch` the UI passed; the API is unchanged.
+The agent cwd is the latest verified hook event's `cwd`, falling back to the surface cwd from `setSurfaceInfo`. A Claude launched as the surface's command never changes the shell's `PWD`, so the hook is the only place its cwd shows up. The core reads every branch itself, from `.git/HEAD` above the cwd: the surface cwd's on each `set_surface_info`, and the agent cwd's on every verified event, so a checkout inside the session shows up. The lookups run outside the state lock and are cached per surface by cwd and HEAD (inode, size, mtime), so an unchanged HEAD costs one `lstat`. `git_branch` is ignored and will be dropped from the API once the app stops passing it.
 | `status_text` | empty | `needs you`, `3/5` (running with progress), empty (running without progress), `done`, `failed`, empty (idle) |
 | `progress` | none | `done/total` of the main agent's tasks, else of its latest TodoWrite |
 | `subagents` | none | while running or needing you: `label` = `Explore · trace hooks`, `meta` = `2/4 · 1m12s` or `14 tools · 48s` |
@@ -170,12 +172,14 @@ The colours are names, so the app picks shades that sit in the black-and-white d
 - Leaving `needs you` for any reason, verified or not, drops the request.
 - Each entry into `needs you`, and each `permission_seen`, starts a new generation. A request can be answered only in the generation that created it. So an unverified event that puts the row back into `needs you` (a forged stop and then a forged `permission_prompt`, say) can never revive an old request. A forged `permission_seen` retires the real one, which costs the user the button but never sends an answer to the wrong prompt.
 - `answer_permission` needs the surface to be in `needs you` with a live request at that moment whose key is the one passed in, not `suspicious` and not retired by `on_user_input`, and consumes it.
+- Only a tool whose one command or file path is all it may touch is answerable: `Bash` by its `command`, and `Edit`, `MultiEdit`, `Write`, `NotebookEdit` and `Read` by their `file_path`. Every other tool (`apply_patch`, which can write many files, MCP tools, a future tool) is `suspicious`: shown, answered only in the terminal. The command or path is kept byte for byte as the hook sent it, and matched and written to allow rules unnormalised. An input holding U+FFFD is `suspicious` too: some hop replaced bytes it couldn't decode, so what runs may not be what is shown.
+- One request at a time. A request that a newer `permission_seen` or a move to another call retired, and whose call no verified `tool_ran`, `tool_done` or `tool_failed` has matched, may still be on screen: Codex queues the approvals of parallel calls and shows the oldest first. While any such request is outstanding, the live one is `suspicious`, so an Allow can't land on the wrong prompt. Only a verified `tool_ran`, `tool_done` or `tool_failed` with the same `tool_use_id`, tool name and thread (`agent_id`) clears one; a request without an id can't be told apart from a lookalike call, so it stays until the turn ends. Only a verified `prompt_submit`, `stop` or `stop_failure`, or closing the surface, clears them all: an unverified one may end the live request but never unblocks another. Past 16 outstanding requests, every request stays terminal-only until that verified turn end, so a flood can't push a real one out. A denial typed into Codex leaves its request outstanding, so the rest of that turn is answered in the terminal.
 
 A request resolves when a verified `tool_ran`, `tool_done` or `tool_failed` matches it. The match is on `tool_use_id` when both sides have one (the id is taken from the matching `tool_start`), otherwise on tool name plus exact command or file path. An event with `truncated: true` never matches. Any change out of `needs you`, or an answer, also clears it. For an agent other than Claude Code (Codex has no failure hook), a verified tool event from the same thread that isn't the pending call also ends it as `Superseded` (see [agent-events.md](agent-events.md#agent-ids)).
 
 **Invisible characters**: the hook sends `tool_input` strings over the socket unmodified (JSON escapes keep them on one line). Every other decoded string has control characters and Unicode format characters (General_Category Cf: bidi overrides U+202A–202E and U+2066–2069, zero-widths U+200B–200F, U+2060, U+FEFF, soft hyphen, tags and so on) removed, and other whitespace turned into a space.
 
-A request keeps its command or file path exactly as sent. Its `preview` hides nothing: a newline shows as `⏎`, a tab as `⇥`, and any other control, Cf or non-space whitespace character as `\u{…}`, so `ls #\nrm -rf ~/x` shows as `ls #⏎rm -rf ~/x` and can't pass for a comment. A request with any such character is `suspicious`: `answer_permission` refuses it (it stays live until the terminal answers) and it is never suggested for the allowlist. Matching a request to its `tool_ran` uses the exact input too.
+A request keeps its command or file path exactly as sent. Its `preview` hides nothing: a newline shows as `⏎`, a tab as `⇥`, and any other control, Cf or non-space whitespace character as `\u{…}`, so `ls #\nrm -rf ~/x` shows as `ls #⏎rm -rf ~/x` and can't pass for a comment. A request with any such character is `suspicious` too: `answer_permission` refuses it (it stays live until the terminal answers) and it is never suggested for the allowlist. Matching a request to its `tool_ran` uses the exact input too.
 
 **What the nonce does not protect against**: `HAUNT_HOOK_NONCE` is in the pty environment, so every process the session starts inherits it, including the commands Claude's tools run. Code running inside the session can therefore read it and forge verified events for its own surface: a fake `permission_seen` (which retires the real request and shows its own preview), a fake `tool_ran` (which logs `AnsweredInTerminal`), a fake cwd. Verification separates the hooks from other local programs and from text printed into the pty (OSC), not from the session's own tools. That is why `AnsweredInTerminal` never counts toward allowlist suggestions, only a click in haunt does, and why a plugin's `${cwd}` grant never widens to `$HOME` or the haunt dir.
 
@@ -239,9 +243,9 @@ An ungranted import is absent: a component that imports it fails to link at inst
 
 | request | response |
 |---|---|
-| `{"cmd":"dump"}` | `{"ok":true,"snapshot":<SidebarSnapshot>,"pending":[{"surface_id","key","tool","preview","suspicious"}]}` |
+| `{"cmd":"dump"}` | `{"ok":true,"snapshot":<SidebarSnapshot>,"pending":[{"surface_id","key","tool","preview","suspicious"}],"decision_log_write_errors":n}` |
 | `{"cmd":"event","line":<hook line, object or string>}` | `{"ok":true,"verified":bool,"changed":bool}`. The line goes through the same nonce check as `sock`: without the surface's nonce it is status-only. |
-| `{"cmd":"decisions","query":"git","limit":50}` | `{"ok":true,"decisions":[<Decision>…]}`; `query` and `limit` (default 50, at most 1000) are optional |
+| `{"cmd":"decisions","query":"git","limit":50}` | `{"ok":true,"decisions":[<Decision>…]}`; `query`, `surface` (one surface id) and `limit` (default 50, at most 1000) are optional |
 
 Nonces never appear in any response.
 

@@ -4,7 +4,7 @@ This is the contract every adapter emits and the core parses: `haunt-claude` (Cl
 
 ## Agent ids
 
-`agent` is a lowercase ASCII id for the coding agent behind the session.
+`agent` is the id of the coding agent behind the session: 1 to 32 characters from `a-z`, `0-9` and `-`. An event with any other `agent` value (wrong case, other characters, too long, not a string) is rejected whole.
 
 | id | agent | row kind | Allow / Deny keys | allowlist suggestions |
 |---|---|---|---|---|
@@ -42,7 +42,7 @@ Tool fields, shared by the tool events:
 
 - `tool_name` (string): the agent's own tool name. Shell commands MUST be named `Bash`, because the core previews and allowlists only `Bash`.
 - `tool_use_id` (string): the agent's call id.
-- `tool_input` (object): only `command`, `url` and `file_path`, each a string. An adapter MUST NOT send other inputs (edit bodies, patches, prompts to subagents). For a file-editing tool, `file_path` is the absolute path of the first file it touches.
+- `tool_input` (object): only `command`, `url` and `file_path`, each a string. An adapter MUST NOT send other inputs (edit bodies, patches, prompts to subagents). For a file-editing tool, `file_path` is the absolute path of the file it touches. A call that may touch more than one file (Codex's `apply_patch`) MUST NOT look like a one-file call: send every path it names, absolute, deduplicated in the order the call names them (renames included) and joined by `\n`, or leave `file_path` out. The newline makes the core show every path and refuse to answer the request from haunt. The core also answers only the tools it knows touch the one target they show (core-api.md, Nonce gating), so any other tool is answered in the terminal whatever its preview.
 
 Ids (`task_id` included) are strings and counts are non-negative integers; a value of another type counts as absent. An event that lacks a field marked required below is rejected whole.
 
@@ -55,7 +55,7 @@ An adapter sends the events its agent can observe and leaves the others out. Wit
 | `session_start` | `plugin_version` (the adapter's version); `model`, `source` (ignored) | makes the surface an agent row |
 | `prompt_submit` | `query` | new turn: running, the prompt shown, progress reset. Sent for the main thread only. |
 | `tool_start` | `tool_name` (required), `tool_use_id`, `tool_input` | running. Verified ones are kept to supply the `tool_use_id` a later `permission_seen` lacks. |
-| `permission_seen` | `tool_name` (required), `tool_input` (no `url`), `tool_use_id` if known | needs you. Verified, untruncated and with a `command` or `file_path`: an answerable request. |
+| `permission_seen` | `tool_name` (required), `tool_input` (no `url`), `tool_use_id` if known | needs you. Verified, untruncated and with a `command` or `file_path`: a request, answerable from haunt only for a single-target tool while no earlier request is outstanding. |
 | `tool_ran` | `tool_name` (required), `tool_use_id`, `tool_input` (no `url`) | resolves a matching request (answered in the terminal) |
 | `tool_done` | `tool_name` (required), `tool_use_id`, `tool_input` | same as `tool_ran` |
 | `tool_failed` | `tool_name` (required), `tool_use_id`, `tool_input` | same as `tool_ran` |
@@ -86,10 +86,10 @@ Known wrinkles, kept for v1: `plugin_version` is the adapter's version (`adapter
 ## Transport
 
 1. **Gate.** An adapter MUST do nothing unless `HAUNT=1`.
-2. **Socket.** If `HAUNT_SOCK` is a Unix socket and `HAUNT_SURFACE_ID` is set, send one line per event, newline-terminated. A line is at most 60,000 bytes; the core discards lines over 64 KB. A line holds no raw control character (JSON escapes only), or the core rejects it. A failed send MUST be dropped, never downgraded to OSC. The core rate-limits each surface to 50 events/s with a burst of 200.
+2. **Socket.** If `HAUNT_SOCK` is a Unix socket and `HAUNT_SURFACE_ID` is set, send one line per event, newline-terminated. A line is at most 60,000 bytes; the core discards lines over 64 KB. A line holds no raw control character (JSON escapes only), or the core rejects it. A failed send MUST be dropped, never downgraded to OSC, and so MUST an event the adapter has no way to send (no `nc`, say) while the socket is there. The core rate-limits each surface to 50 events/s with a burst of 200.
 3. **Nonce.** Copy it from the environment; never pass it on a command line or write it anywhere else. An event is verified only when it came over the socket with that surface's nonce (compared in constant time). Only verified events may create a request, set the row's agent or cwd, enter the decision log or count toward an allowlist suggestion.
 4. **OSC 777 fallback**, only when there is no socket: `ESC ] 777 ; notify ; haunt://cli-agent ; <body> BEL`. The body is at most 250 bytes and has only `v, agent, event, agent_id, agent_type, task_id, task_status, task_subject, description, tool_name, tool_count, todos_done, notification_type`. It never carries the nonce, cwd, session id, prompt, command or message, and the core treats it as status only. It goes wherever the agent lets it reach the terminal: `/dev/tty`, or Claude Code's `terminalSequence`. An adapter MUST NOT print it to stdout where the agent feeds stdout to the model (Codex).
-5. **Sanitising.** Before encoding, remove C0, DEL, C1 and Unicode Cf characters from every string. The core strips them again after decoding (keeping `tool_input` strings raw for the preview, which shows them), and rejects a raw control character anywhere in a body.
+5. **Sanitising.** Before encoding, remove C0, DEL, C1 and Unicode Cf characters from every string except the `tool_input` strings of a socket line. Those MUST go as the agent sent them (JSON escapes keep them on one line), because what the preview hides is what decides it: a command `ls #\nrm -rf ~` stripped of its newline would read as one harmless line. The core strips every other string again after decoding, shows `tool_input` with nothing hidden, and rejects a raw control character anywhere in a body (so a raw C1 in `tool_input` costs the event, which is safe).
 6. **Truncation.** Cut, in this order: `tool_input.command`, `tool_input.url`, `tool_input.file_path`, `summary`, `query`, `message`, `description`, `task_subject`, `cwd`. Each cut ends with `…` and sets `truncated: true`. If the line still doesn't fit, send only `{v, agent, event, surface_id, session_id, agent_id, tool_use_id, task_id, tool_name, nonce, truncated}`. If that doesn't fit either, drop the event.
 7. **Exit.** Exit 0, print nothing the agent would read as a decision, and never block longer than a 2 s send timeout.
 

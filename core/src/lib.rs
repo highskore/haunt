@@ -5,7 +5,11 @@ pub mod arrange;
 pub mod ctl;
 pub mod decisions;
 pub mod event;
+mod wire;
 pub mod git;
+mod ids;
+#[cfg(test)]
+mod testdir;
 pub mod intake;
 pub mod layout;
 pub mod model;
@@ -22,7 +26,10 @@ pub mod plugins;
 pub mod progress;
 #[cfg(feature = "plugins")]
 pub mod ptygate;
+mod serve;
 pub mod session;
+#[doc(hidden)]
+pub mod sync;
 
 pub use allowlist::{AllowSuggestion, Approval};
 pub use arrange::{Arrangement, ColorStyle, TabColor};

@@ -342,7 +342,7 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 
 /// Beside the app's config: `$HAUNT_CONFIG_DIR`, else `$HAUNT_HOME`, else `~/.haunt`.
 fn haunt_dir() -> PathBuf {
-    std::env::var_os("HAUNT_CONFIG_DIR").map_or_else(haunt_core::plugin_store::default_home, PathBuf::from)
+    std::env::var_os("HAUNT_CONFIG_DIR").map_or_else(haunt_core::model::default_home, PathBuf::from)
 }
 
 /// Adds (or removes) agents in state.json's `agents`, keeping the app's other keys. The key's presence means setup ran.

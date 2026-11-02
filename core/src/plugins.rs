@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Config, Engine, EngineWeak, Store, StoreContextMut, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxView, WasiView};
@@ -143,10 +144,12 @@ pub struct LoadSpec {
     pub core: Option<CoreHandle>,
 }
 
+/// Written once per export call (`LoadedPlugin::call`) and on drop, not once per `set`.
 struct Kv {
     map: BTreeMap<String, String>,
     bytes: usize,
     path: Option<PathBuf>,
+    dirty: bool,
 }
 
 impl Kv {
@@ -157,7 +160,7 @@ impl Kv {
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
         let bytes = map.iter().map(|(k, v)| k.len() + v.len()).sum();
-        Self { map, bytes, path }
+        Self { map, bytes, path, dirty: false }
     }
 
     fn set(&mut self, key: String, value: String) -> Result<(), String> {
@@ -168,21 +171,30 @@ impl Kv {
         }
         self.map.insert(key, value);
         self.bytes = bytes;
-        self.persist()
-    }
-
-    fn delete(&mut self, key: &str) -> Result<(), String> {
-        if let Some(v) = self.map.remove(key) {
-            self.bytes -= key.len() + v.len();
-            self.persist()?;
-        }
+        self.dirty = true;
         Ok(())
     }
 
-    fn persist(&self) -> Result<(), String> {
-        let Some(path) = &self.path else { return Ok(()) };
+    fn delete(&mut self, key: &str) {
+        if let Some(v) = self.map.remove(key) {
+            self.bytes -= key.len() + v.len();
+            self.dirty = true;
+        }
+    }
+
+    /// A failed write stays dirty and is tried again after the next call.
+    fn flush(&mut self) -> Result<(), String> {
+        let Some(path) = self.path.as_deref().filter(|_| self.dirty) else { return Ok(()) };
         let json = serde_json::to_vec(&self.map).map_err(|e| e.to_string())?;
-        crate::plugin_cache::write_atomic(path, &json).map_err(|e| e.to_string())
+        crate::plugin_cache::write_atomic(path, &json).map_err(|e| e.to_string())?;
+        self.dirty = false;
+        Ok(())
+    }
+}
+
+impl Drop for Kv {
+    fn drop(&mut self) {
+        let _ = self.flush();
     }
 }
 
@@ -326,9 +338,7 @@ impl wkv::Host for HostState {
         self.kv.set(key, value)
     }
     fn delete(&mut self, key: String) {
-        if let Err(e) = self.kv.delete(&key) {
-            self.push_log(format!("error kv delete: {e}"));
-        }
+        self.kv.delete(&key);
     }
 }
 
@@ -568,6 +578,10 @@ impl LoadedPlugin {
         self.store.set_epoch_deadline(CALL_TICKS);
         let (bindings, store) = (&self.bindings, &mut self.store);
         let res = self.epoch.ticking(|| f(bindings, store));
+        let data = self.store.data_mut();
+        if let Err(e) = data.kv.flush() {
+            data.push_log(format!("error kv write: {e}"));
+        }
         res.map_err(|e| {
             let why = if e.downcast_ref::<Trap>() == Some(&Trap::Interrupt) {
                 format!("plugin {} exceeded its {} ms CPU budget and was disabled", self.id(), CALL_TICKS * TICK.as_millis() as u64)
@@ -692,9 +706,10 @@ impl PluginHost {
         Ok(Self { engine, epoch })
     }
 
-    /// Compiles `wasm`, or loads it from `cache` when an HMAC-verified artefact exists.
-    pub fn compile_cached(&self, wasm: &[u8], cache: &CwasmCache) -> Result<(Component, bool), PluginError> {
-        let name = cache_name(&self.engine, wasm);
+    /// Compiles `wasm`, or loads it from `cache` when an HMAC-verified artefact exists. The caller
+    /// passes the SHA-256 it already took of `wasm`, so the bytes are hashed once.
+    pub fn compile_cached(&self, wasm: &[u8], wasm_sha256: &[u8; 32], cache: &CwasmCache) -> Result<(Component, bool), PluginError> {
+        let name = cache_name(&self.engine, wasm_sha256);
         if let Some(art) = cache.get(&name) {
             // Safety: the bytes verified under our per-install key, so we serialised them.
             if let Ok(c) = unsafe { Component::deserialize(&self.engine, &art) } {
@@ -753,12 +768,16 @@ impl PluginHost {
 
     /// Instantiates a compiled component with `spec`'s grants and runs its `init`.
     pub fn instantiate(&self, component: &Component, spec: &LoadSpec) -> Result<LoadedPlugin, PluginError> {
-        let linker = self.linker(&spec.caps)?;
+        self.instantiate_with(component, spec, &self.linker(&spec.caps)?)
+    }
+
+    /// `instantiate` with a linker for `spec.caps` the caller may share between loads.
+    pub fn instantiate_with(&self, component: &Component, spec: &LoadSpec, linker: &Linker<HostState>) -> Result<LoadedPlugin, PluginError> {
         let mut store = Store::new(&self.engine, HostState::new(&spec.id, &spec.caps, spec.kv_path.clone(), spec.haunt_dir.as_deref(), spec.core.clone()));
         store.limiter(|s| &mut s.limits);
         // Instantiation runs the component's start functions, which get the same budget as a call.
         store.set_epoch_deadline(CALL_TICKS);
-        let bindings = self.epoch.ticking(|| Plugin::instantiate(&mut store, component, &linker))?;
+        let bindings = self.epoch.ticking(|| Plugin::instantiate(&mut store, component, linker))?;
         let mut plugin = LoadedPlugin { store, bindings, epoch: self.epoch.clone(), disabled: None };
         plugin.init(&spec.settings_json)?;
         Ok(plugin)
@@ -767,7 +786,7 @@ impl PluginHost {
     pub fn load_bytes(&self, bytes: &[u8], cache_dir: &Path, spec: &LoadSpec) -> Result<(LoadedPlugin, LoadStats), PluginError> {
         let cache = CwasmCache::open(cache_dir)?;
         let t = Instant::now();
-        let (component, from_cache) = self.compile_cached(bytes, &cache)?;
+        let (component, from_cache) = self.compile_cached(bytes, &Sha256::digest(bytes).into(), &cache)?;
         let compile_ms = t.elapsed().as_secs_f64() * 1e3;
         let t = Instant::now();
         let plugin = self.instantiate(&component, spec)?;
@@ -786,11 +805,10 @@ impl PluginHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testdir::TempDir;
 
-    fn tempdir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("haunt-host-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
+    fn tempdir(tag: &str) -> TempDir {
+        TempDir::new(&format!("host-{tag}"))
     }
 
     #[test]
@@ -801,19 +819,19 @@ mod tests {
         // Text form; the dev-only `wat` feature lets Component::new parse it.
         let wasm = b"(component)".to_vec();
 
-        assert!(!host.compile_cached(&wasm, &cache).unwrap().1);
-        assert!(host.compile_cached(&wasm, &cache).unwrap().1);
+        let sha = Sha256::digest(&wasm).into();
+        assert!(!host.compile_cached(&wasm, &sha, &cache).unwrap().1);
+        assert!(host.compile_cached(&wasm, &sha, &cache).unwrap().1);
 
-        let name = cache_name(&host.engine, &wasm);
+        let name = cache_name(&host.engine, &sha);
         let art = dir.join(format!("{name}.cwasm"));
         let mut bytes = std::fs::read(&art).unwrap();
         let last = bytes.len() - 1;
         bytes[last] ^= 0xff;
         std::fs::write(&art, bytes).unwrap();
 
-        assert!(!host.compile_cached(&wasm, &cache).unwrap().1, "tampered artefact must not load");
-        assert!(host.compile_cached(&wasm, &cache).unwrap().1, "recompiled artefact is cached again");
-        std::fs::remove_dir_all(dir).unwrap();
+        assert!(!host.compile_cached(&wasm, &sha, &cache).unwrap().1, "tampered artefact must not load");
+        assert!(host.compile_cached(&wasm, &sha, &cache).unwrap().1, "recompiled artefact is cached again");
     }
 
     const FS_WRITE_IMPORT: &str = r#"(component
@@ -929,7 +947,7 @@ mod tests {
     #[test]
     fn a_plugin_arrangement_keeps_needs_you_first() {
         use wside::Host as _;
-        let core = crate::Core::new(tempdir("arrange-core"));
+        let core = crate::Core::new(&*tempdir("arrange-core"));
         let a = core.register_surface("/a").unwrap();
         let b = core.register_surface("/b").unwrap();
         let line = |env: &crate::SurfaceEnv, body: &str| {
@@ -990,7 +1008,7 @@ mod tests {
         let project = tempdir("propose");
         std::fs::create_dir_all(&project).unwrap();
         let project = project.canonicalize().unwrap();
-        let core = crate::Core::new(tempdir("propose-core"));
+        let core = crate::Core::new(&*tempdir("propose-core"));
         let mut st = HostState::new("dev.haunt.allowlist", &Capabilities::default(), None, None, Some(core.handle()));
         let p = project.to_str().unwrap().to_owned();
         assert!(st.propose(p.clone(), "cargo test".into()).unwrap_err().contains("never approved"));
@@ -999,14 +1017,13 @@ mod tests {
         assert!(!project.join(".claude").exists());
         let mut detached = HostState::new("x", &Capabilities::default(), None, None, None);
         assert!(detached.propose(p, "cargo test".into()).is_err());
-        std::fs::remove_dir_all(project).unwrap();
     }
 
     #[test]
     fn the_approvals_import_hides_one_offs_other_agents_and_cleaned_commands() {
         use crate::{decisions::Decision, event::Agent, session::Outcome};
         use wallow::Host as _;
-        let core = crate::Core::new(tempdir("approvals-floor"));
+        let core = crate::Core::new(&*tempdir("approvals-floor"));
         let d = |cmd: &str, preview: &str, outcome, agent| Decision {
             at_ms: 1,
             surface_id: "s".into(),
@@ -1112,10 +1129,13 @@ mod tests {
         assert!(kv.set("b".into(), "yy".into()).is_err());
         kv.set("a".into(), "small".into()).unwrap();
         kv.set("b".into(), "yy".into()).unwrap();
-        kv.delete("a").unwrap();
+        kv.delete("a");
+        assert!(!path.exists(), "nothing written before the flush");
+        kv.flush().unwrap();
+        kv.set("c".into(), "z".into()).unwrap();
+        drop(kv);
         let again = Kv::open(Some(path));
         assert_eq!(again.map.get("b").map(String::as_str), Some("yy"));
-        assert_eq!(again.bytes, 3);
-        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!((again.map.get("c").map(String::as_str), again.bytes), (Some("z"), 5), "dropping flushes");
     }
 }
