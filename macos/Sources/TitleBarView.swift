@@ -40,7 +40,7 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
     /// Where the title row starts and the height its contents centre in: the hairline is the bar's last
     /// point, and zen drops it (mockup 10's `border: none`).
     private var rowTop: CGFloat { zen ? Tok.Size.zenBar : 0 }
-    private var rowH: CGFloat { zen ? Tok.Size.titlebarH : Tok.Size.titlebarH - 1 }
+    private var rowH: CGFloat { zen ? Tok.Size.titlebarH : Tok.Size.titlebarH - Tok.App.hairline }
     private var lightsY: CGFloat { rowTop + (rowH - Tok.Size.lightsD) / 2 }
 
     private func lightRect(_ i: Int) -> NSRect {
@@ -191,7 +191,7 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
                 Draw.fill(NSRect(x: 0, y: 0, width: w, height: Tok.Size.zenBar), Tok.Color.barFill)
             }
         } else {
-            Draw.fill(NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1), Tok.Color.hairline)
+            Draw.fill(NSRect(x: 0, y: bounds.height - Tok.App.hairline, width: bounds.width, height: Tok.App.hairline), Tok.Color.hairline)
         }
 
         drawLights()
@@ -225,26 +225,27 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
         let s = Tok.App.sidebarGlyph
         let box = NSRect(x: r.minX, y: (r.midY - s.height / 2).rounded(), width: s.width, height: s.height)
         let rad = Tok.App.sidebarGlyphRadius
-        let outline = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: rad, yRadius: rad)
-        outline.lineWidth = 1
+        let hl = Tok.App.hairline
+        let outline = NSBezierPath(roundedRect: box.insetBy(dx: hl / 2, dy: hl / 2), xRadius: rad, yRadius: rad)
+        outline.lineWidth = hl
         Tok.Color.textLabel.setStroke()
         outline.stroke()
-        Draw.fill(NSRect(x: box.minX + Tok.App.sidebarGlyphColumn, y: box.minY, width: 1, height: box.height), Tok.Color.textLabel)
+        Draw.fill(NSRect(x: box.minX + Tok.App.sidebarGlyphColumn, y: box.minY, width: hl, height: box.height), Tok.Color.textLabel)
     }
 
     private func drawKbd(_ label: String, in ctx: CGContext) {
         let font = Draw.ui(Tok.Size.kbdFont)
         let line = Draw.line(label, font, Tok.Color.textSub)
-        let pad = Tok.Size.kbdPad[1]
-        let w = Draw.width(line) + pad * 2 + 2
-        let h = Tok.Size.kbdLine + 2
+        let pad = Tok.Size.kbdPad[1], hl = Tok.App.hairline
+        let w = Draw.width(line) + pad * 2 + hl * 2
+        let h = Tok.Size.kbdLine + hl * 2
         let box = NSRect(x: bounds.width - Tok.Size.titlebarPadx - w, y: rowTop + (rowH - h) / 2, width: w, height: h)
         let r = Tok.Size.kbdRadius
-        let border = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: r - 0.5, yRadius: r - 0.5)
-        border.lineWidth = 1
+        let border = NSBezierPath(roundedRect: box.insetBy(dx: hl / 2, dy: hl / 2), xRadius: r - hl / 2, yRadius: r - hl / 2)
+        border.lineWidth = hl
         Tok.Color.kbdBorder.setStroke()
         border.stroke()
-        Draw.text(line, font: font, x: box.minX + 1 + pad, top: box.minY + 1, lineHeight: Tok.Size.kbdLine, in: ctx)
+        Draw.text(line, font: font, x: box.minX + hl + pad, top: box.minY + hl, lineHeight: Tok.Size.kbdLine, in: ctx)
     }
 
     override func mouseDown(with event: NSEvent) {

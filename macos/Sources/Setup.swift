@@ -112,8 +112,8 @@ final class SetupSheets {
         let stack = NSStackView(views: boxes)
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
-        stack.frame = NSRect(x: 0, y: 0, width: 260, height: stack.fittingSize.height)
+        stack.spacing = Tok.App.setupChoiceGap
+        stack.frame = NSRect(x: 0, y: 0, width: Tok.App.setupChoicesW, height: stack.fittingSize.height)
         alert.accessoryView = stack
         alert.beginSheetModal(for: window) { [self] r in
             _ = toggled
@@ -180,22 +180,24 @@ final class SetupSheets {
         if let img = a.icon {
             let att = NSTextAttachment()
             att.image = img
-            att.bounds = NSRect(x: 0, y: -3, width: img.size.width, height: img.size.height)
+            att.bounds = NSRect(x: 0, y: -Tok.App.setupIconDrop, width: img.size.width, height: img.size.height)
             s.append(NSAttributedString(attachment: att))
             s.append(NSAttributedString(string: "  "))
         }
         s.append(NSAttributedString(string: a.name))
-        s.addAttributes([.font: NSFont.systemFont(ofSize: NSFont.systemFontSize), .foregroundColor: NSColor.labelColor],
+        s.addAttributes([.font: Tok.App.sheetFont, .foregroundColor: Tok.App.sheetText],
                         range: NSRange(location: 0, length: s.length))
         return s
     }
 
     /// Read-only and unwrapped, so a diff keeps its columns; scrolls past fourteen lines.
     static func textBox(_ text: String) -> NSScrollView {
-        let font = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        let font = Tok.App.sheetMono
         let lineH = NSLayoutManager().defaultLineHeight(for: font)
-        let lines = min(max(text.split(separator: "\n", omittingEmptySubsequences: false).count, 3), 14)
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 520, height: (lineH * CGFloat(lines)).rounded(.up) + 24))
+        let n = text.split(separator: "\n", omittingEmptySubsequences: false).count, range = Tok.App.setupDiffLines
+        let lines = min(max(n, range.lowerBound), range.upperBound)
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: Tok.App.setupDiffW,
+                                                height: (lineH * CGFloat(lines)).rounded(.up) + Tok.App.setupDiffChrome))
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
         scroll.borderType = .bezelBorder
@@ -204,7 +206,7 @@ final class SetupSheets {
         tv.isSelectable = true
         tv.isRichText = false
         tv.font = font
-        tv.textContainerInset = NSSize(width: 2, height: 4)
+        tv.textContainerInset = Tok.App.textBoxInset
         tv.isVerticallyResizable = true
         tv.isHorizontallyResizable = true
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
@@ -238,7 +240,7 @@ final class SettingsWindowController: NSWindowController {
         self.sheets = sheets
         self.configPath = configPath
         self.openConfig = openConfig
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 200),
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: Tok.App.settingsW, height: Tok.App.settingsH),
                            styleMask: [.titled, .closable], backing: .buffered, defer: false)
         win.title = "Settings"
         win.appearance = NSAppearance(named: .darkAqua)
@@ -246,8 +248,8 @@ final class SettingsWindowController: NSWindowController {
         win.isReleasedWhenClosed = false
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 20, right: 20)
+        stack.spacing = Tok.App.settingsGap
+        stack.edgeInsets = Tok.App.settingsInsets
         stack.translatesAutoresizingMaskIntoConstraints = false
         let content = NSView()
         content.addSubview(stack)
@@ -256,7 +258,7 @@ final class SettingsWindowController: NSWindowController {
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             stack.topAnchor.constraint(equalTo: content.topAnchor),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            content.widthAnchor.constraint(equalToConstant: 440),
+            content.widthAnchor.constraint(equalToConstant: Tok.App.settingsW),
         ])
         win.contentView = content
         super.init(window: win)
@@ -284,13 +286,15 @@ final class SettingsWindowController: NSWindowController {
         sheets.confirm([a], remove: remove, on: window, back: nil) { [weak self] in self?.rebuild() }
     }
 
+    private var insetsW: CGFloat { Tok.App.settingsInsets.left + Tok.App.settingsInsets.right }
+
     private func section(_ title: String, _ rows: [NSView]) {
         if !stack.arrangedSubviews.isEmpty {
             let rule = NSBox()
             rule.boxType = .separator
             stack.addArrangedSubview(rule)
-            rule.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
-            stack.setCustomSpacing(14, after: rule)
+            rule.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -insetsW).isActive = true
+            stack.setCustomSpacing(Tok.App.settingsAfterRule, after: rule)
         }
         let label = NSTextField(labelWithAttributedString: NSAttributedString(string: title.uppercased(), attributes: [
             .font: Draw.ui(Tok.Size.labelFont, .medium), .foregroundColor: Tok.Color.textLabel,
@@ -299,9 +303,9 @@ final class SettingsWindowController: NSWindowController {
         stack.addArrangedSubview(label)
         for r in rows {
             stack.addArrangedSubview(r)
-            r.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
+            r.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -insetsW).isActive = true
         }
-        if let last = rows.last { stack.setCustomSpacing(18, after: last) }
+        if let last = rows.last { stack.setCustomSpacing(Tok.App.settingsAfterSection, after: last) }
     }
 
     private func row(icon: NSImage?, name: String, status: String, button: String,
@@ -331,7 +335,7 @@ final class SettingsWindowController: NSWindowController {
         views.append(b)
         let h = NSStackView(views: views)
         h.orientation = .horizontal
-        h.spacing = 8
+        h.spacing = Tok.App.settingsRowGap
         return h
     }
 }

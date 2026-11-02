@@ -82,9 +82,9 @@ final class PasteGuard {
         if preview.hasControls { notes.append("Control characters are shown as ^[ and \\u{…}.") }
         alert.informativeText = notes.joined(separator: "\n")
 
-        let font = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        let font = Tok.App.sheetMono
         let lineH = NSLayoutManager().defaultLineHeight(for: font)
-        let inset = Tok.App.pastePreviewInset
+        let inset = Tok.App.textBoxInset
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: Tok.App.pastePreviewW,
                                                 height: (lineH * Tok.App.pastePreviewLines).rounded(.up) + inset.height * 2))
         scroll.hasVerticalScroller = true
