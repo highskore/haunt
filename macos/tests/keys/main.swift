@@ -119,6 +119,32 @@ check(rc.contains("cursor-style = bar\n"), "other passthrough kept")
 let rcOK = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\nright-click-action = copy\n"), defaultSize: 11, keys: defaults)
 check(rcOK.contains("right-click-action = copy\n"), "right-click copy allowed")
 
+// Ghostty's own paste bindings are always gone, even with paste moved, and Paste Selection is Haunt's ⇧⌘V.
+check(defaults[.pasteSelection] == Shortcut.parse("cmd+shift+v"), "paste_selection defaults to cmd+shift+v")
+let moved = HauntConfig.ghosttyConfig([:], defaultSize: 11,
+                                      keys: KeyMap(table: TOML.parse("[keys]\npaste = \"cmd+shift+p\"\npaste_selection = \"cmd+opt+p\"\n")["keys"]!) { _ in })
+for c in [conf, moved] {
+    for line in ["keybind = super+v=unbind", "keybind = shift+super+v=unbind", "keybind = paste=unbind"] {
+        check(c.contains(line + "\n"), "ghostty config has \(line)")
+    }
+}
+for (entry, key) in [("middle-click-action = clipboard-paste", "middle-click-action"),
+                     ("keybind = super+p=paste_from_clipboard", "paste_from_clipboard"),
+                     ("keybind = \"global:ctrl+b>v=paste_from_selection\"", "paste_from_selection"),
+                     ("config-file = /tmp/other.conf", "config-file"),
+                     ("keybind = [\"super+j=paste_from_clipboard\", \"super+u=copy_to_clipboard\"]", "super+j"),
+                     ("cursor-style = \"bar\\nkeybind = super+y=text:x\"", "super+y")] {
+    let text = "[ghostty]\n\(entry)\n"
+    let out = HauntConfig.ghosttyConfig(TOML.parse(text), defaultSize: 11, keys: defaults)
+    check(!out.contains(key), "\(entry) refused")
+    check(!HauntConfig.refusedGhostty(TOML.parse(text)["ghostty"]!).isEmpty, "\(entry) reported")
+}
+let kept = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\nmiddle-click-action = ignore\nkeybind = [\"super+j=paste_from_clipboard\", \"super+u=copy_to_clipboard\"]\n"),
+                                     defaultSize: 11, keys: defaults)
+check(kept.contains("middle-click-action = ignore\n") && kept.contains("keybind = super+u=copy_to_clipboard\n"), "safe passthrough kept")
+check(!HauntConfig.ghosttyConfig(TOML.parse("font = \"Mono\\nconfig-file = /x\"\n"), defaultSize: 11, keys: defaults).contains("config-file"),
+      "a line break in font is refused")
+
 // Plugin commands: their default keys bind unless taken, `[keys]` overrides them, and Ghostty lets them through.
 let up = KeyMap.pluginName("dev.haunt.tabs", "move-up"), down = KeyMap.pluginName("dev.haunt.tabs", "move-down")
 let pluginDefaults = [up: "alt+cmd+up", down: "alt+cmd+down", "dev.x.y/steal": "cmd+t"]

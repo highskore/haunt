@@ -21,7 +21,8 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
         return true
     }
 
-    /// Writes a paste the user confirmed, exactly the text they saw.
+    /// Writes a paste the user confirmed, encoded as Ghostty pastes: ESC and other controls become spaces,
+    /// and LF becomes CR outside a bracketed paste.
     func sendPaste(_ text: String) {
         onInput?()
         surfaceModel?.sendText(text)
@@ -729,6 +730,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             if palette.isOpen { palette.close() }
             root.agents.restore = (window.frame, window.minSize)
             root.agentsOn = true
+            // The strip neither zooms nor goes full screen (windowShouldZoom), whatever asks.
+            window.collectionBehavior.insert(.fullScreenNone)
             refresh()
             window.minSize = NSSize(width: Tok.Size.narrowW - 2, height: 200)
             let frame = AgentsView.dockedFrame(on: window.screen ?? NSScreen.main, height: fixture.map { _ in Fixture.narrowHeight })
@@ -736,8 +739,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             window.makeFirstResponder(root.agents)
         } else {
             // Grow first, then lay the panes out once at their full size.
+            window.collectionBehavior.remove(.fullScreenNone)
             if let r = root.agents.restore {
-                window.setFrame(r.frame, display: true, animate: animate)
+                let frame = AgentsView.restoredFrame(r.frame, screens: NSScreen.screens.map(\.visibleFrame),
+                                                     current: (window.screen ?? NSScreen.main)?.visibleFrame)
+                window.setFrame(frame, display: true, animate: animate)
                 window.minSize = r.minSize
             }
             root.agents.restore = nil
@@ -762,6 +768,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
         return false
     }
+
+    func windowShouldZoom(_ window: NSWindow, toFrame newFrame: NSRect) -> Bool { !root.agentsOn }
 
     func windowDidBecomeKey(_ notification: Notification) { syncFocus() }
     func windowDidResignKey(_ notification: Notification) { syncFocus() }
