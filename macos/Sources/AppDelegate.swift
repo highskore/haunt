@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private let core: CoreAPI
     private var plugins: PluginsAPI?
     private var controller: MainWindowController?
+    private lazy var setup = SetupSheets(config: config, fixture: fixture != nil)
+    private var settings: SettingsWindowController?
 
     // Members the vendored wrapper calls on NSApp.delegate.
     let undoManager: UndoManager? = nil
@@ -95,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if fixture == .pasteConfirm {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak c] in c?.showPasteFixture() }
         }
+        showSetupIfNeeded(on: c)
         // HAUNT_PALETTE, like HAUNT_INACTIVE, lets a launch check capture the palette without synthetic keys.
         // It opens once activation has settled, or the main window taking key would close it again.
         if let text = fixture?.paletteQuery ?? ProcessInfo.processInfo.environment["HAUNT_PALETTE"] {
@@ -118,6 +121,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
     }
 
+    /// First launch, before any agent choice is recorded, asks which agents to set up; fixtures show each screen.
+    private func showSetupIfNeeded(on c: MainWindowController) {
+        guard let window = c.window else { return }
+        let show: (() -> Void)?
+        switch fixture {
+        case nil: show = setup.recorded == nil ? { [setup] in setup.showPicker(on: window) } : nil
+        case .setupPicker: show = { [setup] in setup.showPicker(on: window) }
+        case .setupChange: show = { [setup] in setup.confirm([.claude, .codex], remove: false, on: window, back: {}, done: {}) }
+        case .settings:
+            show = { [weak self] in
+                guard let self else { return }
+                var state = HauntConfig.State()
+                state.agents = ["claude"]
+                self.config.saveState(state)
+                self.openSettings(nil)
+            }
+        default: show = nil
+        }
+        if let show { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: show) }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     // MARK: Menu actions
@@ -127,6 +151,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc func selectTab(_ sender: NSMenuItem) { controller?.select(index: sender.tag) }
     @objc func toggleSidebar(_ sender: Any?) { controller?.toggleSidebar() }
     @objc func togglePalette(_ sender: Any?) { controller?.togglePalette() }
+
+    @objc func openSettings(_ sender: Any?) {
+        let s = settings ?? SettingsWindowController(sheets: setup, configPath: config.tomlURL.path) { [weak self] in
+            self?.openConfig(nil)
+        }
+        settings = s
+        s.rebuild()
+        if s.window?.isVisible != true { s.window?.center() }
+        s.showWindow(nil)
+    }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleSidebar(_:)) {
@@ -177,7 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         submenu("Haunt", [
             item("About Haunt", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
             .separator(),
-            item("Settings…", #selector(openConfig(_:)), .settings),
+            item("Settings…", #selector(openSettings(_:)), .settings),
             .separator(),
             item("Hide Haunt", #selector(NSApplication.hide(_:)), .hide),
             item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), .hideOthers),

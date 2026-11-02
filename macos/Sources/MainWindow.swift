@@ -513,7 +513,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         switch icon {
         case .search: togglePalette()
         case .newTab: newTab()
-        case .settings: (NSApp.delegate as? AppDelegate)?.openConfig(nil)
+        case .settings: (NSApp.delegate as? AppDelegate)?.openSettings(nil)
         case .sidebar: toggleSidebar()
         }
     }

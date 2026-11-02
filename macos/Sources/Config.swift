@@ -87,8 +87,19 @@ final class HauntConfig {
     /// UI state kept across launches in `<dir>/state.json`, beside the config it belongs to.
     struct State: Codable {
         var sidebarHidden = false
+        /// Written by `haunt setup`; nil until it has run, which is when the first-launch picker shows.
+        var agents: [String]?
 
-        enum CodingKeys: String, CodingKey { case sidebarHidden = "sidebar_hidden" }
+        enum CodingKeys: String, CodingKey { case sidebarHidden = "sidebar_hidden", agents }
+
+        init() {}
+
+        // Every key is optional: `haunt setup` may write the file before the app ever has.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            sidebarHidden = try c.decodeIfPresent(Bool.self, forKey: .sidebarHidden) ?? false
+            agents = try c.decodeIfPresent([String].self, forKey: .agents)
+        }
     }
 
     var stateURL: URL { dir.appendingPathComponent("state.json") }
