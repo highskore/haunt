@@ -1,6 +1,6 @@
 #!/bin/bash
 # Launches build/haunt.app on a mockup fixture, captures its window and runs design/check.
-# Usage: macos/fidelity.sh [screen...]   (default: ui-03-icon-only ui-06-grouped-flat)
+# Usage: macos/fidelity.sh [screen...]   (default: ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette)
 # HAUNT_INACTIVE=1 captures the window unfocused; captures then get an -inactive suffix.
 set -uo pipefail
 cd "$(dirname "$0")"
@@ -8,15 +8,19 @@ ROOT="$(cd .. && pwd)"
 OUT="$ROOT/design/out"
 mkdir -p "$OUT"
 status=0
-for screen in "${@:-ui-03-icon-only ui-06-grouped-flat}"; do
+for screen in "${@:-ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette}"; do
   for s in $screen; do
     tag="$s${HAUNT_INACTIVE:+-inactive}"
+    # The palette is its own window over the main one; the mockup's crop leaves out its 1 pt border.
+    width=""
+    inset=0
+    case "$s" in dl-04-palette) width=400; inset=2 ;; esac
     HAUNT_FIXTURE="$s" "$ROOT/build/haunt.app/Contents/MacOS/haunt" >"$OUT/$tag-app.log" 2>&1 &
     pid=$!
     win=""
     for _ in $(seq 1 40); do
       sleep 0.25
-      win=$(tools/winid-pid "$pid" 2>/dev/null) && break
+      win=$(tools/winid-pid "$pid" $width 2>/dev/null) && break
     done
     # Let the surfaces print the fixture and the renderer settle.
     sleep "${HAUNT_SETTLE:-2}"
@@ -25,6 +29,21 @@ for screen in "${@:-ui-03-icon-only ui-06-grouped-flat}"; do
       status=1
     else
       screencapture -x -o -l "${win%% *}" "$OUT/$tag-capture.png"
+      if [ "$inset" -gt 0 ]; then
+        # screencapture -l on a child window sometimes returns the whole window group; then the panel is
+        # cut out of it at its offset from the main window.
+        main=$(tools/winid-pid "$pid" 900)
+        uv run --quiet --no-project --with pillow python -I -c '
+import sys
+from PIL import Image
+p, n = sys.argv[1], int(sys.argv[2])
+_, pw, ph, px, py = map(int, sys.argv[3].split())
+_, mw, mh, mx, my = map(int, sys.argv[4].split())
+im = Image.open(p)
+x, y = (0, 0) if im.width == pw * 2 else ((px - mx) * 2, (py - my) * 2)
+im.crop((x + n, y + n, x + pw * 2 - n, y + ph * 2 - n)).save(p, icc_profile=im.info.get("icc_profile"))
+' "$OUT/$tag-capture.png" "$inset" "$win" "$main"
+      fi
       "$ROOT/design/check" "$OUT/$tag-capture.png" "$s" --out "$OUT${HAUNT_INACTIVE:+/inactive}" || status=1
     fi
     kill "$pid" 2>/dev/null

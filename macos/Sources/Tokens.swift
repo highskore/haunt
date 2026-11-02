@@ -43,6 +43,22 @@ enum Tok {
         static let monitorBg: NSColor = NSColor(srgbRed: 8.0 / 255, green: 8.0 / 255, blue: 8.0 / 255, alpha: 1)
         /// color.needs
         static let needs: NSColor = NSColor(srgbRed: 255.0 / 255, green: 255.0 / 255, blue: 255.0 / 255, alpha: 1)
+        /// color.palette.bg
+        static let paletteBg: NSColor = NSColor(srgbRed: 27.0 / 255, green: 27.0 / 255, blue: 27.0 / 255, alpha: 1)
+        /// color.palette.border
+        static let paletteBorder: NSColor = NSColor(srgbRed: 58.0 / 255, green: 58.0 / 255, blue: 58.0 / 255, alpha: 1)
+        /// color.palette.chip.fg
+        static let paletteChipFg: NSColor = NSColor(srgbRed: 11.0 / 255, green: 11.0 / 255, blue: 11.0 / 255, alpha: 1)
+        /// color.palette.entry.rule
+        static let paletteEntryRule: NSColor = NSColor(srgbRed: 31.0 / 255, green: 31.0 / 255, blue: 31.0 / 255, alpha: 1)
+        /// color.palette.ink
+        static let paletteInk: NSColor = NSColor(srgbRed: 232.0 / 255, green: 232.0 / 255, blue: 232.0 / 255, alpha: 1)
+        /// color.palette.mute
+        static let paletteMute: NSColor = NSColor(srgbRed: 138.0 / 255, green: 138.0 / 255, blue: 138.0 / 255, alpha: 1)
+        /// color.palette.rule
+        static let paletteRule: NSColor = NSColor(srgbRed: 42.0 / 255, green: 42.0 / 255, blue: 42.0 / 255, alpha: 1)
+        /// color.palette.sel
+        static let paletteSel: NSColor = NSColor(srgbRed: 42.0 / 255, green: 42.0 / 255, blue: 42.0 / 255, alpha: 1)
         /// color.row.selected
         static let rowSelected: NSColor = NSColor(srgbRed: 26.0 / 255, green: 26.0 / 255, blue: 26.0 / 255, alpha: 1)
         /// color.sidebar.bg
@@ -171,6 +187,62 @@ enum Tok {
         static let menuW: CGFloat = 340
         /// size.narrow.w
         static let narrowW: CGFloat = 280
+        /// size.palette.chip.font
+        static let paletteChipFont: CGFloat = 10
+        /// size.palette.chip.pad
+        static let paletteChipPad: [CGFloat] = [0, 5]
+        /// size.palette.chip.radius
+        static let paletteChipRadius: CGFloat = 3
+        /// size.palette.cursor.h
+        static let paletteCursorH: CGFloat = 13
+        /// size.palette.entry.gap
+        static let paletteEntryGap: CGFloat = 6
+        /// size.palette.entry.mark.w
+        static let paletteEntryMarkW: CGFloat = 10
+        /// size.palette.entry.pad
+        static let paletteEntryPad: [CGFloat] = [5, 0]
+        /// size.palette.entry.time.w
+        static let paletteEntryTimeW: CGFloat = 34
+        /// size.palette.font
+        static let paletteFont: CGFloat = 10.5
+        /// size.palette.foot.gap
+        static let paletteFootGap: CGFloat = 14
+        /// size.palette.foot.pad
+        static let paletteFootPad: [CGFloat] = [6, 10]
+        /// size.palette.input.font
+        static let paletteInputFont: CGFloat = 12
+        /// size.palette.input.gap
+        static let paletteInputGap: CGFloat = 6
+        /// size.palette.input.pad
+        static let paletteInputPad: [CGFloat] = [8, 10]
+        /// size.palette.jmp.font
+        static let paletteJmpFont: CGFloat = 10
+        /// size.palette.jmp.line
+        static let paletteJmpLine: CGFloat = 14
+        /// size.palette.jmp.pad
+        static let paletteJmpPad: [CGFloat] = [0, 4]
+        /// size.palette.kbd.pad
+        static let paletteKbdPad: [CGFloat] = [0, 4]
+        /// size.palette.kbd.radius
+        static let paletteKbdRadius: CGFloat = 3
+        /// size.palette.list.pad
+        static let paletteListPad: [CGFloat] = [2, 10]
+        /// size.palette.mark
+        static let paletteMark: CGFloat = 8
+        /// size.palette.mark.mt
+        static let paletteMarkMt: CGFloat = 3
+        /// size.palette.radius
+        static let paletteRadius: CGFloat = 8
+        /// size.palette.scrim.alpha
+        static let paletteScrimAlpha: CGFloat = 0.55
+        /// size.palette.sel.bar
+        static let paletteSelBar: CGFloat = 2
+        /// size.palette.small.font
+        static let paletteSmallFont: CGFloat = 9.5
+        /// size.palette.top
+        static let paletteTop: CGFloat = 22
+        /// size.palette.w
+        static let paletteW: CGFloat = 400
         /// size.pane.font
         static let paneFont: CGFloat = 12.5
         /// size.pane.line
@@ -237,5 +309,7 @@ enum Tok {
         static let windowRadius: CGFloat = 12
         /// size.zen.bar
         static let zenBar: CGFloat = 2
+        /// size.zen.hint.font
+        static let zenHintFont: CGFloat = 11
     }
 }

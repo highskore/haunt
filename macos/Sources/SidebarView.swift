@@ -4,6 +4,19 @@ import AppKit
 final class SidebarView: NSView {
     var snapshot = SidebarSnapshot(groups: []) { didSet { relayout() } }
     var onSelect: ((String) -> Void)?
+    var onClose: ((String) -> Void)?
+
+    // No mockup has row hover: a × in the status slot, meta grey, primary while the pointer is on it.
+    // HAUNT_ROW_HOVER=<n> pins hover on the nth row (1-based); <n>x also pins it on the ×.
+    private static let pinned: (index: Int, onClose: Bool)? = {
+        guard var v = ProcessInfo.processInfo.environment["HAUNT_ROW_HOVER"] else { return nil }
+        let x = v.hasSuffix("x")
+        if x { v.removeLast() }
+        return Int(v).map { ($0 - 1, x) }
+    }()
+    private var hoverId: String? { didSet { if hoverId != oldValue { needsDisplay = true } } }
+    private var hoverClose = false { didSet { if hoverClose != oldValue { needsDisplay = true } } }
+    private static let closeSize: CGFloat = 8
 
     private enum Item {
         case label(String, top: CGFloat)
@@ -11,6 +24,8 @@ final class SidebarView: NSView {
     }
 
     private var items: [Item] = []
+
+    static let suspiciousHint = "check terminal"
 
     override var isFlipped: Bool { true }
 
@@ -46,7 +61,64 @@ final class SidebarView: NSView {
                 y += h
             }
         }
+        if let p = Self.pinned {
+            let ids = orderedIds
+            hoverId = ids.indices.contains(p.index) ? ids[p.index] : nil
+            hoverClose = p.onClose
+        }
         needsDisplay = true
+    }
+
+    /// The × in a row's status slot, centred on line 1.
+    private func closeRect(top: CGFloat) -> NSRect {
+        let d = Self.closeSize
+        return NSRect(x: contentWidth - Tok.Size.rowPad[1] - d, y: top + Tok.Size.rowPad[0] + (rowLine1 - d) / 2,
+                      width: d, height: d)
+    }
+
+    private func row(at p: NSPoint) -> (Row, CGFloat)? {
+        for case let .row(row, top, height) in items where p.y >= top && p.y < top + height && p.x < contentWidth {
+            return (row, top)
+        }
+        return nil
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self))
+    }
+
+    override func mouseMoved(with event: NSEvent) { updateHover(event) }
+    override func mouseEntered(with event: NSEvent) { updateHover(event) }
+
+    override func mouseExited(with event: NSEvent) {
+        guard Self.pinned == nil else { return }
+        hoverId = nil
+        hoverClose = false
+    }
+
+    private func updateHover(_ event: NSEvent) {
+        guard Self.pinned == nil else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        let hit = row(at: p)
+        hoverId = hit?.0.surfaceId
+        hoverClose = hit.map { closeRect(top: $0.1).insetBy(dx: -4, dy: -4).contains(p) } ?? false
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let (row, _) = row(at: convert(event.locationInWindow, from: nil)) else { return nil }
+        let menu = NSMenu()
+        let item = NSMenuItem(title: "Close Tab", action: #selector(closeFromMenu(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = row.surfaceId
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func closeFromMenu(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? String { onClose?(id) }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -87,9 +159,21 @@ final class SidebarView: NSView {
         let statusFont = Draw.uiTabular(Tok.Size.rowRight)
         let statusColor = row.needsYou ? Tok.Color.needs : Tok.Color.textMeta
         let status = Draw.line(row.statusText, statusFont, statusColor)
-        let statusW = Draw.width(status)
-        Draw.text(status, font: statusFont, x: right - statusW, top: y + (rowLine1 - Tok.Size.rowRight * lh) / 2,
-                  lineHeight: Tok.Size.rowRight * lh, in: ctx)
+        var statusW = Draw.width(status)
+        if row.surfaceId == hoverId {
+            let r = closeRect(top: top)
+            statusW = r.width
+            let x = NSBezierPath()
+            x.move(to: NSPoint(x: r.minX, y: r.minY)); x.line(to: NSPoint(x: r.maxX, y: r.maxY))
+            x.move(to: NSPoint(x: r.minX, y: r.maxY)); x.line(to: NSPoint(x: r.maxX, y: r.minY))
+            x.lineWidth = 1.2
+            x.lineCapStyle = .round
+            (hoverClose ? Tok.Color.textPrimary : Tok.Color.textMeta).setStroke()
+            x.stroke()
+        } else {
+            Draw.text(status, font: statusFont, x: right - statusW, top: y + (rowLine1 - Tok.Size.rowRight * lh) / 2,
+                      lineHeight: Tok.Size.rowRight * lh, in: ctx)
+        }
 
         let nameFont = Draw.ui(Tok.Size.rowName)
         let nameMax = right - gapX - statusW - col2
@@ -98,9 +182,17 @@ final class SidebarView: NSView {
                   lineHeight: Tok.Size.rowName * lh, in: ctx)
         y += rowLine1 + gapY
 
-        // Line 2: meta, spanning columns 2–3.
+        // Line 2: meta, spanning columns 2–3. A suspicious request shows its preview (⏎ and all) and is
+        // answered only in the terminal, so the hint stands where Allow/Deny would.
         let metaFont = Draw.ui(Tok.Size.rowMeta)
-        let meta = Draw.truncated(Draw.line(row.meta, metaFont, Tok.Color.textMeta), right - col2, metaFont, Tok.Color.textMeta)
+        var metaRight = right
+        if let p = row.pending, p.suspicious {
+            let hint = Draw.line(Self.suspiciousHint, metaFont, Tok.Color.textMeta)
+            metaRight -= Draw.width(hint) + gapX
+            Draw.text(hint, font: metaFont, x: right - Draw.width(hint), top: y, lineHeight: Tok.Size.rowMeta * lh, in: ctx)
+        }
+        let metaText = row.pending.flatMap { $0.suspicious ? $0.preview : nil } ?? row.meta
+        let meta = Draw.truncated(Draw.line(metaText, metaFont, Tok.Color.textMeta), metaRight - col2, metaFont, Tok.Color.textMeta)
         Draw.text(meta, font: metaFont, x: col2, top: y, lineHeight: Tok.Size.rowMeta * lh, in: ctx)
         y += Tok.Size.rowMeta * lh
 
@@ -131,6 +223,9 @@ final class SidebarView: NSView {
         case .claude:
             let s = Tok.Size.claudeIcon
             Draw.claudeMark(in: NSRect(x: r.midX - s / 2, y: r.midY - s / 2, width: s, height: s))
+        case .codex:
+            let s = Tok.Size.claudeIcon
+            Draw.codexMark(in: NSRect(x: r.midX - s / 2, y: r.midY - s / 2, width: s, height: s), ctx: ctx)
         case .shell:
             Tok.Color.iconBg.setFill()
             NSBezierPath(roundedRect: r, xRadius: Tok.Size.iconRadius, yRadius: Tok.Size.iconRadius).fill()
@@ -144,9 +239,11 @@ final class SidebarView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        for case let .row(row, top, height) in items where p.y >= top && p.y < top + height {
+        guard let (row, top) = row(at: p) else { return }
+        if closeRect(top: top).insetBy(dx: -4, dy: -4).contains(p) {
+            onClose?(row.surfaceId)
+        } else {
             onSelect?(row.surfaceId)
-            return
         }
     }
 }

@@ -58,6 +58,14 @@ final class MockCore: CoreAPI {
 
     func answerPermission(surfaceId: String, requestKey: UInt64, allow: Bool) -> Data? { nil }
 
+    func onUserInput(surfaceId: String) {}
+
+    func decisions(query: String, limit: UInt32) -> [Decision] {
+        fixture == .palette || fixture == .codexLog ? Array((fixture?.decisions() ?? []).prefix(Int(limit))) : []
+    }
+
+    func gatePluginRequest(request: HostRequest) -> PtyWrite? { nil }
+
     func snapshot() -> SidebarSnapshot {
         if let fixture { return fixture.snapshot(surfaceIds: surfaces.map(\.id), selected: selectedId) }
         let shell = ((ProcessInfo.processInfo.environment["SHELL"] ?? "zsh") as NSString).lastPathComponent

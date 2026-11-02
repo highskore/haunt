@@ -7,8 +7,30 @@ from pathlib import Path
 
 DESIGN = Path(__file__).resolve().parent.parent
 MOCKUPS = Path(os.environ.get("HAUNT_MOCKUPS", Path.home() / "code/haunt-reference/mockups"))
-FILES = {"ui": MOCKUPS / "pawr-ui/index.html", "av": MOCKUPS / "pawr-agents-view/index.html"}
+FILES = {"ui": MOCKUPS / "pawr-ui/index.html", "av": MOCKUPS / "pawr-agents-view/index.html",
+         "dl": MOCKUPS / "pawr-declog/index.html"}
 OUT = DESIGN / "tokens.json"
+
+# The declog palette is used for layout only, recoloured to haunt's neutral greys (decision 2026-11-02):
+# each declog colour maps to the nearest existing haunt token.
+RECOLOUR = {"dl": {
+    "#1c1c1f": "#1b1b1b",  # panel -> color.icon.bg
+    "#3a3a3f": "#3a3a3a",  # border -> color.lights
+    "#2a2a2e": "#2a2a2a",  # divider -> color.bar.track
+    "#2a2a2f": "#2a2a2a",  # selection -> color.bar.track
+    "#ededee": "#e8e8e8",  # ink -> color.text.primary
+    "#8b8b92": "#8a8a8a",  # mute -> color.text.sub
+    "#0b0b0c": "#0b0b0b",  # chip text -> color.window.bg
+    "#1f1f22": "#1f1f1f",  # entry rule -> color.card.border
+}}
+
+
+def source_html(key):
+    html = FILES[key].read_text()
+    for old, new in RECOLOUR.get(key, {}).items():
+        html = re.sub(re.escape(old), new, html, flags=re.I)
+    return html
+
 
 # Page chrome around the mockups, not part of the app.
 PAGE_ONLY = re.compile(r"^(\*|header\.top.*|main|\.item.*)$")
@@ -130,7 +152,46 @@ SEMANTIC = {
     "size.table.font": ["av|.tbl|font-size"],
     "size.table.th.font": ["av|.tbl .th|font-size"],
     "size.zen.bar": [("ui|inline|height:2px;background:#1e1e1e", 2)],
+    "size.zen.hint.font": [("ui|inline|<span class=\"muted\" style=\"font-size:11px\">⌘B agents", 11)],
+    # ⌘K palette: pawr-declog placement 04, the one mockup with a palette.
+    "color.palette.bg": ["dl|.pal|background"],
+    "color.palette.border": ["dl|.pal|border@color"],
+    "color.palette.rule": ["dl|.pin|border-bottom@color", "dl|.pf|border-top@color", "dl|.kbd|border@color", "dl|.jmp|border@color"],
+    "color.palette.sel": ["dl|.pl .sel|background"],
+    "color.palette.ink": ["dl|:root|--ink", "dl|.pfx|background", "dl|.cur|background", "dl|.mk|border@color", "dl|code|color"],
+    "color.palette.mute": ["dl|:root|--mute", "dl|.pf|color", "dl|.e .tm|color", "dl|.e .d|color", "dl|.kbd|color", "dl|.jmp|color"],
+    "color.palette.chip.fg": ["dl|.pfx|color"],
+    "color.palette.entry.rule": ["dl|.e|border-bottom@color"],
+    "size.palette.scrim.alpha": [("dl|inline|background: rgba(0,0,0,0.55)", 0.55)],
+    "size.palette.w": ["dl|.pal|width"],
+    "size.palette.top": ["dl|.scrim|padding-top"],
+    "size.palette.radius": ["dl|.pal|border-radius"],
+    "size.palette.input.pad": ["dl|.pin|padding"],
+    "size.palette.input.gap": ["dl|.pin|gap"],
+    "size.palette.input.font": ["dl|.pin|font-size"],
+    "size.palette.chip.font": ["dl|.pfx|font-size"],
+    "size.palette.chip.pad": ["dl|.pfx|padding"],
+    "size.palette.chip.radius": ["dl|.pfx|border-radius"],
+    "size.palette.cursor.h": ["dl|.cur|height"],
+    "size.palette.list.pad": ["dl|.pl|padding"],
+    "size.palette.sel.bar": [("dl|inline|box-shadow: inset 2px 0 0 var(--ink)", 2)],
+    "size.palette.entry.time.w": ["dl|.e|grid-template-columns@0"],
+    "size.palette.entry.mark.w": ["dl|.e|grid-template-columns@1"],
+    "size.palette.entry.gap": ["dl|.e|gap"],
+    "size.palette.entry.pad": ["dl|.e|padding"],
+    "size.palette.font": ["dl|.win|font-size"],
+    "size.palette.small.font": ["dl|.e .tm|font-size", "dl|.e .d|font-size", "dl|.kbd|font-size", "dl|.pf|font-size"],
+    "size.palette.mark": ["dl|.mk|width", "dl|.mk|height"],
+    "size.palette.mark.mt": ["dl|.e .mk|margin-top"],
+    "size.palette.jmp.font": ["dl|.jmp|font-size"],
+    "size.palette.jmp.pad": ["dl|.jmp|padding"],
+    "size.palette.jmp.line": ["dl|.jmp|line-height"],
+    "size.palette.kbd.pad": ["dl|.kbd|padding"],
+    "size.palette.kbd.radius": ["dl|.kbd|border-radius", "dl|.jmp|border-radius", "dl|.pfx|border-radius"],
+    "size.palette.foot.pad": ["dl|.pf|padding"],
+    "size.palette.foot.gap": ["dl|.pf|gap"],
 }
+VAR = re.compile(r"var\(--([\w-]+)\)")
 
 
 def norm_color(c):
@@ -151,8 +212,8 @@ def parse_value(v):
     return v
 
 
-def style_rules(path):
-    html = path.read_text()
+def style_rules(key):
+    html = source_html(key)
     css = "\n".join(re.findall(r"<style>(.*?)</style>", html, re.S))
     css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     rules = {}
@@ -186,6 +247,7 @@ def resolve(src, files):
     raw = files[f][1].get(sel, {}).get(prop)
     if raw is None:
         raise ValueError(f"missing in mockup CSS: {src}")
+    raw = VAR.sub(lambda m: files[f][1].get(":root", {}).get("--" + m.group(1), m.group()), raw)
     if pick == "color":
         return norm_color(HEX.search(raw).group())
     if pick:
@@ -195,7 +257,7 @@ def resolve(src, files):
 
 
 def build():
-    files = {k: style_rules(p) for k, p in FILES.items()}
+    files = {k: style_rules(k) for k in FILES}
     tokens, errors = {}, []
     for name, srcs in SEMANTIC.items():
         vals = []

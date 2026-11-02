@@ -1,13 +1,20 @@
 import AppKit
+import os
 
-/// ~/.haunt/config.toml: `font`, `font_size`, and a raw `[ghostty]` table, turned into a Ghostty config file.
+/// ~/.haunt/config.toml: `font`, `font_size`, a `[keys]` table and a raw `[ghostty]` table, turned into a Ghostty config file.
 final class HauntConfig {
+    static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "dev.haunt.Haunt", category: "config")
+
     let dir: URL
     var tomlURL: URL { dir.appendingPathComponent("config.toml") }
     var ghosttyURL: URL { dir.appendingPathComponent("ghostty.generated.conf") }
+    private(set) var keys = KeyMap.defaults
 
     private var source: DispatchSourceFileSystemObject?
+    private var fileSource: DispatchSourceFileSystemObject?
+    private var onChange: ((_ ghostty: Bool, _ keys: Bool) -> Void)?
     private var lastWritten: String?
+    private var lastKeyProblems: [String] = []
 
     /// ~/.haunt unless HAUNT_CONFIG_DIR points elsewhere.
     init(dir: URL? = nil) {
@@ -15,22 +22,31 @@ final class HauntConfig {
         self.dir = dir ?? env ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".haunt")
     }
 
-    /// Writes the Ghostty file; returns true when its contents changed.
+    /// Re-reads config.toml into `keys` and rewrites the Ghostty file; says which of the two changed.
     @discardableResult
-    func writeGhosttyConfig(useUserConfig: Bool = true) -> Bool {
+    func reload(useUserConfig: Bool = true) -> (ghostty: Bool, keys: Bool) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let toml = useUserConfig ? ((try? String(contentsOf: tomlURL, encoding: .utf8)).map(TOML.parse) ?? [:]) : [:]
-        let text = Self.ghosttyConfig(toml, defaultSize: useUserConfig ? Self.defaultFontSize : Tok.Size.paneFont)
-        guard text != lastWritten else { return false }
+        var problems: [String] = []
+        let newKeys = KeyMap(table: toml["keys"] ?? [:]) { problems.append($0) }
+        // One save can fire several events; each problem is logged once per edit.
+        if problems != lastKeyProblems {
+            for p in problems { Self.logger.error("\(p, privacy: .public)") }
+            lastKeyProblems = problems
+        }
+        let keysChanged = newKeys != keys
+        keys = newKeys
+        let text = Self.ghosttyConfig(toml, defaultSize: useUserConfig ? Self.defaultFontSize : Tok.Size.paneFont, keys: keys)
+        guard text != lastWritten else { return (false, keysChanged) }
         try? text.write(to: ghosttyURL, atomically: true, encoding: .utf8)
         lastWritten = text
-        return true
+        return (true, keysChanged)
     }
 
     /// The user's Warp size; fixtures keep the mockup's `Tok.Size.paneFont` so fidelity still compares.
     static let defaultFontSize: CGFloat = 11
 
-    static func ghosttyConfig(_ toml: [String: [String: TOML.Value]], defaultSize: CGFloat) -> String {
+    static func ghosttyConfig(_ toml: [String: [String: TOML.Value]], defaultSize: CGFloat, keys: KeyMap) -> String {
         let top = toml[""] ?? [:]
         let font = top["font"]?.strings.first ?? Tok.Font.monoFamily
         let size = top["font_size"]?.strings.first ?? Self.num(defaultSize)
@@ -52,9 +68,11 @@ final class HauntConfig {
             "confirm-close-surface = true",
             "resize-overlay = never",
         ]
-        // haunt owns tabs, so these reach the menu instead of Ghostty.
-        let unbind: [String] = ["t", "w", "n", "d", "shift+d"] + (1...9).flatMap { ["digit_\($0)", "\($0)"] }
-        lines += unbind.map { "keybind = super+\($0)=unbind" }
+        // haunt owns tabs and windows, and its shortcuts must reach the menu instead of Ghostty.
+        var unbind: [String] = (["t", "w", "n", "d", "shift+d"] + (1...9).flatMap { ["digit_\($0)", "\($0)"] }).map { "super+" + $0 }
+        for a in KeyMap.Action.allCases { unbind += keys[a]?.ghosttyTriggers ?? [] }
+        var seen = Set<String>()
+        lines += unbind.filter { seen.insert($0).inserted }.map { "keybind = \($0)=unbind" }
         let raw = (toml["ghostty"] ?? [:]).sorted { $0.key < $1.key }.flatMap { k, v in v.strings.map { "\(k) = \($0)" } }
         return (lines + raw).joined(separator: "\n") + "\n"
     }
@@ -66,17 +84,53 @@ final class HauntConfig {
         v.rounded() == v ? String(Int(v)) : String(format: "%g", Double(v))
     }
 
-    /// Calls `onChange` on the main queue after config.toml changes (atomic saves replace the file).
-    func watch(_ onChange: @escaping () -> Void) {
-        let fd = open(dir.path, O_EVTONLY)
-        guard fd >= 0 else { return }
-        let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main)
-        src.setEventHandler { [weak self] in
-            if self?.writeGhosttyConfig() == true { onChange() }
-        }
+    /// UI state kept across launches in `<dir>/state.json`, beside the config it belongs to.
+    struct State: Codable {
+        var sidebarHidden = false
+
+        enum CodingKeys: String, CodingKey { case sidebarHidden = "sidebar_hidden" }
+    }
+
+    var stateURL: URL { dir.appendingPathComponent("state.json") }
+
+    func loadState() -> State {
+        (try? Data(contentsOf: stateURL)).flatMap { try? JSONDecoder().decode(State.self, from: $0) } ?? State()
+    }
+
+    func saveState(_ state: State) {
+        guard let data = try? JSONEncoder().encode(state) else { return }
+        try? data.write(to: stateURL, options: .atomic)
+    }
+
+    /// Calls `onChange` on the main queue after config.toml changes. The directory catches atomic saves,
+    /// which replace the file; the file itself catches editors that write in place.
+    func watch(_ onChange: @escaping (_ ghostty: Bool, _ keys: Bool) -> Void) {
+        self.onChange = onChange
+        source = Self.observe(dir.path, [.write, .rename, .delete]) { [weak self] in self?.changed() }
+        watchFile()
+    }
+
+    private func changed() {
+        watchFile()
+        let r = reload()
+        if r.ghostty || r.keys { onChange?(r.ghostty, r.keys) }
+    }
+
+    /// Re-armed on every event, since an atomic save leaves the old watch on a deleted file.
+    private func watchFile() {
+        fileSource?.cancel()
+        fileSource = Self.observe(tomlURL.path, [.write, .extend, .rename, .delete]) { [weak self] in self?.changed() }
+    }
+
+    private static func observe(_ path: String, _ mask: DispatchSource.FileSystemEvent,
+                                _ handler: @escaping () -> Void) -> DispatchSourceFileSystemObject? {
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else { return nil }
+        let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: mask, queue: .main)
+        src.setEventHandler(handler: handler)
         src.setCancelHandler { close(fd) }
         src.resume()
-        source = src
+        return src
     }
 }
 
