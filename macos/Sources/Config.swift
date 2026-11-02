@@ -16,6 +16,9 @@ final class HauntConfig {
     private var fileSource: DispatchSourceFileSystemObject?
     private var onChange: ((_ ghostty: Bool, _ keys: Bool, _ layout: Bool) -> Void)?
     private var lastWritten: String?
+    /// config.toml's identity at the last read; events that leave it unchanged (state.json, our own
+    /// generated Ghostty file) skip the reload.
+    private var lastSeen: FileStamp?
     private var lastKeyProblems: [String] = []
     private var lastLayoutProblems: [String] = []
 
@@ -29,6 +32,7 @@ final class HauntConfig {
     @discardableResult
     func reload(useUserConfig: Bool = true) -> (ghostty: Bool, keys: Bool, layout: Bool) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        lastSeen = FileStamp(tomlURL)
         let text = useUserConfig ? (try? String(contentsOf: tomlURL, encoding: .utf8)) ?? "" : ""
         let toml = TOML.parse(text)
         var problems: [String] = []
@@ -174,6 +178,7 @@ final class HauntConfig {
     }
 
     private func changed() {
+        guard FileStamp(tomlURL) != lastSeen else { return }
         watchFile()
         let r = reload()
         if r.ghostty || r.keys || r.layout { onChange?(r.ghostty, r.keys, r.layout) }
@@ -194,6 +199,20 @@ final class HauntConfig {
         src.setCancelHandler { close(fd) }
         src.resume()
         return src
+    }
+}
+
+/// A file's inode, modification time and size; nil when it doesn't exist.
+struct FileStamp: Equatable {
+    let inode: UInt64, mtimeSec: Int, mtimeNsec: Int, size: Int64
+
+    init?(_ url: URL) {
+        var st = stat()
+        guard stat(url.path, &st) == 0 else { return nil }
+        inode = UInt64(st.st_ino)
+        mtimeSec = st.st_mtimespec.tv_sec
+        mtimeNsec = st.st_mtimespec.tv_nsec
+        size = Int64(st.st_size)
     }
 }
 
