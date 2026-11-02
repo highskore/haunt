@@ -189,7 +189,7 @@ Installed with `haunt plugin install <path>` (cli/), which shows the capabilitie
 
 | call | what |
 |---|---|
-| `HauntPlugins.load(hauntDir:core:)` | loads every pinned plugin from `<hauntDir>/plugins` with only its granted imports; runs `init`. `core` (the `HauntCore`) backs the `decisions` and `allowlist` imports, and from then on every event for a registered surface reaches the plugins whose `events` grant covers it, with `verified` set as below. Call it after `core.start()` so the decision log is loaded. |
+| `HauntPlugins.load(hauntDir:core:bundledDir:)` | first installs or updates the app's own plugins from `bundledDir` (see Bundled plugins), then loads every pinned plugin from `<hauntDir>/plugins` with only its granted imports; runs `init`. `core` (the `HauntCore`) backs the `decisions` and `allowlist` imports, and from then on every event for a registered surface reaches the plugins whose `events` grant covers it, with `verified` set as below. Call it after `core.start()` so the decision log is loaded. |
 | `loadErrors()` | plugins skipped, with the reason (hash mismatch, link error, trap) |
 | `paletteItems(mode: nil, query:)` | registered commands and modes (`isMode`), title-filtered by `query` |
 | `paletteItems(mode: "word", query:)` | the items that mode's plugin returns for `query`, each with optional `atMs` (time column), `mark` (`open`, `filled`, `round`) and `surfaceId` (Enter jumps to that tab, if it is open, instead of invoking the item) |
@@ -222,6 +222,12 @@ Events reach plugins on the thread that delivered them (usually the socket threa
 **allowlist** (`allowlist_suggest`): `approvals(min-count)` returns the counted approvals (Claude Code, clicked in haunt, the raw command equal to its preview) per project and exact command, newest first. The host raises `min-count` to at least 2 (`APPROVALS_MIN`), so a one-off approval, such as an `export TOKEN=…`, never reaches a plugin. `propose(project, command)` adds a pending suggestion; it errors if the proposal fails a check (see Allowlist suggestions). No import writes a settings file, and none can accept a suggestion. Only `HauntCore.acceptAllowSuggestion` does, after the user accepts it in the UI.
 
 An ungranted import is absent: a component that imports it fails to link at install and at load.
+
+**Bundled plugins**: `macos/make-app.sh` builds the decision-log and allowlist plugins (or the repos in `HAUNT_FIRST_PARTY_PLUGINS`) and puts each in `haunt.app/Contents/Resources/plugins/<id>/` as `haunt-plugin.toml` and `plugin.wasm`, inside the signature. `Store::install_bundled` installs them on launch without a prompt, pinned with `source = "bundled"`:
+
+- A new bundled plugin is installed with the capabilities its manifest asks for.
+- When the app ships a different build of one, it is updated in place, unless it asks for a capability the pinned one wasn't granted. Then the new files go on disk unpinned, the plugin stops loading ("does not match the lockfile"), and `haunt plugin approve <id>` shows the full prompt.
+- A copy installed from another source is never replaced. `haunt plugin remove` of a bundled plugin adds its id to the lockfile's `removed_bundled`, and it is never installed again.
 
 **fs grants**: `${cwd}` in an `fs_read`/`fs_write` glob expands only to cwds of verified events. A cwd that is `$HOME`, an ancestor of it, inside the haunt dir or containing it is ignored, and if `$HOME` can't be resolved `${cwd}` expands to nothing. No path inside the haunt dir is ever readable, writable or listable, whatever the globs say.
 

@@ -2,7 +2,7 @@ import AppKit
 
 /// Mockup 06's grouped flat sidebar, drawn from a core `SidebarSnapshot`.
 final class SidebarView: NSView, NSTextFieldDelegate {
-    var snapshot = SidebarSnapshot(groups: []) { didSet { relayout() } }
+    var snapshot = SidebarSnapshot(groups: [], colorStyle: .dot) { didSet { relayout() } }
     var onSelect: ((String) -> Void)?
     var onClose: ((String) -> Void)?
     /// Agents view 01's list: the window's background and no right hairline.

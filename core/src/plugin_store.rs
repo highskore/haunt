@@ -57,8 +57,14 @@ pub struct LockEntry {
     pub granted: Capabilities,
 }
 
+/// `source` of a plugin that ships inside the app.
+pub const BUNDLED: &str = "bundled";
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Lock {
+    /// Bundled plugins the user removed; they are never installed again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    removed_bundled: Vec<String>,
     #[serde(default, rename = "plugin")]
     plugins: Vec<LockEntry>,
 }
@@ -233,17 +239,7 @@ impl Store {
             return Err(StoreError::Declined);
         }
 
-        let dest = self.plugins_dir().join(&id);
-        let staging = self.plugins_dir().join(format!(".{id}.staging"));
-        let _ = fs::remove_dir_all(&staging);
-        mkdir_private(&staging)?;
-        write_atomic(&staging.join(MANIFEST), &manifest_bytes)?;
-        write_atomic(&staging.join(WASM), &wasm)?;
-        if dest.exists() {
-            fs::remove_dir_all(&dest)?;
-        }
-        fs::rename(&staging, &dest)?;
-
+        self.put(&id, &manifest_bytes, &wasm)?;
         let entry = LockEntry {
             id: id.clone(),
             version: manifest.plugin.version.clone(),
@@ -261,6 +257,100 @@ impl Store {
             Some(_) => Installed::Updated { prompted },
             None => Installed::New,
         })
+    }
+
+    /// Replaces `plugins/<id>` with the given files, through a staging directory.
+    fn put(&self, id: &str, manifest_bytes: &[u8], wasm: &[u8]) -> Result<(), StoreError> {
+        let dest = self.plugins_dir().join(id);
+        let staging = self.plugins_dir().join(format!(".{id}.staging"));
+        let _ = fs::remove_dir_all(&staging);
+        mkdir_private(&staging)?;
+        write_atomic(&staging.join(MANIFEST), manifest_bytes)?;
+        write_atomic(&staging.join(WASM), wasm)?;
+        if dest.exists() {
+            fs::remove_dir_all(&dest)?;
+        }
+        fs::rename(&staging, &dest)?;
+        Ok(())
+    }
+
+    /// Installs or updates the plugins shipped in `dir` (`<dir>/<id>/haunt-plugin.toml` and `plugin.wasm`)
+    /// without asking: they come inside the signed app. A bundled update that asks for more than was
+    /// granted is put on disk unpinned, so it stays off until `haunt plugin approve`. A copy installed
+    /// from elsewhere, or one the user removed, is left alone. Returns one line per plugin it skipped.
+    pub fn install_bundled(&self, dir: &Path, host: &PluginHost) -> Result<Vec<String>, StoreError> {
+        let mut lock = self.read_lock()?;
+        let mut errors = Vec::new();
+        let mut changed = false;
+        let entries = match fs::read_dir(dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(errors),
+            r => r?,
+        };
+        let mut entries: Vec<_> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+        entries.sort();
+        for src in entries {
+            let name = src.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            match self.bundled_one(&src, &name, host, &mut lock) {
+                Ok(c) => changed |= c,
+                Err(e) => errors.push(format!("{name} (bundled): {e}")),
+            }
+        }
+        if changed {
+            self.write_lock(&lock)?;
+        }
+        Ok(errors)
+    }
+
+    /// Whether the lockfile changed.
+    fn bundled_one(&self, src: &Path, id: &str, host: &PluginHost, lock: &mut Lock) -> Result<bool, StoreError> {
+        if lock.removed_bundled.iter().any(|r| r == id) {
+            return Ok(false);
+        }
+        let old = lock.plugins.iter().position(|p| p.id == id);
+        if old.is_some_and(|i| lock.plugins[i].source != BUNDLED) {
+            return Ok(false);
+        }
+        let manifest_bytes = read_capped(&src.join(MANIFEST))?;
+        let wasm = read_capped(&src.join(WASM))?;
+        let pinned = |e: &LockEntry| e.sha256_wasm == sha(&wasm) && e.sha256_manifest == sha(&manifest_bytes);
+        if old.is_some_and(|i| pinned(&lock.plugins[i])) {
+            return Ok(false);
+        }
+        let manifest = Manifest::parse(&String::from_utf8_lossy(&manifest_bytes))?;
+        if manifest.plugin.id != id {
+            return Err(StoreError::Invalid(format!("its manifest is for {}", manifest.plugin.id)));
+        }
+        let dest = self.plugin_dir(id)?;
+        let grew = old.is_some_and(|i| !manifest.capabilities.added_since(&lock.plugins[i].granted).is_empty());
+        let on_disk = read_capped(&dest.join(WASM)).is_ok_and(|w| w == wasm)
+            && read_capped(&dest.join(MANIFEST)).is_ok_and(|m| m == manifest_bytes);
+        if grew && on_disk {
+            return Ok(false);
+        }
+        let cache = CwasmCache::open(&self.cache_dir())?;
+        let (component, _) = host.compile_cached(&wasm, &cache)?;
+        host.check_links(&component, &manifest.capabilities)?;
+        self.put(id, &manifest_bytes, &wasm)?;
+        if grew {
+            return Ok(false);
+        }
+        let entry = LockEntry {
+            id: id.to_owned(),
+            version: manifest.plugin.version.clone(),
+            source: BUNDLED.into(),
+            commit: None,
+            sha256_wasm: sha(&wasm),
+            sha256_manifest: sha(&manifest_bytes),
+            granted: manifest.capabilities,
+        };
+        match old {
+            Some(i) => lock.plugins[i] = entry,
+            None => lock.plugins.push(entry),
+        }
+        Ok(true)
     }
 
     /// Re-approves an installed plugin whose files changed on disk, pinning the new hashes.
@@ -301,14 +391,15 @@ impl Store {
     }
 
     /// Removes the code and the lock entry of a plugin in the lockfile; `plugin-data/<id>` is kept
-    /// so a reinstall keeps its state.
+    /// so a reinstall keeps its state. A removed bundled plugin stays removed.
     pub fn remove(&self, id: &str) -> Result<(), StoreError> {
         let dir = self.plugin_dir(id)?;
         let mut lock = self.read_lock()?;
-        let before = lock.plugins.len();
-        lock.plugins.retain(|p| p.id != id);
-        if before == lock.plugins.len() {
+        let Some(pos) = lock.plugins.iter().position(|p| p.id == id) else {
             return Err(StoreError::NotInstalled(id.to_owned()));
+        };
+        if lock.plugins.remove(pos).source == BUNDLED && !lock.removed_bundled.iter().any(|r| r == id) {
+            lock.removed_bundled.push(id.to_owned());
         }
         if dir.exists() {
             fs::remove_dir_all(&dir)?;
@@ -372,6 +463,11 @@ impl PluginSet {
     /// Plugins that were not loaded, with the reason (hash mismatch, link failure, trap in `init`).
     pub fn errors(&self) -> &[String] {
         &self.errors
+    }
+
+    /// Lists problems found before loading, such as a bundled plugin that couldn't be installed.
+    pub fn add_errors(&mut self, errors: Vec<String>) {
+        self.errors.splice(0..0, errors);
     }
 
     pub fn ids(&self) -> Vec<String> {
@@ -629,6 +725,73 @@ mod tests {
         assert!(matches!(store.approve("dev.haunt.t", &host, &mut |_| true), Err(StoreError::Invalid(_))));
         assert!(store.list().unwrap()[0].problem.as_deref().unwrap().contains("symlink"));
         assert!(victim.join(WASM).exists(), "the link target is untouched");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn bundle(dir: &Path, id: &str, version: &str, caps: &str) -> PathBuf {
+        let b = dir.join("bundled");
+        fs::create_dir_all(b.join(id)).unwrap();
+        fs::write(
+            b.join(id).join(MANIFEST),
+            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"{version}\"\napi = \"0.3\"\nentry = \"plugin.wasm\"\n[capabilities]\n{caps}\n"),
+        )
+        .unwrap();
+        fs::write(b.join(id).join(WASM), "(component)").unwrap();
+        b
+    }
+
+    #[test]
+    fn bundled_plugins_install_silently_and_update_only_without_growth() {
+        let dir = tempdir("bundled");
+        let store = Store::open(&dir.join("home")).unwrap();
+        let host = PluginHost::new().unwrap();
+        let b = bundle(&dir, "dev.haunt.t", "0.1.0", "decisions_read = true");
+        assert!(store.install_bundled(&b, &host).unwrap().is_empty());
+        let l = store.list().unwrap();
+        assert_eq!((l[0].entry.source.as_str(), l[0].problem.as_deref()), (BUNDLED, None));
+        assert!(l[0].entry.granted.decisions_read);
+
+        bundle(&dir, "dev.haunt.t", "0.2.0", "");
+        store.install_bundled(&b, &host).unwrap();
+        let l = store.list().unwrap();
+        assert_eq!((l[0].entry.version.as_str(), l[0].problem.as_deref()), ("0.2.0", None));
+        assert!(!l[0].entry.granted.decisions_read, "a shrunk grant is pinned as shipped");
+
+        bundle(&dir, "dev.haunt.t", "0.3.0", "notifications = true");
+        store.install_bundled(&b, &host).unwrap();
+        let l = store.list().unwrap();
+        assert_eq!(l[0].entry.version, "0.2.0", "growth is not pinned");
+        assert!(!l[0].entry.granted.notifications);
+        assert!(l[0].problem.as_deref().is_some_and(|p| p.contains("haunt plugin approve")), "{:?}", l[0].problem);
+        assert!(store.load_all(&host, None).unwrap().errors()[0].contains("does not match"));
+        store.approve("dev.haunt.t", &host, &mut |_| true).unwrap();
+        let l = store.list().unwrap();
+        assert_eq!((l[0].entry.version.as_str(), l[0].entry.granted.notifications, l[0].entry.source.as_str()), ("0.3.0", true, BUNDLED));
+
+        store.remove("dev.haunt.t").unwrap();
+        store.install_bundled(&b, &host).unwrap();
+        assert!(store.list().unwrap().is_empty(), "a removed bundled plugin stays removed");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn bundled_plugins_never_replace_a_users_copy_or_another_id() {
+        let dir = tempdir("bundled-user");
+        let store = Store::open(&dir.join("home")).unwrap();
+        let host = PluginHost::new().unwrap();
+        let mine = src(&dir, "");
+        store.install(&mine, &host, &mut |_| true).unwrap();
+        let b = bundle(&dir, "dev.haunt.t", "9.0.0", "pty_write = true");
+        assert!(store.install_bundled(&b, &host).unwrap().is_empty());
+        let l = store.list().unwrap();
+        assert_eq!((l[0].entry.version.as_str(), l[0].problem.as_deref()), ("0.1.0", None));
+        assert!(!l[0].entry.granted.pty_write);
+
+        let b = bundle(&dir, "dev.haunt.other", "0.1.0", "");
+        let e = store.install_bundled(&b, &host).unwrap();
+        assert!(e.iter().any(|l| l.contains("dev.haunt.other") && l.contains("manifest is for dev.haunt.t")), "{e:?}");
+        assert!(!dir.join("home/plugins/dev.haunt.other").exists());
+        assert!(store.install_bundled(&dir.join("missing"), &host).unwrap().is_empty());
         fs::remove_dir_all(dir).unwrap();
     }
 

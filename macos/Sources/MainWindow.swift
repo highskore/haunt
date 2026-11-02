@@ -145,7 +145,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let ghostty: Ghostty.App
     private let fixture: Fixture?
     private let config: HauntConfig
-    private let plugins: PluginsAPI?
+    /// Set once the core has started, so the decision log is loaded before plugins read it.
+    var plugins: PluginsAPI?
     private lazy var palette: PaletteController = {
         let p = PaletteController(host: self)
         p.sticky = fixture != nil
@@ -161,12 +162,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var agentsViewAtLaunch = false
     private lazy var listener = MainQueueListener { [weak self] in self?.coalescedRefresh() }
 
-    init(core: CoreAPI, ghostty: Ghostty.App, fixture: Fixture?, config: HauntConfig, plugins: PluginsAPI?) {
+    init(core: CoreAPI, ghostty: Ghostty.App, fixture: Fixture?, config: HauntConfig) {
         self.core = core
         self.ghostty = ghostty
         self.fixture = fixture
         self.config = config
-        self.plugins = plugins
         let size = Fixture.windowSize
         let win = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -674,8 +674,6 @@ extension MainWindowController: PaletteHost {
     }
 
     var selectedSurfaceId: String? { selectedId }
-
-    func paletteDecisions(query: String) -> [Decision] { core.decisions(query: query, limit: 200) }
 
     var palettePlugins: PluginsAPI? { plugins }
 

@@ -5,7 +5,7 @@ import AppKit
 final class AgentsView: NSView {
     let titleBar = TitleBarView()
     let list = SidebarView()
-    private(set) var snapshot = SidebarSnapshot(groups: [])
+    private(set) var snapshot = SidebarSnapshot(groups: [], colorStyle: .dot)
     private var hiddenShells = 0
     /// The frame and minimum size the window had before it shrank; nil while the view is off.
     var restore: (frame: NSRect, minSize: NSSize)?
@@ -38,7 +38,7 @@ final class AgentsView: NSView {
     func update(_ snap: SidebarSnapshot) {
         let rows = snap.groups.flatMap(\.rows)
         let agents = rows.filter { $0.kind != .shell }
-        let next = SidebarSnapshot(groups: [SidebarGroup(label: "Agents · \(agents.count)", rows: agents)])
+        let next = SidebarSnapshot(groups: [SidebarGroup(id: "agents", label: "Agents · \(agents.count)", rows: agents)], colorStyle: snap.colorStyle)
         if rows.count - agents.count != hiddenShells {
             hiddenShells = rows.count - agents.count
             needsDisplay = true

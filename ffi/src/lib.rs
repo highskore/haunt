@@ -140,11 +140,17 @@ pub struct HauntPlugins {
 impl HauntPlugins {
     /// Plugins that fail verification (hash mismatch, link error) are skipped and listed in `load_errors`.
     /// `core` backs the `decisions` and `allowlist` imports, and its events reach the plugins from now on.
+    /// The plugins in `bundled_dir` (the app's own) are installed or updated first, without a prompt.
     #[uniffi::constructor]
-    pub fn load(haunt_dir: String, core: std::sync::Arc<HauntCore>) -> Result<std::sync::Arc<Self>, HostError> {
+    pub fn load(haunt_dir: String, core: std::sync::Arc<HauntCore>, bundled_dir: Option<String>) -> Result<std::sync::Arc<Self>, HostError> {
         let fail = |e: haunt_core::plugin_store::StoreError| HostError::Failed { reason: e.to_string() };
         let host = haunt_core::plugins::PluginHost::new()?;
-        let set = haunt_core::plugin_store::Store::open(haunt_dir.as_ref()).map_err(fail)?.load_all(&host, Some(&core.core.handle())).map_err(fail)?;
+        let store = haunt_core::plugin_store::Store::open(haunt_dir.as_ref()).map_err(fail)?;
+        let bundled = bundled_dir.map_or_else(Vec::new, |d| {
+            store.install_bundled(d.as_ref(), &host).unwrap_or_else(|e| vec![format!("bundled plugins: {e}")])
+        });
+        let mut set = store.load_all(&host, Some(&core.core.handle())).map_err(fail)?;
+        set.add_errors(bundled);
         let set = std::sync::Arc::new(Mutex::new(set));
         haunt_core::plugin_store::attach(&core.core, &set);
         Ok(std::sync::Arc::new(Self { set }))
