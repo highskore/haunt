@@ -223,24 +223,24 @@ final class ReviewCoordinator {
     private func send(_ text: String, keepReviewing: Bool) {
         guard let v = view, let window = host.reviewWindow else { return }
         let id = v.state.surfaceId
-        let row = host.reviewRows.first { $0.surfaceId == id }
-        let refusal: String?
-        var clean = ""
-        switch SendBack.check(text) {
-        case let .blocked(why): refusal = why
-        case let .ok(t):
-            clean = t
-            refusal = SendBack.refusal(surfaceId: id, row: row, selected: host.reviewSelection?.surfaceId,
-                                       unresolved: host.reviewCore.hasUnresolved(surfaceId: id))
-        }
-        if let refusal {
+        func refuse(_ why: String) {
             let alert = NSAlert()
             alert.messageText = "Not sent"
-            alert.informativeText = refusal
+            alert.informativeText = why
             alert.beginSheetModal(for: window)
-            return
         }
-        guard host.pasteIntoSurface(clean, surfaceId: id) else { return NSSound.beep() }
+        let clean: String
+        switch SendBack.check(text) {
+        case let .blocked(why): return refuse(why)
+        case let .ok(t): clean = t
+        }
+        if let why = SendBack.refusal(surfaceId: id, row: host.reviewRows.first { $0.surfaceId == id },
+                                      selected: host.reviewSelection?.surfaceId,
+                                      unresolved: host.reviewCore.hasUnresolved(surfaceId: id)) {
+            return refuse(why)
+        }
+        // pasteIntoSurface checks hasUnresolved again just before writing.
+        guard host.pasteIntoSurface(clean, surfaceId: id) else { return refuse(SendBack.waiting) }
         if let n = v.state.turn?.number { sent[id] = (n, max(v.state.comments.count, 1)) }
         v.state.comments = []
         v.state.editedDraft = nil

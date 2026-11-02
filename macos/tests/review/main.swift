@@ -159,9 +159,9 @@ check(SendBack.check(draft + "\n\n") == .ok(SendBack.oneLine(draft)), "trailing 
 if case let .ok(t) = SendBack.check(draft) { check(!t.contains("\n") && t.hasPrefix("Two changes from review: 1. HauntNotifier.swift:64 Keep"), "one line \(t)") }
 check(SendBack.check("a\r\nb") == .ok("a b"), "CRLF")
 
-func row(_ id: String, kind: RowKind = .claude, needsYou: Bool = false) -> Row {
+func row(_ id: String, kind: RowKind = .claude, needsYou: Bool = false, pending: PendingRequest? = nil) -> Row {
     Row(surfaceId: id, kind: kind, name: id, meta: "", statusText: "", needsYou: needsYou, progress: nil, subagents: [],
-        selected: true, pending: nil)
+        selected: true, pending: pending)
 }
 func refusal(_ r: Row?, selected: String = "a", unresolved: Bool = false) -> String? {
     SendBack.refusal(surfaceId: "a", row: r, selected: selected, unresolved: unresolved)
@@ -170,8 +170,10 @@ check(refusal(row("a")) == nil, "the reviewed agent tab, selected, nothing unres
 check(refusal(nil) != nil, "tab gone")
 check(refusal(row("a"), selected: "b") != nil, "another tab selected")
 check(refusal(row("a", kind: .shell)) != nil, "shell tab")
-check(refusal(row("a"), unresolved: true) != nil, "an unresolved request refuses even when an unverified event cleared needsYou")
-check(refusal(row("a", needsYou: true)) == nil, "needsYou alone, which unverified events set and clear, doesn't decide")
+check(refusal(row("a", needsYou: true)) == SendBack.waiting, "needs you")
+check(refusal(row("a", pending: PendingRequest(key: 1, tool: "Bash", preview: "rm", suspicious: false))) == SendBack.waiting,
+      "a pending request")
+check(refusal(row("a", needsYou: false), unresolved: true) == SendBack.waiting, "unresolved with needsYou false")
 check(SendBack.check("  \n") == .blocked("The prompt is empty."), "empty")
 if case .blocked = SendBack.check("ok\u{1B}[201~rm -rf ~") {} else { check(false, "paste end blocks") }
 if case .blocked = SendBack.check("x\u{1B}[31m") {} else { check(false, "escape blocks") }

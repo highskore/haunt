@@ -641,7 +641,8 @@ extension MainWindowController: ReviewHost {
     }
 
     func pasteIntoSurface(_ text: String, surfaceId: String) -> Bool {
-        guard store.tab(surfaceId) != nil else { return false }
+        // Checked again here, right before the write: a request may have arrived since the send was checked.
+        guard store.tab(surfaceId) != nil, !core.hasUnresolved(surfaceId: surfaceId) else { return false }
         // It counts as typing: a pending permission request is retired before the text lands.
         core.onUserInput(surfaceId: surfaceId)
         store.write(Data(text.utf8), to: surfaceId)
