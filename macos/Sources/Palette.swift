@@ -32,6 +32,8 @@ protocol PaletteHost: AnyObject {
     var pluginLoadErrors: [String] { get }
     func paletteSelectTab(_ surfaceId: String)
     func paletteInvoke(pluginId: String, itemId: String)
+    /// After plugin code ran for a query: carries out whatever it asked for.
+    func drainPluginRequests()
     var paletteKeys: KeyMap { get }
     var isSidebarHidden: Bool { get }
     var isFullScreen: Bool { get }
@@ -200,6 +202,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
             foot = ["↵ open"]
         case let m?:
             let items = host?.palettePlugins?.paletteItems(mode: m, query: query) ?? []
+            host?.drainPluginRequests()
             rows = items.filter { tabFilter == nil || $0.surfaceId == tabFilter }.map(pluginRow)
             rowsNameTabs = items.contains { $0.surfaceId != nil }
             foot = rowsNameTabs
