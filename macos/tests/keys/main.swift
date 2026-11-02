@@ -125,6 +125,19 @@ check(crlf[""]?["font_size"] == .scalar("13"), "CRLF top-level value")
 check(crlf["keys"]?["palette"] == .scalar("cmd+p"), "CRLF table value")
 check(TOML.parse("a = 1\rb = 2")[""]?["b"] == .scalar("2"), "lone CR line break")
 
+// Ghostty's own reading of a line: spaces, tabs and one pair of double quotes don't get past the refusals.
+for spelling in ["\"right-click-action \" = \"paste\"", "right-click-action = \" paste\"", "right-click-action = '\"paste\"'",
+                 "right-click-action = '\" paste \"'", "right-click-action = PASTE", "\" config-file\" = \"/tmp/x\"",
+                 "\"\\tkeybind\" = \"super+p=paste_from_clipboard\"", "\"middle-click-action\\t\" = clipboard-paste",
+                 "middle-click-action = '\"clipboard-paste\"'", "Config-File = /tmp/x", "\"\" = paste"] {
+    let text = "[ghostty]\n\(spelling)\n"
+    let out = HauntConfig.ghosttyConfig(TOML.parse(text), defaultSize: 11, keys: defaults)
+    check(!out.contains("paste\n") && !out.contains("/tmp/x") && !out.contains("paste_from"), "\(spelling) refused")
+    check(HauntConfig.refusedGhostty(TOML.parse(text)["ghostty"]!).count == 1, "\(spelling) reported")
+}
+check(HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\nright-click-action = \" copy\"\n"), defaultSize: 11, keys: defaults)
+      .contains("right-click-action =  copy\n"), "a quoted, spaced safe value still passes")
+
 // A right-click paste would bypass Haunt's paste checks.
 let rc = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\nright-click-action = copy-or-paste\ncursor-style = bar\n"), defaultSize: 11, keys: defaults)
 check(!rc.contains("right-click-action"), "right-click paste refused")
@@ -141,7 +154,7 @@ for c in [conf, moved] {
         check(c.contains(line + "\n"), "ghostty config has \(line)")
     }
 }
-for (entry, key) in [("middle-click-action = clipboard-paste", "middle-click-action"),
+for (entry, key) in [("middle-click-action = clipboard-paste", "clipboard-paste"), ("middle-click-action = primary-paste", "primary-paste"),
                      ("keybind = super+p=paste_from_clipboard", "paste_from_clipboard"),
                      ("keybind = \"global:ctrl+b>v=paste_from_selection\"", "paste_from_selection"),
                      ("config-file = /tmp/other.conf", "config-file"),
@@ -152,9 +165,21 @@ for (entry, key) in [("middle-click-action = clipboard-paste", "middle-click-act
     check(!out.contains(key), "\(entry) refused")
     check(!HauntConfig.refusedGhostty(TOML.parse(text)["ghostty"]!).isEmpty, "\(entry) reported")
 }
-let kept = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\nmiddle-click-action = ignore\nkeybind = [\"super+j=paste_from_clipboard\", \"super+u=copy_to_clipboard\"]\n"),
+check(conf.contains("middle-click-action = ignore\n"), "Ghostty never pastes on middle click itself")
+// A user's ignore is honoured: it turns Haunt's middle-click paste off. Paste values stay refused.
+check(HauntConfig.middleClickPaste([:]), "Haunt pastes on middle click by default")
+for v in ["ignore", "\" ignore\"", "'\"IGNORE\"'", "[\"primary-paste\", \"ignore\"]"] {
+    let t = TOML.parse("[ghostty]\nmiddle-click-action = \(v)\n")["ghostty"]!
+    check(!HauntConfig.middleClickPaste(t), "middle-click-action = \(v) turns the paste off")
+    check(!HauntConfig.refusedGhostty(t).contains { $0.value.lowercased().contains("ignore") }, "middle-click-action = \(v) not refused")
+}
+for v in ["primary-paste", "clipboard-paste", "\"ignore\\nconfig-file = /x\""] {
+    let t = TOML.parse("[ghostty]\nmiddle-click-action = \(v)\n")["ghostty"]!
+    check(HauntConfig.middleClickPaste(t) && HauntConfig.refusedGhostty(t).count == 1, "middle-click-action = \(v) refused, paste stays on")
+}
+let kept = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\ncursor-style = bar\nkeybind = [\"super+j=paste_from_clipboard\", \"super+u=copy_to_clipboard\"]\n"),
                                      defaultSize: 11, keys: defaults)
-check(kept.contains("middle-click-action = ignore\n") && kept.contains("keybind = super+u=copy_to_clipboard\n"), "safe passthrough kept")
+check(kept.contains("cursor-style = bar\n") && kept.contains("keybind = super+u=copy_to_clipboard\n"), "safe passthrough kept")
 check(!HauntConfig.ghosttyConfig(TOML.parse("font = \"Mono\\nconfig-file = /x\"\n"), defaultSize: 11, keys: defaults).contains("config-file"),
       "a line break in font is refused")
 

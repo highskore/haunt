@@ -11,11 +11,21 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
     var onPasteConfirmation: ((Ghostty.ClipboardConfirmationRequest?) -> Void)?
     /// A paste Haunt holds itself (PastePreview.needsConfirmation); the host asks, then calls `sendPaste`.
     var onRiskyPaste: ((String) -> Void)?
+    /// Whether a middle click pastes the selection, read at each click so config changes apply.
+    var middleClickPastes: () -> Bool = { true }
 
     /// True when `text` was held for confirmation instead of going to Ghostty.
     private func holdIfRisky(_ text: String?) -> Bool {
         guard let text, let ask = onRiskyPaste, PastePreview(text).needsConfirmation else { return false }
         ask(text)
+        return true
+    }
+
+    /// Pastes the very text that was checked, so the clipboard isn't read a second time: held for Haunt's
+    /// sheet if risky, else through Ghostty's paste protection. False when there is no text, for `super`.
+    private func pasteChecked(_ text: String?) -> Bool {
+        guard let text else { return false }
+        if !holdIfRisky(text) { surfaceModel?.pasteText(text) }
         return true
     }
 
@@ -33,19 +43,19 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
 
     override func paste(_ sender: Any?) {
         onInput?()
-        if holdIfRisky(NSPasteboard.general.getOpinionatedStringContents()) { return }
+        if pasteChecked(NSPasteboard.general.getOpinionatedStringContents()) { return }
         super.paste(sender)
     }
 
     override func pasteAsPlainText(_ sender: Any?) {
         onInput?()
-        if holdIfRisky(NSPasteboard.general.getOpinionatedStringContents()) { return }
+        if pasteChecked(NSPasteboard.general.getOpinionatedStringContents()) { return }
         super.pasteAsPlainText(sender)
     }
 
     override func pasteSelection(_ sender: Any?) {
         onInput?()
-        if holdIfRisky(NSPasteboard.ghosttySelection.getOpinionatedStringContents()) { return }
+        if pasteChecked(NSPasteboard.ghosttySelection.getOpinionatedStringContents()) { return }
         super.pasteSelection(sender)
     }
 
@@ -55,25 +65,14 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
         super.insertText(string, replacementRange: replacementRange)
     }
 
-    /// Middle click pastes the selection clipboard.
-    private var middleHeld = false
-
+    /// Middle click pastes the selection clipboard. Ghostty's own middle-click-action is "ignore" (HauntConfig),
+    /// so the paste is Haunt's, and only while the app isn't taking the mouse; the click itself always goes on.
     override func otherMouseDown(with event: NSEvent) {
-        if event.buttonNumber == 2 {
-            onInput?()
-            middleHeld = holdIfRisky(NSPasteboard.ghosttySelection.getOpinionatedStringContents())
-            if middleHeld { return }
-        }
         super.otherMouseDown(with: event)
-    }
-
-    override func otherMouseUp(with event: NSEvent) {
-        // A press held back with its paste keeps its release too.
-        if event.buttonNumber == 2, middleHeld {
-            middleHeld = false
-            return
+        if event.buttonNumber == 2, middleClickPastes(), surfaceModel?.mouseCaptured == false {
+            onInput?()
+            _ = pasteChecked(NSPasteboard.ghosttySelection.getOpinionatedStringContents())
         }
-        super.otherMouseUp(with: event)
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
@@ -96,6 +95,15 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
             guard oldValue !== pendingClipboardConfirmation else { return }
             if let old = oldValue, old.kind == .paste { onInput?() }
             let new = pendingClipboardConfirmation
+            // Only pastes get a sheet. Any other access Ghostty asks about (an OSC 52 read under
+            // clipboard-read = ask) is denied now rather than left waiting forever.
+            if let new, new.kind != .paste {
+                AppDelegate.logger.warning("clipboard \(String(describing: new.kind), privacy: .public) request denied")
+                new.cancel()
+                DispatchQueue.main.async { [weak self] in
+                    if self?.pendingClipboardConfirmation === new { self?.pendingClipboardConfirmation = nil }
+                }
+            }
             onPasteConfirmation?(new?.kind == .paste ? new : nil)
         }
     }

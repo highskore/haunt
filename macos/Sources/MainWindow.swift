@@ -207,6 +207,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         view.onRiskyPaste = { [weak self, weak view] text in
             if let view { self?.pasteGuard.hold(text, on: view) }
         }
+        view.middleClickPastes = { [weak self] in self?.config.middleClickPaste ?? true }
         // So the surface starts at the pane's real size.
         root.layoutSubtreeIfNeeded()
         let tab = Tab(env: env, view: view, size: root.pane.bounds.size)
