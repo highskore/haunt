@@ -5,10 +5,13 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::event::Agent;
 use crate::session::{Outcome, Permission};
+use crate::sync::lock;
 
 pub const FILE_NAME: &str = "decisions.jsonl";
 const MAX_IN_MEMORY: usize = 10_000;
@@ -56,25 +59,66 @@ impl Decision {
             && self.command.as_deref().is_none_or(|c| self.tool == "Bash" && crate::event::visible(c) == self.preview)
     }
 
-    fn matches(&self, needle: &str) -> bool {
-        let outcome = serde_json::to_string(&self.outcome).unwrap_or_default();
-        [self.tool.as_str(), &self.preview, self.cwd.as_deref().unwrap_or(""), &outcome, &self.surface_id, self.agent.id()]
-            .iter()
-            .any(|h| h.to_lowercase().contains(needle))
+    /// What a query searches, lowercased once: fields joined by NUL, so a needle never spans two.
+    fn haystack(&self) -> Box<str> {
+        let plugin = match &self.outcome {
+            Outcome::AllowedByPlugin { plugin_id } | Outcome::DeniedByPlugin { plugin_id } => plugin_id.as_str(),
+            _ => "",
+        };
+        let fields = [self.tool.as_str(), &self.preview, self.cwd.as_deref().unwrap_or(""), self.outcome.as_str(), plugin, &self.surface_id, self.agent.id()];
+        fields.join("\0").to_lowercase().into()
+    }
+}
+
+struct Entry {
+    d: Arc<Decision>,
+    hay: Box<str>,
+}
+
+/// The file side of the log. Lines queue under the state lock and are written after it is
+/// released (`flush`), in record order, so disk latency never stalls the socket or the UI.
+#[derive(Default)]
+pub struct Writer {
+    file: Mutex<Option<File>>,
+    queue: Mutex<Vec<Arc<Decision>>>,
+    errors: AtomicU64,
+}
+
+impl Writer {
+    /// Writes whatever was recorded; a no-op before the file is open, which writes the queue itself.
+    pub fn flush(&self) {
+        if lock(&self.queue).is_empty() {
+            return;
+        }
+        let mut file = lock(&self.file);
+        let Some(f) = file.as_mut() else { return };
+        // Drained under the file lock, so two flushes can't reorder lines.
+        let lines = std::mem::take(&mut *lock(&self.queue));
+        for d in lines {
+            if !write_line(f, &d) {
+                self.errors.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Lines that never reached the disk.
+    pub fn errors(&self) -> u64 {
+        self.errors.load(Ordering::Relaxed)
     }
 }
 
 #[derive(Default)]
 pub struct DecisionLog {
-    entries: VecDeque<Decision>,
-    file: Option<File>,
+    entries: VecDeque<Entry>,
+    writer: Arc<Writer>,
 }
 
 impl DecisionLog {
     /// Opens (0600, no symlinks) and loads `<dir>/decisions.jsonl`; `dir` must already be secured.
     pub fn open(&mut self, dir: &Path) -> std::io::Result<()> {
         // A `start` that failed after this point may be retried; loading twice would duplicate entries.
-        if self.file.is_some() {
+        let mut slot = lock(&self.writer.file);
+        if slot.is_some() {
             return Ok(());
         }
         let path = dir.join(FILE_NAME);
@@ -93,7 +137,7 @@ impl DecisionLog {
             file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         }
         file.seek(SeekFrom::Start(0))?;
-        let mut loaded: VecDeque<Decision> = VecDeque::new();
+        let mut loaded: VecDeque<Entry> = VecDeque::new();
         for line in BufReader::new(&file).lines() {
             let Ok(d) = serde_json::from_str::<Decision>(&line?) else { continue };
             if !d.well_formed() {
@@ -102,47 +146,65 @@ impl DecisionLog {
             if loaded.len() == MAX_IN_MEMORY {
                 loaded.pop_front();
             }
-            loaded.push_back(d);
-        }
-        // Anything recorded before the file was open goes to disk now.
-        for d in &self.entries {
-            write_line(&mut file, d);
+            loaded.push_back(Entry { hay: d.haystack(), d: Arc::new(d) });
         }
         loaded.extend(self.entries.drain(..));
         while loaded.len() > MAX_IN_MEMORY {
             loaded.pop_front();
         }
         self.entries = loaded;
-        self.file = Some(file);
+        *slot = Some(file);
+        drop(slot);
+        // Anything recorded before the file was open goes to disk now.
+        self.writer.flush();
         Ok(())
     }
 
+    /// In memory now; on disk at the next `Writer::flush`.
     pub fn record(&mut self, d: Decision) {
-        if let Some(f) = &mut self.file {
-            write_line(f, &d);
-        }
+        let d = Arc::new(d);
         if self.entries.len() == MAX_IN_MEMORY {
             self.entries.pop_front();
         }
-        self.entries.push_back(d);
+        self.entries.push_back(Entry { hay: d.haystack(), d: d.clone() });
+        let mut queue = lock(&self.writer.queue);
+        if queue.len() == MAX_IN_MEMORY {
+            queue.remove(0);
+        }
+        queue.push(d);
     }
 
-    /// Newest first; `query` is a case-insensitive substring of tool, preview, cwd, outcome, surface or agent.
-    pub fn query(&self, query: &str, limit: usize) -> Vec<Decision> {
+    pub fn writer(&self) -> &Arc<Writer> {
+        &self.writer
+    }
+
+    /// Newest first, at most `limit`, of one surface's if `surface` is set (filtered before the
+    /// limit). `query` is a case-insensitive substring of tool, preview, cwd, outcome, plugin,
+    /// surface or agent. Shared, so the caller copies them out after the lock.
+    pub fn query(&self, query: &str, surface: Option<&str>, limit: usize) -> Vec<Arc<Decision>> {
         let needle = query.trim().to_lowercase();
-        self.entries.iter().rev().filter(|d| needle.is_empty() || d.matches(&needle)).take(limit).cloned().collect()
+        if needle.contains('\0') {
+            return Vec::new();
+        }
+        self.entries
+            .iter()
+            .rev()
+            .filter(|e| surface.is_none_or(|s| e.d.surface_id == s) && (needle.is_empty() || e.hay.contains(needle.as_str())))
+            .take(limit)
+            .map(|e| e.d.clone())
+            .collect()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Decision> {
-        self.entries.iter()
+        self.entries.iter().map(|e| &*e.d)
     }
 }
 
-fn write_line(f: &mut File, d: &Decision) {
-    let Ok(mut line) = serde_json::to_string(d) else { return };
+/// One write on an O_APPEND fd keeps lines whole; a failed write still leaves the memory copy.
+fn write_line(f: &mut File, d: &Decision) -> bool {
+    let Ok(mut line) = serde_json::to_string(d) else { return false };
     line.push('\n');
-    // One write on an O_APPEND fd keeps lines whole; a failed write still leaves the memory copy.
-    let _ = f.write_all(line.as_bytes());
+    f.write_all(line.as_bytes()).is_ok()
 }
 
 #[cfg(test)]
@@ -168,6 +230,8 @@ mod tests {
         log.open(&d).unwrap();
         log.record(decision("git push", Outcome::AllowedInHaunt));
         let path = d.join(FILE_NAME);
+        assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 1, "written at the flush, not under the lock");
+        log.writer().flush();
         assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
         let text = fs::read_to_string(&path).unwrap();
         assert_eq!(text.lines().count(), 2);
@@ -176,7 +240,7 @@ mod tests {
         fs::write(&path, format!("{text}not json\n")).unwrap();
         let mut again = DecisionLog::default();
         again.open(&d).unwrap();
-        let got: Vec<_> = again.query("", 10).into_iter().map(|x| x.preview).collect();
+        let got: Vec<_> = again.query("", None, 10).into_iter().map(|x| x.preview.clone()).collect();
         assert_eq!(got, ["git push", "before open"], "newest first, bad lines skipped");
     }
 
@@ -231,11 +295,44 @@ mod tests {
         log.record(decision("rm -rf build", Outcome::DeniedInHaunt));
         log.record(decision("git status", Outcome::AnsweredInTerminal));
         log.record(Decision { agent: Agent::Codex, ..decision("cargo test", Outcome::AllowedInHaunt) });
-        let q = |s: &str, n| log.query(s, n).into_iter().map(|x| x.preview).collect::<Vec<_>>();
+        let q = |s: &str, n| log.query(s, None, n).into_iter().map(|x| x.preview.clone()).collect::<Vec<_>>();
         assert_eq!(q("GIT", 10), ["git status", "git push"]);
         assert_eq!(q("git", 1), ["git status"]);
         assert_eq!(q("denied", 10), ["rm -rf build"]);
         assert_eq!(q("", 10).len(), 4);
         assert_eq!(q("CODEX", 10), ["cargo test"]);
+        assert!(q("\0", 10).is_empty() && q("bash\0git", 10).is_empty(), "a needle never spans two fields");
+    }
+
+    #[test]
+    fn a_surface_filter_applies_before_the_limit() {
+        let mut log = DecisionLog::default();
+        log.record(Decision { surface_id: "old".into(), ..decision("git push", Outcome::AllowedInHaunt) });
+        for _ in 0..5 {
+            log.record(decision("ls", Outcome::AllowedInHaunt));
+        }
+        let hits = log.query("", Some("old"), 3);
+        assert_eq!(hits.iter().map(|d| d.preview.as_str()).collect::<Vec<_>>(), ["git push"], "past the newest 3 of all surfaces");
+        assert_eq!(log.query("", Some("s"), 3).len(), 3);
+    }
+
+    #[test]
+    fn plugin_ids_are_searchable() {
+        let mut log = DecisionLog::default();
+        log.record(decision("ls", Outcome::DeniedByPlugin { plugin_id: "Guard.Rails".into() }));
+        assert_eq!(log.query("guard.rails", None, 5).len(), 1);
+        assert_eq!(log.query("denied_by_plugin", None, 5).len(), 1);
+    }
+
+    #[test]
+    fn failed_writes_are_counted() {
+        let d = dir("werr");
+        let mut log = DecisionLog::default();
+        log.open(&d).unwrap();
+        *lock(&log.writer.file) = Some(File::open(d.join(FILE_NAME)).unwrap());
+        log.record(decision("ls", Outcome::AllowedInHaunt));
+        log.record(decision("ls", Outcome::AllowedInHaunt));
+        log.writer().flush();
+        assert_eq!((log.writer().errors(), log.query("", None, 5).len()), (2, 2), "kept in memory");
     }
 }

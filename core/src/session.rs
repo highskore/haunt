@@ -58,6 +58,20 @@ pub enum Outcome {
     Superseded,
 }
 
+impl Outcome {
+    /// The serde tag, without serializing.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::AllowedInHaunt => "allowed_in_haunt",
+            Self::DeniedInHaunt => "denied_in_haunt",
+            Self::AllowedByPlugin { .. } => "allowed_by_plugin",
+            Self::DeniedByPlugin { .. } => "denied_by_plugin",
+            Self::AnsweredInTerminal => "answered_in_terminal",
+            Self::Superseded => "superseded",
+        }
+    }
+}
+
 impl Permission {
     /// None when the input is missing: the user has to answer in the terminal then.
     fn from_call(t: &ToolCall, e: &AgentEvent, generation: u64) -> Option<Self> {
@@ -767,6 +781,15 @@ mod tests {
         s.apply(&ev(PERM), true, now);
         let p = s.live_permission().cloned().unwrap();
         assert!(s.answer(p.key(), true, now), "a new turn starts clean");
+    }
+
+    #[test]
+    fn outcome_names_are_the_serde_tags() {
+        let p = || "p".to_owned();
+        for o in [Outcome::AllowedInHaunt, Outcome::DeniedInHaunt, Outcome::AllowedByPlugin { plugin_id: p() }, Outcome::DeniedByPlugin { plugin_id: p() }, Outcome::AnsweredInTerminal, Outcome::Superseded] {
+            let json = serde_json::to_string(&o).unwrap();
+            assert!(json.starts_with(&format!("\"{}\"", o.as_str())) || json.starts_with(&format!("{{\"{}\"", o.as_str())), "{json}");
+        }
     }
 
     #[test]

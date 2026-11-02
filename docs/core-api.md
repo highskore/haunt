@@ -18,6 +18,7 @@ object HauntCore {
   fn answer_permission(surface_id: string, request_key: u64, allow: bool) -> Option<bytes>
   fn on_user_input(surface_id: string)           // every keyDown routed to that surface
   fn decisions(query: string, limit: u32) -> sequence<Decision>     // newest first
+  fn decisions_in(query: string, surface_id: Option<string>, limit: u32) -> sequence<Decision>   // one tab's, filtered before the limit
   fn allow_suggestions() -> sequence<AllowSuggestion>
   fn accept_allow_suggestion(project: string, command: string) -> Result<(), CoreError>
   fn dismiss_allow_suggestion(project: string, command: string)
@@ -88,7 +89,7 @@ Every verified permission request is recorded once, when it ends, with its outco
 
 Requests only exist for verified events, so unverified events never add an entry; they can only end a verified request, which is then logged as `Superseded`. Entries live in memory (the last 10,000) and in `<config_dir>/decisions.jsonl`, one JSON object per line, appended. `start` opens it with `O_NOFOLLOW`, refuses a symlink or a file of another uid, keeps it 0600, and loads the existing lines. Loading is strict: a line with an unknown field or outcome, an empty surface id or tool, or a `command` that isn't a Bash command whose `preview` shows exactly that command is skipped. Before `start` the log is memory-only.
 
-`decisions(query, limit)` is for the ⌘K `log` mode: newest first, `query` is a case-insensitive substring of tool, preview, cwd, outcome (`allowed_in_haunt`, …), surface id or agent id (`codex`); empty matches all.
+`decisions(query, limit)` is for the ⌘K `log` mode: newest first, `query` is a case-insensitive substring of tool, preview, cwd, outcome (`allowed_in_haunt`, …), surface id, agent id (`codex`) or plugin id; empty matches all. `decisions_in` keeps only one surface's, before the limit, so a tab filter never misses its older decisions behind other tabs' newer ones; the palette's tab filter should call it instead of filtering `decisions` itself. Lines reach `decisions.jsonl` after the state lock is released, in order; a line that fails to write stays in memory and is counted in `haunt dump`.
 
 ## Allowlist suggestions
 
@@ -180,9 +181,9 @@ Each call runs under a 50 ms CPU budget and 64 MB of memory; a trap or timeout d
 
 | request | response |
 |---|---|
-| `{"cmd":"dump"}` | `{"ok":true,"snapshot":<SidebarSnapshot>,"pending":[{"surface_id","key","tool","preview","suspicious"}]}` |
+| `{"cmd":"dump"}` | `{"ok":true,"snapshot":<SidebarSnapshot>,"pending":[{"surface_id","key","tool","preview","suspicious"}],"decision_log_write_errors":n}` |
 | `{"cmd":"event","line":<hook line, object or string>}` | `{"ok":true,"verified":bool,"changed":bool}`. The line goes through the same nonce check as `sock`: without the surface's nonce it is status-only. |
-| `{"cmd":"decisions","query":"git","limit":50}` | `{"ok":true,"decisions":[<Decision>…]}`; `query` and `limit` (default 50, at most 1000) are optional |
+| `{"cmd":"decisions","query":"git","limit":50}` | `{"ok":true,"decisions":[<Decision>…]}`; `query`, `surface` (one surface id) and `limit` (default 50, at most 1000) are optional |
 
 Nonces never appear in any response.
 

@@ -86,6 +86,11 @@ impl HauntCore {
         self.core.decisions(&query, limit)
     }
 
+    /// `decisions` of one tab when `surface_id` is set; the filter applies before the limit.
+    pub fn decisions_in(&self, query: String, surface_id: Option<String>, limit: u32) -> Vec<Decision> {
+        self.core.decisions_in(&query, surface_id.as_deref(), limit)
+    }
+
     pub fn allow_suggestions(&self) -> Vec<AllowSuggestion> {
         self.core.allow_suggestions()
     }

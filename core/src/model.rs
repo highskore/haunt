@@ -91,10 +91,21 @@ impl State {
         self.surfaces.iter_mut().find(|s| s.id == id)
     }
 
+    /// Runs `f` on one surface, then moves the requests it ended into the decision log. Only
+    /// verified requests ever exist, so unverified events can at most end one, never add one.
+    fn with_surface<R>(&mut self, id: &str, f: impl FnOnce(&mut Surface) -> R) -> Option<R> {
+        let s = self.surfaces.iter_mut().find(|s| s.id == id)?;
+        let r = f(s);
+        for (p, outcome) in s.session.take_ended() {
+            self.decisions.record(Decision::new(&s.id, &p, outcome));
+        }
+        Some(r)
+    }
+
     /// One intake delivery; the intake already checked the nonce and the rate limit.
     pub(crate) fn deliver(&mut self, d: &Delivery, now: Instant) -> bool {
         let Some(event) = &d.event else { return false };
-        let changed = self.surface(&d.surface_id).is_some_and(|s| {
+        self.with_surface(&d.surface_id, |s| {
             let mut changed = s.session.apply(event, d.verified, now);
             // Every verified event re-reads HEAD, so a checkout inside the session shows up.
             if d.verified && let Some(cwd) = &s.session.cwd {
@@ -103,9 +114,7 @@ impl State {
                 s.agent_branch = b;
             }
             changed
-        });
-        self.settle();
-        changed
+        }) == Some(true)
     }
 
     /// A hook line checked against the registered nonces, as the intake does.
@@ -121,19 +130,7 @@ impl State {
     }
 
     fn apply_unverified(&mut self, id: &str, event: &AgentEvent, now: Instant) -> bool {
-        let changed = self.surface(id).is_some_and(|s| s.session.apply(event, false, now));
-        self.settle();
-        changed
-    }
-
-    /// Moves every ended request into the decision log. Only verified requests ever exist, so
-    /// unverified events can at most end one (as superseded), never add one.
-    fn settle(&mut self) {
-        for s in &mut self.surfaces {
-            for (p, outcome) in s.session.take_ended() {
-                self.decisions.record(Decision::new(&s.id, &p, outcome));
-            }
-        }
+        self.with_surface(id, |s| s.session.apply(event, false, now)) == Some(true)
     }
 
     fn suggestions(&self) -> Vec<AllowSuggestion> {
@@ -174,7 +171,9 @@ fn update_state(state: &Mutex<State>, f: impl FnOnce(&mut State, Instant) -> boo
     let mut st = lock(state);
     let changed = f(&mut st, Instant::now());
     let listener = st.listener.clone();
+    let log = st.decisions.writer().clone();
     drop(st);
+    log.flush();
     if changed && let Some(l) = listener {
         l();
     }
@@ -198,7 +197,8 @@ fn ctl_request(state: &Mutex<State>, line: &str) -> String {
                     r.pending.as_ref().map(|p| json!({ "surface_id": r.surface_id, "key": p.key, "tool": p.tool, "preview": p.preview, "suspicious": p.suspicious }))
                 })
                 .collect();
-            json!({ "ok": true, "snapshot": snapshot, "pending": pending }).to_string()
+            let write_errors = lock(state).decisions.writer().errors();
+            json!({ "ok": true, "snapshot": snapshot, "pending": pending, "decision_log_write_errors": write_errors }).to_string()
         }
         Some("event") => {
             let hook_line = match req.get("line") {
@@ -217,7 +217,9 @@ fn ctl_request(state: &Mutex<State>, line: &str) -> String {
         Some("decisions") => {
             let query = req.get("query").and_then(Value::as_str).unwrap_or("");
             let limit = req.get("limit").and_then(Value::as_u64).unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-            json!({ "ok": true, "decisions": lock(state).decisions.query(query, limit) }).to_string()
+            let surface = req.get("surface").and_then(Value::as_str);
+            let hits = lock(state).decisions.query(query, surface, limit);
+            json!({ "ok": true, "decisions": hits.iter().map(|d| &**d).collect::<Vec<_>>() }).to_string()
         }
         _ => ctl::error("unknown cmd"),
     }
@@ -298,10 +300,7 @@ impl Core {
         self.update(|st, _| {
             write(&st.nonces).remove(surface_id);
             let before = st.surfaces.len();
-            if let Some(s) = st.surface(surface_id) {
-                s.session.close();
-            }
-            st.settle();
+            st.with_surface(surface_id, |s| s.session.close());
             st.surfaces.retain(|s| s.id != surface_id);
             if st.selected.as_deref() == Some(surface_id) {
                 st.selected = None;
@@ -363,11 +362,12 @@ impl Core {
         };
         let mut bytes = None;
         self.update(|st, now| {
-            bytes = st.surface(surface_id).and_then(|s| {
-                let b = s.session.live_permission()?.agent.answer_bytes(allow)?;
-                s.session.answer_as(request_key, outcome, now).then_some(b)
-            });
-            st.settle();
+            bytes = st
+                .with_surface(surface_id, |s| {
+                    let b = s.session.live_permission()?.agent.answer_bytes(allow)?;
+                    s.session.answer_as(request_key, outcome, now).then_some(b)
+                })
+                .flatten();
             bytes.is_some()
         });
         bytes.map(<[u8]>::to_vec)
@@ -380,7 +380,13 @@ impl Core {
 
     /// Ended permission requests, newest first; see `DecisionLog::query`.
     pub fn decisions(&self, query: &str, limit: u32) -> Vec<Decision> {
-        lock(&self.state).decisions.query(query, limit as usize)
+        self.decisions_in(query, None, limit)
+    }
+
+    /// `decisions` of one surface when `surface_id` is set, filtered before the limit.
+    pub fn decisions_in(&self, query: &str, surface_id: Option<&str>, limit: u32) -> Vec<Decision> {
+        let hits = lock(&self.state).decisions.query(query, surface_id, limit as usize);
+        hits.iter().map(|d| Decision::clone(d)).collect()
     }
 
     pub fn allow_suggestions(&self) -> Vec<AllowSuggestion> {
@@ -644,9 +650,12 @@ mod tests {
         assert!(c.answer_permission(&env.surface_id, key, true).is_some());
         let got = ask(json!({"cmd": "decisions", "query": "push"}));
         assert_eq!(got["decisions"][0]["outcome"], "allowed_in_haunt");
+        assert_eq!(ask(json!({"cmd": "decisions", "surface": env.surface_id}))["decisions"].as_array().unwrap().len(), 1);
+        assert_eq!(ask(json!({"cmd": "decisions", "surface": "other"}))["decisions"], json!([]));
+        assert_eq!(ask(json!({"cmd": "dump"}))["decision_log_write_errors"], 0);
         assert_eq!(ask(json!({"cmd": "nope"}))["ok"], false);
         let log = std::fs::read_to_string(format!("{dir}/decisions.jsonl")).unwrap();
-        assert_eq!(log.lines().count(), 1);
+        assert_eq!(log.lines().count(), 1, "flushed once the lock is released");
         drop(c);
     }
 
