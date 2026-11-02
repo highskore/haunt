@@ -77,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             Self.logger.error("core start failed: \(String(describing: error), privacy: .public)")
         }
         c.plugins = Self.startPlugins(fixture: fixture, core: core, dir: config.dir)
+        applyPluginKeys()
         Ghostty.App.desktopNotificationHook = { [weak c, weak self] view, title, body in
             guard let self, let tab = c?.tab(for: view) else { return false }
             self.core.onOscNotification(surfaceId: tab.env.surfaceId, title: title, body: body)
@@ -214,7 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         #selector(newTab(_:)), #selector(closeTab(_:)), #selector(selectTab(_:)), #selector(selectNextHauntTab(_:)),
         #selector(selectPreviousHauntTab(_:)), #selector(renameHauntTab(_:)), #selector(toggleHauntSidebar(_:)),
         #selector(togglePalette(_:)), #selector(openConfig(_:)), #selector(NSWindow.toggleFullScreen(_:)),
-        #selector(toggleAgentsOnlyView(_:)),
+        #selector(toggleAgentsOnlyView(_:)), #selector(runPluginCommand(_:)),
     ]
 
     private var sidebarHidden: Bool { controller?.isSidebarHidden ?? false }
@@ -237,6 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             # Shortcuts, as "cmd+shift+b" (cmd, shift, ctrl, opt). Commented lines show the defaults.
             [keys]
             \(KeyMap.Action.allCases.map { a in a.defaultKey.map { "# \(a.rawValue) = \"\($0)\"" } ?? "# \(a.rawValue): no default" }.joined(separator: "\n"))
+            # A plugin command by "<plugin id>/<item id>", e.g. "dev.haunt.tabs/move-up" = "alt+cmd+up".
 
             [layout]
             # The view cmd+shift+a shows. Only "narrow-list" for now.
@@ -263,6 +265,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         menu.update()
         guard item.isEnabled else { return NSSound.beep() }
         menu.performActionForItem(at: menu.index(of: item))
+    }
+
+    @objc func runPluginCommand(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? PaletteItem else { return }
+        controller?.paletteInvoke(pluginId: item.pluginId, itemId: item.id)
+    }
+
+    /// Plugin commands with a key go in the Window menu, so `[keys]` and the menu treat them like Haunt's own.
+    private var pluginCommands: [PaletteItem] = []
+
+    private func applyPluginKeys() {
+        pluginCommands = controller?.plugins?.paletteItems(mode: nil, query: "").filter { !$0.isMode } ?? []
+        config.pluginKeyDefaults = Dictionary(pluginCommands.compactMap { i in i.defaultKey.map { (KeyMap.pluginName(i.pluginId, i.id), $0) } },
+                                              uniquingKeysWith: { a, _ in a })
+        if config.reload(useUserConfig: fixture == nil).ghostty { ghostty.reloadConfig() }
+        buildMenu()
+        controller?.updateKeys(config.keys)
     }
 
     private func buildMenu() {
@@ -314,6 +333,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             i.tag = a.tabIndex!
             return i
         }
+        let pluginItems = pluginCommands.compactMap { p -> NSMenuItem? in
+            guard let s = keys.plugin[KeyMap.pluginName(p.pluginId, p.id)] else { return nil }
+            let i = NSMenuItem(title: p.title, action: #selector(runPluginCommand(_:)), keyEquivalent: s.keyEquivalent)
+            i.keyEquivalentModifierMask = s.mods
+            i.representedObject = p
+            return i
+        }
         submenu("Window", [
             item("New Tab", #selector(newTab(_:)), .newTab),
             item("Close Tab", #selector(closeTab(_:)), .closeTab),
@@ -321,7 +347,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             item("Next Tab", #selector(selectNextHauntTab(_:)), .nextTab),
             item("Previous Tab", #selector(selectPreviousHauntTab(_:)), .previousTab),
             item("Rename Tab…", #selector(renameHauntTab(_:)), .renameTab),
-        ] + tabs + [
+        ] + (pluginItems.isEmpty ? [] : [.separator()] + pluginItems + [.separator()]) + tabs + [
             .separator(),
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), .minimize),
             item("Zoom", #selector(NSWindow.performZoom(_:))),

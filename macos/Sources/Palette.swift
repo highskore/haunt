@@ -250,7 +250,8 @@ final class PaletteController: NSObject, NSWindowDelegate {
     private func pluginRow(_ item: PaletteItem) -> PaletteRow {
         let tab = item.surfaceId.flatMap { s in host?.paletteTabs.contains { $0.surfaceId == s } == true ? s : nil }
         let logLine = item.atMs != nil || item.mark != nil || item.surfaceId != nil
-        let key = item.defaultKey.map { PaletteRow.Right.key(Shortcut.parse($0)?.display ?? $0) } ?? .none
+        // The binding `[keys]` gave it, which may differ from, or have refused, the plugin's default.
+        let key = host?.paletteKeys.plugin[KeyMap.pluginName(item.pluginId, item.id)].map { PaletteRow.Right.key($0.display) } ?? .none
         return PaletteRow(left: item.atMs.map { Self.time($0) } ?? "", mark: item.mark.map(Self.mark),
                           title: item.title, sub: item.subtitle ?? (logLine ? "" : item.pluginId),
                           right: tab == nil ? key : .jump,

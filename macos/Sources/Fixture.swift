@@ -24,6 +24,10 @@ enum Fixture: String {
     case setupChange = "setup-change"
     /// No mockup: ui-03 with the Settings window open, Claude Code set up.
     case settings = "settings"
+    /// No mockup: ui-06 arranged by the tabs plugin, colours drawn as dots.
+    case tabsDot = "tabs-dot"
+    /// No mockup: the same with tinted rows.
+    case tabsTint = "tabs-tint"
     /// No mockup: a selection paste carrying a bracketed paste end, held by Haunt before Ghostty sees it.
     case pasteRisky = "paste-risky"
 
@@ -110,6 +114,16 @@ enum Fixture: String {
                 SidebarGroup(id: "running", label: "RUNNING", rows: [rows[0]]),
                 SidebarGroup(id: "idle", label: "IDLE", rows: [rows[2], rows[3]]),
             ], colorStyle: .dot)
+        case .tabsDot, .tabsTint:
+            // The tabs plugin's arrangement over ui-06: a pinned tab, a section, colours on three rows.
+            var r = rows
+            (r[0].color, r[2].color, r[3].color) = (.blue, .green, .purple)
+            return SidebarSnapshot(groups: [
+                SidebarGroup(id: "needs-you", label: "NEEDS YOU", rows: [r[1]]),
+                SidebarGroup(id: "pinned", label: "PINNED", rows: [r[0]]),
+                SidebarGroup(id: "section:work", label: "WORK", rows: [r[2]]),
+                SidebarGroup(id: "idle", label: "IDLE", rows: [r[3]]),
+            ], colorStyle: self == .tabsTint ? .tint : .dot)
         }
     }
 
