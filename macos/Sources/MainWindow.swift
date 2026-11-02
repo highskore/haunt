@@ -169,6 +169,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         guard let self, let tab = self.store.tab(for: view), tab.env.surfaceId != self.store.selectedId else { return }
         self.select(tab.env.surfaceId)
     }
+    /// Set once the core has started, so the decision log is loaded before plugins read it.
+    var plugins: PluginsAPI? {
+        get { bridge.plugins }
+        set { bridge.plugins = newValue }
+    }
     private lazy var palette: PaletteController = {
         let p = PaletteController(host: self)
         p.sticky = fixture != nil
@@ -183,12 +188,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var agentsViewAtLaunch = false
     private lazy var listener = MainQueueListener { [weak self] in self?.coalescedRefresh() }
 
-    init(core: CoreAPI, ghostty: Ghostty.App, fixture: Fixture?, config: HauntConfig, plugins: PluginsAPI?) {
+    init(core: CoreAPI, ghostty: Ghostty.App, fixture: Fixture?, config: HauntConfig) {
         self.core = core
         self.ghostty = ghostty
         self.fixture = fixture
         self.config = config
-        bridge = PluginBridge(plugins: plugins, core: core) { [store] bytes, id in store.write(bytes, to: id) }
+        bridge = PluginBridge(core: core) { [store] bytes, id in store.write(bytes, to: id) }
         let size = Self.defaultSize
         let win = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -231,6 +236,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             self?.refresh()
         }
         root.sidebar.onRenameEnd = { [weak self] in self?.focusSelectedSurface() }
+        root.sidebar.rowMenu = { [weak self] id in self?.plugins?.rowMenuItems(surfaceId: id) ?? [] }
+        root.sidebar.onRowMenu = { [weak self] item, id in self?.bridge.invokeRowMenu(item, surfaceId: id) }
+        root.sidebar.onRowMoved = { [weak self] id, group, before in
+            self?.plugins?.rowMoved(surfaceId: id, groupId: group, beforeSurfaceId: before)
+        }
         core.setListener(listener: listener)
 
         let nc = NotificationCenter.default
@@ -626,8 +636,6 @@ extension MainWindowController: PaletteHost {
     }
 
     var selectedSurfaceId: String? { store.selectedId }
-
-    func paletteDecisions(query: String) -> [Decision] { core.decisions(query: query, limit: 200) }
 
     var palettePlugins: PluginsAPI? { bridge.plugins }
 

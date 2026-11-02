@@ -28,7 +28,7 @@ Claude Code ──hooks──▶ ~/.haunt/sock ──▶ haunt-core (Rust) ─�
   - Events without the right nonce only update status. They can never create a permission request.
 - **`core/`** holds the agent model, sidebar layout, decision log, allowlist suggestions and plugin host. It has no UI code, so future Windows and Linux front ends can share it.
 - **`macos/`** is the native app: title bar, sidebar, tabs and libghostty surfaces.
-- **`wit/`** defines the plugin API (`haunt:plugin@0.1`).
+- **`wit/`** defines the plugin API (`haunt:plugin@0.3`).
   - Plugins are sandboxed WASM components. Each capability is granted when you install the plugin and pinned in a lockfile.
   - A plugin gets no filesystem, network or environment it wasn't granted.
 
@@ -43,7 +43,7 @@ macos/build.sh && macos/make-app.sh     # builds core, bindings and build/haunt.
 open build/haunt.app
 ```
 
-`make-app.sh` needs the Claude adapter checked out (see below). It also bundles the Codex adapter if `../haunt-plugins/haunt-codex` is there (or `HAUNT_CODEX_ADAPTER`), and the `haunt` CLI as `haunt.app/Contents/Helpers/haunt`.
+`make-app.sh` needs the Claude adapter checked out (see below). It also bundles the Codex adapter if `../haunt-plugins/haunt-codex` is there (or `HAUNT_CODEX_ADAPTER`), the `haunt` CLI as `haunt.app/Contents/Helpers/haunt`, and the first-party decision-log and allowlist plugins from `../haunt-plugins/` (built for `wasm32-wasip2`; Haunt installs them on launch, see `docs/core-api.md`).
 
 Signing: set `HAUNT_SIGN_ID`, or put your identity in a `.sign-id` file (gitignored). Without either, the app is signed ad hoc.
 
@@ -55,12 +55,14 @@ haunt setup claude|codex     # set up one
 haunt setup --remove codex   # take one out
 ```
 
-Each run first prints the exact change and asks before making it: the `claude plugin` commands for Claude Code, a diff of `~/.codex/config.toml` for Codex. `--dry-run` only prints; `--yes` skips the question. The choice is kept in `~/.haunt/state.json`. On first launch the app asks the same question in a sheet and runs the same command; change it later in Settings (⌘,).
+Each run first prints the exact change and asks before making it: the `claude plugin` commands for Claude Code, a diff of `~/.codex/config.toml` for Codex. `--dry-run` changes no agent config (it only stages the adapter copy below); `--yes` skips the question. The choice is kept in `~/.haunt/state.json` (`$HAUNT_CONFIG_DIR`, else `$HAUNT_HOME`, when set). `--dry-run` ends with `preview sha256 <hex>`; `--expect <hex>` applies only if the change still matches that preview. On first launch the app asks the same question in a sheet and runs the same command; change it later in Settings (⌘,).
+
+The adapter is first copied to `~/.haunt/adapters/<agent>/<content hash>` and installed from there, so moving or rebuilding haunt.app doesn't break it. Removing an agent deletes that copy. Run Haunt from `/Applications`: setup refuses a quarantined, translocated copy of the app.
 
 For Claude Code it runs:
 
 ```sh
-claude plugin marketplace add ../haunt-plugins/haunt-claude
+claude plugin marketplace add ~/.haunt/adapters/claude/<hash>
 claude plugin install haunt@haunt
 ```
 
@@ -87,14 +89,22 @@ cursor-style = "bar"
 
 `titlebar_buttons` lists the title bar's icons, left to right, from `search`, `new_tab`, `settings` and `sidebar`. Unknown names are skipped and logged; `[]` leaves the bar empty. Each icon's tooltip shows its shortcut from `[keys]`.
 
+`[keys]` sets shortcuts by action name (the generated `config.toml` lists them with their defaults). A plugin's palette command is named `"<plugin id>/<item id>"`, for example `"dev.haunt.tabs/move-up" = "alt+cmd+up"`; a plugin's default key must include cmd and never takes one of Haunt's or a chord the terminal or macOS uses (a chord set here has no such limit), and bound plugin commands appear in the Window menu.
+
 ## CLI
+
+The CLI is bundled in the app. To put it on your PATH:
+
+```sh
+ln -s /Applications/haunt.app/Contents/Helpers/haunt /usr/local/bin/haunt   # or any folder on PATH, e.g. ~/.local/bin
+```
 
 ```sh
 haunt dump                       # sidebar state as JSON
 haunt decisions [query]          # permission decision log
 haunt plugin install ./my-plugin # shows the capabilities, asks before installing
 haunt plugin list | remove <id> | approve <id>
-haunt setup [claude|codex|none] [--remove] [--yes] [--dry-run]
+haunt setup [claude|codex|none] [--remove] [--yes] [--dry-run] [--expect <sha256>]
 ```
 
 ## Plugins

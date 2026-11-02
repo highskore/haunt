@@ -713,6 +713,7 @@ version = "0.0.1"
 dependencies = [
  "haunt-core",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

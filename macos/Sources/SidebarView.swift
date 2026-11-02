@@ -2,7 +2,7 @@ import AppKit
 
 /// Mockup 06's grouped flat sidebar, drawn from a core `SidebarSnapshot`.
 final class SidebarView: NSView, NSTextFieldDelegate {
-    var snapshot = SidebarSnapshot(groups: []) { didSet { snapshotChanged() } }
+    var snapshot = SidebarSnapshot(groups: [], colorStyle: .dot) { didSet { snapshotChanged(from: oldValue) } }
     var onSelect: ((String) -> Void)?
     var onClose: ((String) -> Void)?
     /// Agents view 01's list: the window's background and no right hairline.
@@ -11,6 +11,11 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     var onRename: ((String, String) -> Void)?
     /// The editor closed, saved or not; focus can go back to the terminal.
     var onRenameEnd: (() -> Void)?
+    /// Plugin entries for a row's context menu, built when it opens, and the one chosen.
+    var rowMenu: ((String) -> [RowMenuItem])?
+    var onRowMenu: ((RowMenuItem, String) -> Void)?
+    /// A drag dropped the row into a group (`SidebarGroup.id`) above a row, or at its end; nil turns dragging off.
+    var onRowMoved: ((_ surfaceId: String, _ groupId: String, _ before: String?) -> Void)?
 
     // No mockup has row hover: a × in the status slot, meta grey, primary while the pointer is on it.
     // HAUNT_ROW_HOVER=<n> pins hover on the nth row (1-based); <n>x also pins it on the ×.
@@ -30,19 +35,19 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     private var hoverClose = false { didSet { if hoverClose != oldValue { invalidateRow(hoverId) } } }
 
     private enum Item {
-        case label(String, top: CGFloat)
-        case row(Row, top: CGFloat, height: CGFloat)
+        case label(String, top: CGFloat, group: String)
+        case row(Row, top: CGFloat, height: CGFloat, group: String)
 
         enum Shape: Equatable {
-            case label(String, CGFloat)
-            case row(String, CGFloat, CGFloat)
+            case label(String, CGFloat, String)
+            case row(String, CGFloat, CGFloat, String)
         }
 
         /// What decides the layout; rows with the same shape can be redrawn alone.
         var shape: Shape {
             switch self {
-            case let .label(text, top): return .label(text, top)
-            case let .row(r, top, h): return .row(r.surfaceId, top, h)
+            case let .label(text, top, g): return .label(text, top, g)
+            case let .row(r, top, h, g): return .row(r.surfaceId, top, h, g)
             }
         }
     }
@@ -76,12 +81,12 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         var y: CGFloat = flat ? Tok.Size.sidebarPadtopIconOnly : 0
         for g in snapshot.groups {
             if !g.label.isEmpty {
-                items.append(.label(g.label, top: y))
+                items.append(.label(g.label, top: y, group: g.id))
                 y += labelHeight
             }
             for r in g.rows {
                 let h = rowHeight(r)
-                items.append(.row(r, top: y, height: h))
+                items.append(.row(r, top: y, height: h, group: g.id))
                 y += h
             }
         }
@@ -92,12 +97,13 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     }
 
     /// Same layout: only rows whose content changed are redrawn. Otherwise everything is.
-    private func snapshotChanged() {
+    private func snapshotChanged(from oldSnapshot: SidebarSnapshot) {
         let old = items
+        if snapshot.colorStyle != oldSnapshot.colorStyle { rowLines = [:] }
         relayout()
-        if old.map(\.shape) == items.map(\.shape) {
+        if snapshot.colorStyle == oldSnapshot.colorStyle, old.map(\.shape) == items.map(\.shape) {
             for (a, b) in zip(old, items) {
-                if case let .row(ra, top, h) = a, case let .row(rb, _, _) = b, ra != rb {
+                if case let .row(ra, top, h, _) = a, case let .row(rb, _, _, _) = b, ra != rb {
                     setNeedsDisplay(NSRect(x: 0, y: top, width: bounds.width, height: h))
                 }
             }
@@ -113,7 +119,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
 
     private func invalidateRow(_ id: String?) {
         guard let id else { return }
-        for case let .row(r, top, h) in items where r.surfaceId == id {
+        for case let .row(r, top, h, _) in items where r.surfaceId == id {
             setNeedsDisplay(NSRect(x: 0, y: top, width: bounds.width, height: h))
         }
     }
@@ -126,7 +132,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     }
 
     private func row(at p: NSPoint) -> (Row, CGFloat)? {
-        for case let .row(row, top, height) in items where p.y >= top && p.y < top + height && p.x < contentWidth {
+        for case let .row(row, top, height, _) in items where p.y >= top && p.y < top + height && p.x < contentWidth {
             return (row, top)
         }
         return nil
@@ -156,6 +162,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         hoverClose = hit.map { closeRect(top: $0.1).insetBy(dx: -Tok.App.hitSlop, dy: -Tok.App.hitSlop).contains(p) } ?? false
     }
 
+    /// Haunt's own Rename and Close, then the plugins' entries; an entry with a `parent` goes in that entry's submenu.
     override func menu(for event: NSEvent) -> NSMenu? {
         guard let (row, _) = row(at: convert(event.locationInWindow, from: nil)) else { return nil }
         let menu = NSMenu()
@@ -165,7 +172,41 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             item.representedObject = row.surfaceId
             menu.addItem(item)
         }
+        let entries = rowMenu?(row.surfaceId) ?? []
+        if !entries.isEmpty { menu.addItem(.separator()) }
+        let key = { (e: RowMenuItem) in "\(e.pluginId)\u{0}\(e.id)" }
+        let parents = Set(entries.compactMap { e in e.parent.map { "\(e.pluginId)\u{0}\($0)" } })
+        var submenus: [String: NSMenu] = [:]
+        for e in entries.filter({ $0.parent == nil }) + entries.filter({ $0.parent != nil }) {
+            let item = NSMenuItem(title: e.title, action: #selector(pluginItemFromMenu(_:)), keyEquivalent: "")
+            item.target = self
+            item.state = e.checked ? .on : .off
+            item.representedObject = PluginMenuEntry(item: e, surfaceId: row.surfaceId)
+            if parents.contains(key(e)) {
+                let sub = NSMenu(title: e.title)
+                submenus[key(e)] = sub
+                item.submenu = sub
+                item.action = nil
+            }
+            if let p = e.parent, let sub = submenus["\(e.pluginId)\u{0}\(p)"] {
+                sub.addItem(item)
+            } else if e.parent == nil {
+                menu.addItem(item)
+            }
+        }
         return menu
+    }
+
+    private final class PluginMenuEntry: NSObject {
+        let item: RowMenuItem, surfaceId: String
+        init(item: RowMenuItem, surfaceId: String) {
+            self.item = item
+            self.surfaceId = surfaceId
+        }
+    }
+
+    @objc private func pluginItemFromMenu(_ sender: NSMenuItem) {
+        if let e = sender.representedObject as? PluginMenuEntry { onRowMenu?(e.item, e.surfaceId) }
     }
 
     @objc private func renameFromMenu(_ sender: NSMenuItem) {
@@ -207,8 +248,8 @@ final class SidebarView: NSView, NSTextFieldDelegate {
 
     private func positionEditor() {
         guard let (id, field) = editor else { return }
-        guard case let .row(row, top, _)? = items.first(where: {
-            if case let .row(r, _, _) = $0 { return r.surfaceId == id } else { return false }
+        guard case let .row(row, top, _, _)? = items.first(where: {
+            if case let .row(r, _, _, _) = $0 { return r.surfaceId == id } else { return false }
         }) else { return endRename(save: false) }
         // The field's cell insets its text 2 pt and sizes its own line; centre that on the drawn name.
         let r = nameRect(top: top)
@@ -249,13 +290,16 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         if !panel { Draw.fill(NSRect(x: bounds.width - 1, y: 0, width: 1, height: bounds.height), Tok.Color.hairline) }
         for item in items {
             switch item {
-            case let .label(text, top):
+            case let .label(text, top, _):
                 guard top < dirtyRect.maxY, top + labelHeight > dirtyRect.minY else { continue }
                 drawLabel(text, top: top, ctx: ctx)
-            case let .row(row, top, height):
+            case let .row(row, top, height, _):
                 guard top < dirtyRect.maxY, top + height > dirtyRect.minY else { continue }
                 drawRow(row, top: top, height: height, ctx: ctx)
             }
+        }
+        if let d = drop {
+            Draw.fill(NSRect(x: Tok.Size.rowPad[1], y: d.y - 1, width: contentWidth - 2 * Tok.Size.rowPad[1], height: 2), Tok.Color.textPrimary)
         }
     }
 
@@ -286,6 +330,8 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let row: Row, width: CGFloat, hovered: Bool
         let status: CTLine, statusW: CGFloat
         let name: CTLine
+        /// The tab colour's dot after the name, in the dot style.
+        let dot: TabColor?
         let hint: CTLine?
         let meta: CTLine
         let subs: [(label: CTLine, meta: CTLine, metaW: CGFloat)]
@@ -302,7 +348,9 @@ final class SidebarView: NSView, NSTextFieldDelegate {
 
         let status = Draw.line(row.statusText, Fonts.status, row.needsYou ? Tok.Color.needs : Tok.Color.textMeta)
         let statusW = hovered ? Tok.App.closeSize : Draw.width(status)
-        let name = Draw.truncated(Draw.line(row.name, Fonts.name, Tok.Color.textPrimary), right - gapX - statusW - col2,
+        let dot = snapshot.colorStyle == .dot ? row.color : nil
+        let dotW = dot == nil ? 0 : gapX + Tok.Size.tabDot
+        let name = Draw.truncated(Draw.line(row.name, Fonts.name, Tok.Color.textPrimary), right - gapX - statusW - col2 - dotW,
                                   Fonts.name, Tok.Color.textPrimary)
 
         // A suspicious request shows its preview (⏎ and all) and is answered only in the terminal,
@@ -325,7 +373,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             return (label: label, meta: m, metaW: mw)
         }
         let l = RowLines(row: row, width: contentWidth, hovered: hovered, status: status, statusW: statusW,
-                         name: name, hint: hint, meta: meta, subs: subs)
+                         name: name, dot: dot, hint: hint, meta: meta, subs: subs)
         rowLines[row.surfaceId] = l
         return l
     }
@@ -333,6 +381,10 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     private func drawRow(_ row: Row, top: CGFloat, height: CGFloat, ctx: CGContext) {
         if row.selected {
             Draw.fill(NSRect(x: 0, y: top, width: contentWidth, height: height), Tok.Color.rowSelected)
+        }
+        if let c = row.color, snapshot.colorStyle == .tint {
+            Tok.Color.tab(c).withAlphaComponent(Tok.Color.tabTintAlpha).setFill()
+            NSRect(x: 0, y: top, width: contentWidth, height: height).fill(using: .sourceOver)
         }
         let l = lines(for: row)
         let padY = Tok.Size.rowPad[0], padX = Tok.Size.rowPad[1]
@@ -360,6 +412,11 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         }
         Draw.text(l.name, font: Fonts.name, x: col2, top: y + (rowLine1 - Tok.Size.rowName * lh) / 2,
                   lineHeight: Tok.Size.rowName * lh, in: ctx)
+        if let dot = l.dot {
+            let d = Tok.Size.tabDot
+            Tok.Color.tab(dot).setFill()
+            NSBezierPath(ovalIn: NSRect(x: col2 + Draw.width(l.name) + gapX, y: y + (rowLine1 - d) / 2, width: d, height: d)).fill()
+        }
         y += rowLine1 + gapY
 
         // Line 2: meta, spanning columns 2–3.
@@ -415,6 +472,63 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             beginRename(row.surfaceId)
         } else {
             onSelect?(row.surfaceId)
+            // A row needing you stays in NEEDS YOU, so it doesn't drag.
+            if onRowMoved != nil, group(of: row.surfaceId) != Self.needsYouGroup { press = (row.surfaceId, p) }
         }
+    }
+
+    // MARK: Drag to reorder
+
+    static let needsYouGroup = "needs-you"
+    private var press: (id: String, at: NSPoint)?
+    private var dragging = false
+    /// Where the dragged row would land, and the y of the insertion line.
+    private var drop: (group: String, before: String?, y: CGFloat)? { didSet { needsDisplay = true } }
+
+    private func group(of id: String) -> String? {
+        for case let .row(r, _, _, g) in items where r.surfaceId == id { return g }
+        return nil
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let press else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        if !dragging, hypot(p.x - press.at.x, p.y - press.at.y) < 4 { return }
+        dragging = true
+        drop = target(at: p)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if dragging, let id = press?.id, let d = drop { onRowMoved?(id, d.group, d.before) }
+        press = nil
+        dragging = false
+        drop = nil
+    }
+
+    /// Above the row under the pointer or below it, by which half it is over; a label means its group's top.
+    /// Nothing lands in NEEDS YOU.
+    func target(at p: NSPoint) -> (group: String, before: String?, y: CGFloat)? {
+        var found: (group: String, before: String?, y: CGFloat)?
+        var last: (group: String, y: CGFloat)?
+        for (i, item) in items.enumerated() {
+            switch item {
+            case let .label(_, top, g):
+                if p.y >= top && p.y < top + labelHeight {
+                    let first = items.dropFirst(i + 1).first.flatMap { if case let .row(r, _, _, rg) = $0, rg == g { r.surfaceId } else { nil } }
+                    found = (g, first, top + labelHeight)
+                }
+            case let .row(r, top, h, g):
+                last = (g, top + h)
+                guard p.y >= top && p.y < top + h else { continue }
+                if p.y < top + h / 2 {
+                    found = (g, r.surfaceId, top)
+                } else {
+                    let next = items.dropFirst(i + 1).first.flatMap { if case let .row(n, _, _, ng) = $0, ng == g { n.surfaceId } else { nil } }
+                    found = (g, next, top + h)
+                }
+            }
+        }
+        if found == nil, let last, p.y >= last.y { found = (last.group, nil, last.y) }
+        return found?.group == Self.needsYouGroup ? nil : found
     }
 }

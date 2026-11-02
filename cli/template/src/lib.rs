@@ -37,6 +37,12 @@ impl Guest for Plugin {
     fn on_action(action_id: String, _payload: String) {
         log(LogLevel::Info, &format!("hello: {action_id}"));
     }
+
+    fn row_menu(_surface: String) -> Vec<MenuItem> {
+        Vec::new()
+    }
+
+    fn on_row_moved(_surface: String, _group: String, _before: Option<String>) {}
 }
 
 export!(Plugin);
@@ -46,7 +52,7 @@ mod tests {
     use super::*;
 
     fn event(kind: &str, summary: Option<&str>) -> AgentEvent {
-        AgentEvent { kind: kind.into(), session_id: None, agent_id: None, cwd: None, summary: summary.map(Into::into) }
+        AgentEvent { kind: kind.into(), session_id: None, agent_id: None, cwd: None, summary: summary.map(Into::into), verified: true }
     }
 
     #[test]

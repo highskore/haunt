@@ -9,7 +9,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     let config: HauntConfig
     let ghostty: Ghostty.App
     private let core: CoreAPI
-    private var plugins: PluginsAPI?
     private var controller: MainWindowController?
     private lazy var setup = SetupSheets(config: config, fixture: fixture != nil)
     private var settings: SettingsWindowController?
@@ -57,10 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         ghostty.delegate = self
         buildMenu()
-        if fixture == nil { plugins = Self.startPlugins(dir: config.dir) }
 
         // The listener goes in before start() so no change is missed.
-        let c = MainWindowController(core: core, ghostty: ghostty, fixture: fixture, config: config, plugins: plugins)
+        let c = MainWindowController(core: core, ghostty: ghostty, fixture: fixture, config: config)
         controller = c
         c.onSidebarToggle = { [weak self] in self?.updateSidebarItem() }
         updateSidebarItem()
@@ -84,6 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             startError = error
             Self.logger.error("core start failed: \(String(describing: error), privacy: .public)")
         }
+        c.plugins = Self.startPlugins(fixture: fixture, core: core, dir: config.dir)
+        applyPluginKeys()
         Ghostty.App.desktopNotificationHook = { [weak c, weak self] view, title, body in
             guard let self, let tab = c?.tab(for: view) else { return false }
             self.core.onOscNotification(surfaceId: tab.env.surfaceId, title: title, body: body)
@@ -147,10 +147,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         #endif
     }
 
-    /// Load errors are logged, and listed in the palette, rather than put in front of the user.
-    private static func startPlugins(dir: URL) -> PluginsAPI? {
+    /// Load errors are logged, and listed in the palette, rather than put in front of the user. Fixtures
+    /// get their own plugins; only the log palettes have any.
+    private static func startPlugins(fixture: Fixture?, core: CoreAPI, dir: URL) -> PluginsAPI? {
         do {
-            let p = try loadPlugins(hauntDir: dir.path)
+            let bundled = Bundle.main.resourceURL?.appendingPathComponent("plugins").path
+            #if HAUNT_FIXTURES
+            let fromFixture = try fixture.map { try fixturePlugins($0, bundledDir: bundled) }
+            #else
+            let fromFixture: PluginsAPI?? = nil
+            #endif
+            guard let p = try fromFixture ?? loadPlugins(hauntDir: dir.path, core: core, bundledDir: bundled) else { return nil }
             for e in p.loadErrors() { logger.error("plugin not loaded: \(e, privacy: .public)") }
             return p
         } catch {
@@ -225,7 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         #selector(newTab(_:)), #selector(closeTab(_:)), #selector(selectTab(_:)), #selector(selectNextHauntTab(_:)),
         #selector(selectPreviousHauntTab(_:)), #selector(renameHauntTab(_:)), #selector(toggleHauntSidebar(_:)),
         #selector(togglePalette(_:)), #selector(openConfig(_:)), #selector(NSWindow.toggleFullScreen(_:)),
-        #selector(toggleAgentsOnlyView(_:)),
+        #selector(toggleAgentsOnlyView(_:)), #selector(runPluginCommand(_:)),
     ]
 
     private var sidebarHidden: Bool { controller?.isSidebarHidden ?? false }
@@ -248,6 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             # Shortcuts, as "cmd+shift+b" (cmd, shift, ctrl, opt). Commented lines show the defaults.
             [keys]
             \(KeyMap.Action.allCases.map { a in a.defaultKey.map { "# \(a.rawValue) = \"\($0)\"" } ?? "# \(a.rawValue): no default" }.joined(separator: "\n"))
+            # A plugin command by "<plugin id>/<item id>", e.g. "dev.haunt.tabs/move-up" = "alt+cmd+up".
 
             [layout]
             # The view cmd+shift+a shows. Only "narrow-list" for now.
@@ -274,6 +282,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         menu.update()
         guard item.isEnabled else { return NSSound.beep() }
         menu.performActionForItem(at: menu.index(of: item))
+    }
+
+    @objc func runPluginCommand(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? PaletteItem else { return }
+        controller?.paletteInvoke(pluginId: item.pluginId, itemId: item.id)
+    }
+
+    /// Plugin commands with a key go in the Window menu, so `[keys]` and the menu treat them like Haunt's own.
+    private var pluginCommands: [PaletteItem] = []
+
+    private func applyPluginKeys() {
+        pluginCommands = controller?.plugins?.paletteItems(mode: nil, query: "").filter { !$0.isMode } ?? []
+        config.pluginKeyDefaults = Dictionary(pluginCommands.compactMap { i in i.defaultKey.map { (KeyMap.pluginName(i.pluginId, i.id), $0) } },
+                                              uniquingKeysWith: { a, _ in a })
+        if config.reload(useUserConfig: fixture == nil).ghostty { ghostty.reloadConfig() }
+        buildMenu()
+        controller?.updateKeys(config.keys)
     }
 
     private func buildMenu() {
@@ -325,6 +350,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             i.tag = a.tabIndex!
             return i
         }
+        let pluginItems = pluginCommands.compactMap { p -> NSMenuItem? in
+            guard let s = keys.plugin[KeyMap.pluginName(p.pluginId, p.id)] else { return nil }
+            let i = NSMenuItem(title: p.title, action: #selector(runPluginCommand(_:)), keyEquivalent: s.keyEquivalent)
+            i.keyEquivalentModifierMask = s.mods
+            i.representedObject = p
+            return i
+        }
         submenu("Window", [
             item("New Tab", #selector(newTab(_:)), .newTab),
             item("Close Tab", #selector(closeTab(_:)), .closeTab),
@@ -332,7 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             item("Next Tab", #selector(selectNextHauntTab(_:)), .nextTab),
             item("Previous Tab", #selector(selectPreviousHauntTab(_:)), .previousTab),
             item("Rename Tab…", #selector(renameHauntTab(_:)), .renameTab),
-        ] + tabs + [
+        ] + (pluginItems.isEmpty ? [] : [.separator()] + pluginItems + [.separator()]) + tabs + [
             .separator(),
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), .minimize),
             item("Zoom", #selector(NSWindow.performZoom(_:))),

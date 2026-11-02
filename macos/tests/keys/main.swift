@@ -132,5 +132,41 @@ check(rc.contains("cursor-style = bar\n"), "other passthrough kept")
 let rcOK = HauntConfig.ghosttyConfig(TOML.parse("[ghostty]\nright-click-action = copy\n"), defaultSize: 11, keys: defaults)
 check(rcOK.contains("right-click-action = copy\n"), "right-click copy allowed")
 
+// Plugin commands: their default keys bind unless taken, `[keys]` overrides them, and Ghostty lets them through.
+let up = KeyMap.pluginName("dev.haunt.tabs", "move-up"), down = KeyMap.pluginName("dev.haunt.tabs", "move-down")
+let pluginDefaults = [up: "alt+cmd+up", down: "alt+cmd+down", "dev.x.y/steal": "cmd+t"]
+var pluginLogs: [String] = []
+let withPlugins = KeyMap(table: TOML.parse("[keys]\n\"dev.haunt.tabs/move-down\" = \"ctrl+opt+j\"\n")["keys"] ?? [:],
+                         pluginDefaults: pluginDefaults) { pluginLogs.append($0) }
+check(withPlugins.plugin[up] == Shortcut.parse("cmd+opt+up"), "plugin default binds")
+check(withPlugins.plugin[down] == Shortcut.parse("ctrl+opt+j"), "[keys] overrides a plugin default")
+check(withPlugins.plugin["dev.x.y/steal"] == nil && withPlugins[.newTab] == Shortcut.parse("cmd+t"), "a plugin default never takes a Haunt chord")
+check(pluginLogs.contains { $0.contains("dev.x.y/steal") }, "the refused default is logged")
+let taken = KeyMap(table: TOML.parse("[keys]\n\"dev.haunt.tabs/move-up\" = \"cmd+k\"\n")["keys"] ?? [:], pluginDefaults: pluginDefaults) { _ in }
+check(taken.plugin[up] == Shortcut.parse("cmd+k") && taken[.palette] == nil, "a configured plugin chord beats a Haunt default, as for actions")
+// Plugin defaults need cmd and stay off reserved chords; a chord the user sets in [keys] is unrestricted.
+var guardLogs: [String] = []
+let guarded = KeyMap(table: TOML.parse("[keys]\n\"dev.x.y/user\" = \"ctrl+r\"\ncopy = \"cmd+shift+c\"\n")["keys"] ?? [:],
+                     pluginDefaults: ["dev.x.y/c": "ctrl+c", "dev.x.y/b": "opt+b", "dev.x.y/copy": "cmd+c",
+                                      "dev.x.y/home": "cmd+left", "dev.x.y/up": "cmd+opt+up", "dev.x.y/user": "cmd+j"]) { guardLogs.append($0) }
+check(guarded.plugin["dev.x.y/c"] == nil, "a plugin default of ctrl+c is refused")
+check(guarded.plugin["dev.x.y/b"] == nil, "a plugin default of opt+b is refused")
+check(guarded.plugin["dev.x.y/copy"] == nil && guarded[.copy] == Shortcut.parse("cmd+shift+c"), "a plugin default can't take a Haunt default chord the user moved")
+check(guarded.plugin["dev.x.y/home"] == nil, "a plugin default can't take terminal line editing")
+check(guarded.plugin["dev.x.y/up"] == Shortcut.parse("cmd+opt+up"), "cmd+opt+up is accepted")
+check(guarded.plugin["dev.x.y/user"] == Shortcut.parse("ctrl+r"), "a user-configured ctrl chord is honoured")
+check(guardLogs.filter { $0.contains("needs cmd") }.count == 4, "each refused default is logged")
+// One chord, however it's spelled, is one Shortcut, so an alias can't slip past `reserved`.
+for (a, b) in [("cmd+return", "cmd+enter"), ("cmd+opt+esc", "cmd+opt+escape"), ("cmd+,", "cmd+comma"),
+               ("cmd+=", "cmd+equal"), ("cmd+`", "cmd+backquote"), ("command+alt+escape", "cmd+opt+escape")] {
+    check(Shortcut.parse(a) == Shortcut.parse(b) && Set([Shortcut.parse(a)!, Shortcut.parse(b)!]).count == 1, "\(a) is \(b)")
+}
+check(Shortcut.parse("cmd+return")?.display == "⌘↩" && Shortcut.parse("cmd+esc")?.ghosttyTriggers == ["super+escape"], "aliases keep their glyph and trigger")
+let aliased = ["dev.x.y/r": "cmd+return", "dev.x.y/e": "cmd+opt+esc", "dev.x.y/p": "cmd+,", "dev.x.y/q": "cmd+=", "dev.x.y/g": "cmd+`"]
+let viaAlias = KeyMap(table: [:], pluginDefaults: aliased) { _ in }
+check(viaAlias.plugin.isEmpty, "reserved chords are refused under any spelling: \(viaAlias.plugin.keys.sorted())")
+let pg = HauntConfig.ghosttyConfig([:], defaultSize: 11, keys: withPlugins)
+check(pg.contains("keybind = alt+super+arrow_up=unbind\n"), "plugin chords are unbound in Ghostty")
+
 print(failures == 0 ? "keys: all passed" : "keys: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

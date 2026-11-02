@@ -4,12 +4,12 @@ import UserNotifications
 /// Carries out what plugins ask of the host: `.notify` becomes a macOS notification; a `.ptyAnswer` is
 /// written only as the bytes the core's gate returns.
 final class PluginBridge {
-    let plugins: PluginsAPI?
+    /// Set once the core has started, so the decision log is loaded before plugins read it.
+    var plugins: PluginsAPI?
     private let core: CoreAPI
     private let write: (Data, String) -> Void
 
-    init(plugins: PluginsAPI?, core: CoreAPI, write: @escaping (_ bytes: Data, _ surfaceId: String) -> Void) {
-        self.plugins = plugins
+    init(core: CoreAPI, write: @escaping (_ bytes: Data, _ surfaceId: String) -> Void) {
         self.core = core
         self.write = write
     }
@@ -35,6 +35,17 @@ final class PluginBridge {
             try plugins?.invokePaletteItem(pluginId: pluginId, itemId: itemId)
         } catch {
             AppDelegate.logger.error("plugin \(pluginId, privacy: .public) item \(itemId, privacy: .public): \(String(describing: error), privacy: .public)")
+            NSSound.beep()
+        }
+        drain()
+    }
+
+    /// A plugin's entry in a row's context menu.
+    func invokeRowMenu(_ item: RowMenuItem, surfaceId: String) {
+        do {
+            try plugins?.invokeRowMenuItem(pluginId: item.pluginId, itemId: item.id, surfaceId: surfaceId)
+        } catch {
+            AppDelegate.logger.error("plugin \(item.pluginId, privacy: .public) row item \(item.id, privacy: .public): \(String(describing: error), privacy: .public)")
             NSSound.beep()
         }
         drain()
