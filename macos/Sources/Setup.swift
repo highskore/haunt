@@ -16,9 +16,8 @@ enum SetupAgent: String, CaseIterable {
                 return true
             }
         case .codex:
-            let img = Bundle.main.image(forResource: "codex-logo")?.copy() as? NSImage
-            img?.size = NSSize(width: s, height: s)
-            return img
+            // A template image: AppKit tints it to the label colour wherever it is shown.
+            return Draw.openAIMark
         }
     }
 

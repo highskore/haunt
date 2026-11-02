@@ -24,7 +24,7 @@ cp -R deps/share/ghostty "$APP/Contents/Resources/ghostty"
 # libghostty sets TERMINFO to dirname(GHOSTTY_RESOURCES_DIR)/terminfo.
 cp -R deps/share/terminfo "$APP/Contents/Resources/terminfo"
 cp "$ROOT/design/icon/haunt.icns" "$APP/Contents/Resources/haunt.icns"
-cp Resources/codex-logo.png "$APP/Contents/Resources/codex-logo.png"
+cp Resources/openai-mark.png Resources/openai-mark@2x.png "$APP/Contents/Resources/"
 mkdir -p "$APP/Contents/Resources/adapters/claude"
 rsync -a --exclude .git --exclude tests "$ADAPTER/" "$APP/Contents/Resources/adapters/claude/"
 if [ -f "$CODEX_ADAPTER/bin/haunt-codex-hook" ]; then
