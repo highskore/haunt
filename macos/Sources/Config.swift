@@ -94,19 +94,23 @@ final class HauntConfig {
     struct State: Codable {
         var sidebarHidden = false
         var agentsView = false
+        /// Written by `haunt setup`; nil until it has run, which is when the first-launch picker shows.
+        var agents: [String]?
 
         enum CodingKeys: String, CodingKey {
             case sidebarHidden = "sidebar_hidden"
             case agentsView = "agents_view"
+            case agents
         }
 
         init() {}
 
-        /// Keys missing from an older state.json keep their defaults.
+        // Every key is optional: `haunt setup` may write the file before the app ever has.
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             sidebarHidden = try c.decodeIfPresent(Bool.self, forKey: .sidebarHidden) ?? false
             agentsView = try c.decodeIfPresent(Bool.self, forKey: .agentsView) ?? false
+            agents = try c.decodeIfPresent([String].self, forKey: .agents)
         }
     }
 

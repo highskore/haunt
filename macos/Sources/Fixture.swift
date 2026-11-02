@@ -18,6 +18,12 @@ enum Fixture: String {
     case pasteConfirm = "paste-confirm"
     /// Agents-only view 01 on the agents mockup's six tabs.
     case narrowList = "av-01-narrow-list"
+    /// No mockup: ui-03 with the first-launch agent picker up.
+    case setupPicker = "setup-picker"
+    /// No mockup: ui-03 with the picker's next sheet, the change for Claude Code and Codex.
+    case setupChange = "setup-change"
+    /// No mockup: ui-03 with the Settings window open, Claude Code set up.
+    case settings = "settings"
 
     static var current: Fixture? {
         ProcessInfo.processInfo.environment["HAUNT_FIXTURE"].flatMap(Fixture.init(rawValue:))
@@ -27,7 +33,7 @@ enum Fixture: String {
     static let windowSize = NSSize(width: 900, height: Tok.Size.windowH)
 
     var titleAccessory: TitleBarView.Accessory {
-        self == .iconOnly || self == .zen || self == .pasteConfirm ? .icons : .kbd
+        self == .iconOnly || self == .zen || isSheet ? .icons : .kbd
     }
 
     var sidebarHidden: Bool { self == .zen }
@@ -36,6 +42,8 @@ enum Fixture: String {
 
     /// The mockup's strip: the 500 pt desk less its 24 pt margins and the strip's border.
     static let narrowHeight: CGFloat = 448
+    /// Fixtures that put a sheet or window over ui-03.
+    var isSheet: Bool { [.pasteConfirm, .setupPicker, .setupChange, .settings].contains(self) }
 
     /// The palette mockup's input: the `log` chip and "push".
     var paletteQuery: String? { self == .palette ? "log push" : self == .codexLog ? "log " : nil }
@@ -85,7 +93,7 @@ enum Fixture: String {
         }
         guard rows.count == tabs.count else { return SidebarSnapshot(groups: []) }
         switch self {
-        case .iconOnly, .zen, .pasteConfirm, .narrowList:
+        case .iconOnly, .zen, .pasteConfirm, .narrowList, .setupPicker, .setupChange, .settings:
             return SidebarSnapshot(groups: [SidebarGroup(label: "", rows: rows)])
         case .groupedFlat, .palette, .suspicious, .codex, .codexLog:
             return SidebarSnapshot(groups: [
