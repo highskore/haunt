@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard ghostty.readiness == .ready else {
-            FileHandle.standardError.write("ghostty app not ready\n".data(using: .utf8)!)
+            FileHandle.standardError.write(Data("ghostty app not ready\n".utf8))
             NSApp.terminate(nil)
             return
         }
@@ -73,7 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                     NSApp.target(forAction: sel, to: nil, from: item).map { String(describing: type(of: $0)) } ?? "nil"
                 }
                 let line = "menu: \(item.title) -> \(who(action)); toggleSidebar: -> \(who(Selector(("toggleSidebar:"))))\n"
-                FileHandle.standardError.write(line.data(using: .utf8)!)
+                FileHandle.standardError.write(Data(line.utf8))
             }
         }
         #endif
