@@ -54,7 +54,7 @@ claude plugin marketplace add ../haunt-plugins/haunt-claude
 claude plugin install haunt@haunt
 ```
 
-The adapter is the haunt-claude repo, cloned next to this one as `../haunt-plugins/haunt-claude`. `make-app.sh` also bundles a copy into `haunt.app/Contents/Resources/adapters/claude`; set `HAUNT_CLAUDE_ADAPTER` to use a checkout somewhere else. Or try it without installing: `claude --plugin-dir ../haunt-plugins/haunt-claude`. Needs `jq` 1.6+ and `nc`, both on macOS by default.
+The adapter is the haunt-claude repo, cloned next to this one as `../haunt-plugins/haunt-claude`. `make-app.sh` also bundles a copy into `haunt.app/Contents/Resources/adapters/claude`: the commit `macos/adapters.lock` pins, taken with `git archive`. It refuses a checkout with uncommitted changes or at another commit; bump the pin after pushing the adapter, or set `HAUNT_ADAPTER_UNPINNED=1` to bundle the working tree while iterating. Set `HAUNT_CLAUDE_ADAPTER` to use a checkout somewhere else. Or try it without installing: `claude --plugin-dir ../haunt-plugins/haunt-claude`. Needs `jq` 1.6+ and `nc`, both on macOS by default.
 
 Optional: `shell/install.sh` installs a matching Claude Code theme and prints the zsh lines for a minimal prompt inside Haunt. It never edits your `~/.zshrc`.
 
@@ -86,8 +86,10 @@ Each plugin lives in its own repo. `haunt plugin new my-plugin [--dir <path>] [-
 ## Tests
 
 ```sh
-cargo test --workspace                   # hook_e2e skips if the adapter isn't checked out
+cargo test --workspace                   # the adapter e2e tests skip if an adapter or jq is missing
+HAUNT_REQUIRE_ADAPTERS=1 cargo test --workspace   # ...and fail instead
 ../haunt-plugins/haunt-claude/tests/run.sh
+../haunt-plugins/haunt-codex/tests/run.sh
 macos/fidelity.sh        # pixel check against the mockups
 ```
 

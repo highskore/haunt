@@ -52,13 +52,13 @@ impl Decision {
     fn well_formed(&self) -> bool {
         !self.surface_id.is_empty()
             && !self.tool.is_empty()
-            && !self.agent.id().is_empty()
+            && crate::event::valid_agent_id(self.agent.id())
             && self.command.as_deref().is_none_or(|c| self.tool == "Bash" && crate::event::visible(c) == self.preview)
     }
 
     fn matches(&self, needle: &str) -> bool {
         let outcome = serde_json::to_string(&self.outcome).unwrap_or_default();
-        [self.tool.as_str(), &self.preview, self.cwd.as_deref().unwrap_or(""), &outcome, &self.surface_id]
+        [self.tool.as_str(), &self.preview, self.cwd.as_deref().unwrap_or(""), &outcome, &self.surface_id, self.agent.id()]
             .iter()
             .any(|h| h.to_lowercase().contains(needle))
     }
@@ -127,7 +127,7 @@ impl DecisionLog {
         self.entries.push_back(d);
     }
 
-    /// Newest first; `query` is a case-insensitive substring of tool, preview, cwd, outcome or surface.
+    /// Newest first; `query` is a case-insensitive substring of tool, preview, cwd, outcome, surface or agent.
     pub fn query(&self, query: &str, limit: usize) -> Vec<Decision> {
         let needle = query.trim().to_lowercase();
         self.entries.iter().rev().filter(|d| needle.is_empty() || d.matches(&needle)).take(limit).cloned().collect()
@@ -194,6 +194,7 @@ mod tests {
             r#"{"at_ms":1,"surface_id":"s","tool":"Edit","preview":"Edit /a","command":"ls","cwd":"/p","outcome":"allowed_in_haunt"}"#,
             r#"{"at_ms":1,"surface_id":"","tool":"Bash","preview":"ls","command":"ls","cwd":"/p","outcome":"allowed_in_haunt"}"#,
             r#"{"at_ms":1,"surface_id":"s","tool":"Bash","preview":"ls","cwd":"/p"}"#,
+            r#"{"at_ms":1,"surface_id":"s","tool":"Bash","preview":"ls","cwd":"/p","outcome":"superseded","agent":"Bad Id"}"#,
         ];
         fs::write(d.join(FILE_NAME), format!("{ok}
 {}
@@ -234,10 +235,12 @@ mod tests {
         log.record(decision("git push", Outcome::AllowedInHaunt));
         log.record(decision("rm -rf build", Outcome::DeniedInHaunt));
         log.record(decision("git status", Outcome::AnsweredInTerminal));
+        log.record(Decision { agent: Agent::Codex, ..decision("cargo test", Outcome::AllowedInHaunt) });
         let q = |s: &str, n| log.query(s, n).into_iter().map(|x| x.preview).collect::<Vec<_>>();
         assert_eq!(q("GIT", 10), ["git status", "git push"]);
         assert_eq!(q("git", 1), ["git status"]);
         assert_eq!(q("denied", 10), ["rm -rf build"]);
-        assert_eq!(q("", 10).len(), 3);
+        assert_eq!(q("", 10).len(), 4);
+        assert_eq!(q("CODEX", 10), ["cargo test"]);
     }
 }

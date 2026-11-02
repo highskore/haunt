@@ -37,6 +37,11 @@ impl Agent {
     }
 }
 
+/// The spec's agent id: 1 to 32 of `a-z`, `0-9` and `-`.
+pub fn valid_agent_id(id: &str) -> bool {
+    (1..=32).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 impl From<&str> for Agent {
     fn from(id: &str) -> Self {
         match id {
@@ -126,6 +131,8 @@ pub enum ParseError {
     UnsupportedVersion { version: i64 },
     #[error("missing field {field}")]
     MissingField { field: String },
+    #[error("invalid agent id")]
+    InvalidAgent,
 }
 
 /// Parses one notification; `title` and `body` are as libghostty reports them.
@@ -244,8 +251,14 @@ fn parse_value(v: &Value) -> Result<AgentEvent, ParseError> {
         "stop" => EventKind::Stop,
         _ => EventKind::Unknown { event },
     };
+    // Checked raw: `clean` could turn a disallowed id into an allowed one.
+    let agent = match v.get("agent") {
+        None => "claude".to_owned(),
+        Some(Value::String(a)) if valid_agent_id(a) => a.clone(),
+        Some(_) => return Err(ParseError::InvalidAgent),
+    };
     Ok(AgentEvent {
-        agent: s("agent").unwrap_or_else(|| "claude".to_owned()),
+        agent,
         session_id: s("session_id"),
         cwd: s("cwd"),
         agent_id: s("agent_id"),
@@ -370,6 +383,18 @@ mod tests {
             assert_eq!(Agent::from(a.id()), a);
         }
         assert_eq!(parse_body(r#"{"v":1,"event":"stop"}"#).unwrap().agent, "claude", "the legacy hook sends none");
+    }
+
+    #[test]
+    fn agent_ids_outside_the_spec_are_rejected() {
+        let agent = |a: &str| parse_body(&format!(r#"{{"v":1,"agent":{a},"event":"stop"}}"#)).map(|e| e.agent);
+        for ok in ["claude", "codex", "my-agent2", &"a".repeat(32)] {
+            assert_eq!(agent(&format!("\"{ok}\"")), Ok(ok.to_owned()));
+        }
+        let long = format!("\"{}\"", "a".repeat(33));
+        for bad in ["\"\"", "\"Claude\"", "\"co dex\"", "\"a_b\"", "\"é\"", "\"co\\u200bdex\"", "\"codex\\u0007\"", &long, "1", "null", "[\"codex\"]"] {
+            assert_eq!(agent(bad), Err(ParseError::InvalidAgent), "{bad}");
+        }
     }
 
     /// Variants without a name of their own in the parser are listed here, so a new one won't compile

@@ -522,6 +522,12 @@ mod tests {
         assert_eq!(c.answer_permission(&env.surface_id, old.key, true), None);
         let new = pending(&c).expect("the new request is still live");
         assert_eq!(new.preview, "rm -rf build");
+        assert!(new.suspicious, "the git push prompt may still be on screen ahead of it");
+        assert_eq!(c.answer_permission(&env.surface_id, new.key, false), None);
+        let ran = r#""event":"tool_ran","tool_name":"Bash","tool_input":{"command":"git push"}"#;
+        c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), ran), Instant::now()));
+        let new = pending(&c).expect("the new request is still live");
+        assert!(!new.suspicious, "the only one left");
         assert_eq!(c.answer_permission("other", new.key, true), None, "a key is only good for its surface");
         assert_eq!(c.answer_permission(&env.surface_id, new.key, false), Some(b"\x1b".to_vec()));
         let log: Vec<_> = c.decisions("", 10).into_iter().map(|d| (d.preview, d.outcome)).collect();
