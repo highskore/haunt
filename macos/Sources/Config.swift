@@ -26,9 +26,10 @@ final class HauntConfig {
     @discardableResult
     func reload(useUserConfig: Bool = true) -> (ghostty: Bool, keys: Bool) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let toml = useUserConfig ? ((try? String(contentsOf: tomlURL, encoding: .utf8)).map(TOML.parse) ?? [:]) : [:]
+        let text = useUserConfig ? (try? String(contentsOf: tomlURL, encoding: .utf8)) ?? "" : ""
+        let toml = TOML.parse(text)
         var problems: [String] = []
-        let newKeys = KeyMap(table: toml["keys"] ?? [:]) { problems.append($0) }
+        let newKeys = KeyMap(table: toml["keys"] ?? [:], order: TOML.keyOrder(text, table: "keys")) { problems.append($0) }
         problems += Self.refusedGhostty(toml["ghostty"] ?? [:]).map { "[ghostty] \($0.key) = \($0.value): not allowed, ignored" }
         // One save can fire several events; each problem is logged once per edit.
         if problems != lastKeyProblems {
@@ -37,10 +38,10 @@ final class HauntConfig {
         }
         let keysChanged = newKeys != keys
         keys = newKeys
-        let text = Self.ghosttyConfig(toml, defaultSize: useUserConfig ? Self.defaultFontSize : Tok.Size.paneFont, keys: keys)
-        guard text != lastWritten else { return (false, keysChanged) }
-        try? text.write(to: ghosttyURL, atomically: true, encoding: .utf8)
-        lastWritten = text
+        let generated = Self.ghosttyConfig(toml, defaultSize: useUserConfig ? Self.defaultFontSize : Tok.Size.paneFont, keys: keys)
+        guard generated != lastWritten else { return (false, keysChanged) }
+        try? generated.write(to: ghosttyURL, atomically: true, encoding: .utf8)
+        lastWritten = generated
         return (true, keysChanged)
     }
 
@@ -160,6 +161,18 @@ enum TOML {
 
     static func parse(_ text: String) -> [String: [String: Value]] {
         var out: [String: [String: Value]] = [:]
+        entries(text) { table, key, value in out[table, default: [:]][key] = parseValue(value) }
+        return out
+    }
+
+    /// The keys of `table` in the order they are written.
+    static func keyOrder(_ text: String, table name: String) -> [String] {
+        var keys: [String] = []
+        entries(text) { table, key, _ in if table == name { keys.append(key) } }
+        return keys
+    }
+
+    private static func entries(_ text: String, _ body: (String, String, String) -> Void) {
         var table = ""
         // By Character, "\r\n" is one newline, which splitting on "\n" alone would never find.
         for raw in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
@@ -171,10 +184,8 @@ enum TOML {
             }
             guard let eq = line.firstIndex(of: "=") else { continue }
             let key = unquote(line[..<eq].trimmingCharacters(in: .whitespaces))
-            let value = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
-            out[table, default: [:]][key] = parseValue(value)
+            body(table, key, line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces))
         }
-        return out
     }
 
     private static func parseValue(_ v: String) -> Value {

@@ -66,6 +66,20 @@ check(conf.components(separatedBy: "keybind = super+t=unbind").count == 2, "unbi
 let custom = HauntConfig.ghosttyConfig([:], defaultSize: 11, keys: keys)
 check(custom.contains("keybind = super+p=unbind\n"), "configured chord unbound")
 
+// Shifted digits and punctuation match as the shifted character; delete is forward delete.
+check(Shortcut.parse("cmd+shift+1")?.keyEquivalent == "!", "cmd+shift+1 matches as !")
+check(Shortcut.parse("cmd+shift+comma")?.keyEquivalent == "<", "cmd+shift+comma matches as <")
+check(Shortcut.parse("cmd+delete")?.keyEquivalent == String(UnicodeScalar(UInt16(NSDeleteFunctionKey))!), "delete is forward delete")
+check(Shortcut.parse("cmd+backspace")?.keyEquivalent == "\u{8}", "backspace")
+
+// Of two entries with one chord, the one written first wins, whatever the names.
+let clashText = "[keys]\nsettings = \"cmd+j\"\nclose_tab = \"cmd+j\"\n"
+var clashLogs: [String] = []
+let clash = KeyMap(table: TOML.parse(clashText)["keys"] ?? [:], order: TOML.keyOrder(clashText, table: "keys")) { clashLogs.append($0) }
+check(clash[.settings] == Shortcut.parse("cmd+j"), "first written wins")
+check(clash[.closeTab] == Shortcut.parse("cmd+w"), "later clash keeps its default")
+check(TOML.keyOrder(clashText, table: "keys") == ["settings", "close_tab"], "key order")
+
 // CRLF files parse like LF ones.
 let crlf = TOML.parse("font_size = 13\r\n[keys]\r\npalette = \"cmd+p\"\r\n")
 check(crlf[""]?["font_size"] == .scalar("13"), "CRLF top-level value")
