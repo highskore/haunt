@@ -67,6 +67,7 @@ final class MockCore: CoreAPI {
     func answerPermission(surfaceId: String, requestKey: UInt64, allow: Bool) -> Data? { nil }
 
     func onUserInput(surfaceId: String) {}
+    func hasUnresolved(surfaceId: String) -> Bool { false }
 
     func reviewTurn(surfaceId: String) -> ReviewTurn? { fixture?.reviewTurn }
 

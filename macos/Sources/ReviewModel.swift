@@ -252,11 +252,12 @@ enum SendBack {
     /// Why the prompt can't go to `row`'s tab now, or nil. Only the tab being reviewed, still selected,
     /// running an agent, and with no permission request live (`needsYou` alone can be cleared by an
     /// unverified event; a pending request only by a verified one or by Haunt).
-    static func refusal(surfaceId: String, row: Row?, selected: String?) -> String? {
+    /// `unresolved` is the core's `hasUnresolved`, which only verified events clear.
+    static func refusal(surfaceId: String, row: Row?, selected: String?, unresolved: Bool) -> String? {
         guard let row else { return "The reviewed tab is gone." }
         if selected != surfaceId { return "The reviewed tab isn't selected any more. Select it, then send." }
         if row.kind == .shell { return "This tab isn't running an agent, so there's nothing to send the prompt to." }
-        if row.needsYou || row.pending != nil {
+        if unresolved {
             return "The agent is waiting on a prompt in the terminal. Answer it there first, then send."
         }
         return nil

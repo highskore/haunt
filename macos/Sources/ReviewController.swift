@@ -230,7 +230,8 @@ final class ReviewCoordinator {
         case let .blocked(why): refusal = why
         case let .ok(t):
             clean = t
-            refusal = SendBack.refusal(surfaceId: id, row: row, selected: host.reviewSelection?.surfaceId)
+            refusal = SendBack.refusal(surfaceId: id, row: row, selected: host.reviewSelection?.surfaceId,
+                                       unresolved: host.reviewCore.hasUnresolved(surfaceId: id))
         }
         if let refusal {
             let alert = NSAlert()

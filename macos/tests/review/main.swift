@@ -159,18 +159,19 @@ check(SendBack.check(draft + "\n\n") == .ok(SendBack.oneLine(draft)), "trailing 
 if case let .ok(t) = SendBack.check(draft) { check(!t.contains("\n") && t.hasPrefix("Two changes from review: 1. HauntNotifier.swift:64 Keep"), "one line \(t)") }
 check(SendBack.check("a\r\nb") == .ok("a b"), "CRLF")
 
-func row(_ id: String, kind: RowKind = .claude, needsYou: Bool = false, pending: PendingRequest? = nil) -> Row {
+func row(_ id: String, kind: RowKind = .claude, needsYou: Bool = false) -> Row {
     Row(surfaceId: id, kind: kind, name: id, meta: "", statusText: "", needsYou: needsYou, progress: nil, subagents: [],
-        selected: true, pending: pending)
+        selected: true, pending: nil)
 }
-check(SendBack.refusal(surfaceId: "a", row: row("a"), selected: "a") == nil, "the reviewed agent tab, selected and idle")
-check(SendBack.refusal(surfaceId: "a", row: nil, selected: "a") != nil, "tab gone")
-check(SendBack.refusal(surfaceId: "a", row: row("a"), selected: "b") != nil, "another tab selected")
-check(SendBack.refusal(surfaceId: "a", row: row("a", kind: .shell), selected: "a") != nil, "shell tab")
-check(SendBack.refusal(surfaceId: "a", row: row("a", needsYou: true), selected: "a") != nil, "needs you")
-let live = PendingRequest(key: 1, tool: "Bash", preview: "rm", suspicious: false)
-check(SendBack.refusal(surfaceId: "a", row: row("a", pending: live), selected: "a") != nil,
-      "a live request refuses even when an unverified event cleared needsYou")
+func refusal(_ r: Row?, selected: String = "a", unresolved: Bool = false) -> String? {
+    SendBack.refusal(surfaceId: "a", row: r, selected: selected, unresolved: unresolved)
+}
+check(refusal(row("a")) == nil, "the reviewed agent tab, selected, nothing unresolved")
+check(refusal(nil) != nil, "tab gone")
+check(refusal(row("a"), selected: "b") != nil, "another tab selected")
+check(refusal(row("a", kind: .shell)) != nil, "shell tab")
+check(refusal(row("a"), unresolved: true) != nil, "an unresolved request refuses even when an unverified event cleared needsYou")
+check(refusal(row("a", needsYou: true)) == nil, "needsYou alone, which unverified events set and clear, doesn't decide")
 check(SendBack.check("  \n") == .blocked("The prompt is empty."), "empty")
 if case .blocked = SendBack.check("ok\u{1B}[201~rm -rf ~") {} else { check(false, "paste end blocks") }
 if case .blocked = SendBack.check("x\u{1B}[31m") {} else { check(false, "escape blocks") }
@@ -459,16 +460,40 @@ check(big?.truncated == true && big?.data.count == 1000, "output cut at the cap"
 check(GitRunner.spawn("/bin/sh", ["-c", "pwd; echo $HOME"], cwd: "/tmp", env: ["HOME": "/h"], timeout: 5, maxBytes: 100)?.text
       == "/private/tmp\n/h\n", "cwd and env reach the child")
 
-// Only a root-owned git in a root-owned folder is used, links resolved.
+// A git is used only if it and every folder above it belong to root or the user, writable by no one else
+// but admin or wheel; links resolved.
 check(GitRunner.trusted("/usr/bin/git") == "/usr/bin/git", "/usr/bin/git is trusted")
-let mine = FileManager.default.temporaryDirectory.appendingPathComponent("haunt-fake-git-\(getpid())").path
-FileManager.default.createFile(atPath: mine, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
-check(GitRunner.trusted(mine) == nil, "a git the user owns isn't")
-let link = mine + "-link"
+func real(_ p: String) -> String { let c = realpath(p, nil)!; defer { free(c) }; return String(cString: c) }
+let tmp = real(NSTemporaryDirectory())
+let gdir = tmp + "/haunt-git-\(getpid())", fakeGit = gdir + "/git"
+try! FileManager.default.createDirectory(atPath: gdir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+FileManager.default.createFile(atPath: fakeGit, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
+check(GitRunner.trusted(fakeGit) == fakeGit, "a git the user owns, in folders only the user can write, is trusted")
+chmod(fakeGit, 0o757)
+check(GitRunner.trusted(fakeGit) == nil, "a world-writable git isn't")
+chmod(fakeGit, 0o775)
+chown(fakeGit, getuid(), 20)
+check(GitRunner.trusted(fakeGit) == nil, "a git staff can write isn't")
+chown(fakeGit, getuid(), 80)
+check(GitRunner.trusted(fakeGit) == fakeGit, "a git admin can write is, like /opt/homebrew/bin")
+chmod(fakeGit, 0o755)
+chmod(gdir, 0o775)
+chown(gdir, getuid(), 20)
+check(GitRunner.trusted(fakeGit) == nil, "a folder staff can write isn't")
+chmod(gdir, 0o755)
+let inTmp = "/private/tmp/haunt-git-\(getpid())"
+FileManager.default.createFile(atPath: inTmp, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
+check(GitRunner.trusted(inTmp) == nil, "a git in a world-writable folder isn't")
+try? FileManager.default.removeItem(atPath: inTmp)
+let link = gdir + "/link"
 try? FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: "/usr/bin/git")
 check(GitRunner.trusted(link) == "/usr/bin/git", "a link is judged, and run, by its target")
-try? FileManager.default.removeItem(atPath: mine)
-try? FileManager.default.removeItem(atPath: link)
+try? FileManager.default.removeItem(atPath: gdir)
+check(GitRunner.trusted("/sbin/../usr/sbin/nonexistent-git") == nil, "a missing path is skipped")
+// This Mac's Homebrew: /usr/local/bin is the user's and admin-group, the Cellar admin-writable.
+for p in ["/opt/homebrew/bin/git", "/usr/local/bin/git"] where FileManager.default.fileExists(atPath: p) {
+    check(GitRunner.trusted(p) == real(p), "Homebrew's git as installed here is trusted: \(p) -> \(real(p))")
+}
 if let g = appGit { check(GitRunner.trusted(g) == g || g == "/usr/bin/git", "the app's own pick is trusted: \(g)") }
 
 // A submodule with its own filter: the parent's config is clean, so only never looking inside keeps it from running.
@@ -494,6 +519,13 @@ try? FileManager.default.removeItem(atPath: repo + "/SUBPWNED")
 check(GitRunner.definesDrivers(cwd: repo) == false, "the parent's own config is clean")
 if case .failure = ReviewLoader.load(cwd: repo, headAtStart: nil) { check(false, "load with a submodule failed") }
 check(!exists("SUBPWNED"), "no submodule filter ran")
+// Moving the submodule's commit is a change the agent made, so it must still be listed.
+sh(["git", "-c", "filter.evil.clean=cat", "commit", "-qam", "moved"], repo + "/sub")
+try! "c\n".write(toFile: repo + "/sub/f", atomically: true, encoding: .utf8)
+if case let .success(d) = ReviewLoader.load(cwd: repo, headAtStart: nil) {
+    check(d.files.map(\.path) == ["sub"], "a moved submodule commit is listed: \(d.files.map(\.path))")
+} else { check(false, "load after moving the submodule failed") }
+check(!exists("SUBPWNED"), "no submodule filter ran with the gitlink moved")
 try? FileManager.default.removeItem(atPath: repo)
 try? FileManager.default.removeItem(atPath: inner)
 

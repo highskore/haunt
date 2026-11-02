@@ -14,6 +14,7 @@ protocol CoreAPI: AnyObject {
     func setListener(listener: CoreListener)
     func answerPermission(surfaceId: String, requestKey: UInt64, allow: Bool) -> Data?
     func onUserInput(surfaceId: String)
+    func hasUnresolved(surfaceId: String) -> Bool
     func reviewTurn(surfaceId: String) -> ReviewTurn?
     func gatePluginRequest(request: HostRequest) -> PtyWrite?
 }

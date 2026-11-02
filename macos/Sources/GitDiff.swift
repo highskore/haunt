@@ -286,19 +286,24 @@ enum GitRunner {
         return tools.contains(where: fm.isExecutableFile(atPath:)) ? "/usr/bin/git" : nil
     }
 
-    /// `path` with links resolved, if root owns it and its folder and no one else can write to either;
-    /// a git anyone else can replace would run with the user's rights on every review.
+    /// `path` with links resolved, if it and every folder up to / belong to root or the user and only they,
+    /// admin or wheel (who can sudo anyway) can write to them; a git anyone else can replace would run on every review.
     static func trusted(_ path: String) -> String? {
         guard let c = realpath(path, nil) else { return nil }
         let real = String(cString: c)
         free(c)
-        func rootOnly(_ p: String) -> Bool {
+        func safe(_ p: String) -> Bool {
             var st = stat()
-            return stat(p, &st) == 0 && st.st_uid == 0 && st.st_mode & (S_IWGRP | S_IWOTH) == 0 && access(p, W_OK) != 0
+            guard lstat(p, &st) == 0, st.st_uid == 0 || st.st_uid == getuid(), st.st_mode & S_IWOTH == 0 else { return false }
+            return st.st_mode & S_IWGRP == 0 || st.st_gid == 0 || st.st_gid == 80
         }
         var st = stat()
-        guard stat(real, &st) == 0, st.st_mode & S_IFMT == S_IFREG, access(real, X_OK) == 0,
-              rootOnly(real), rootOnly((real as NSString).deletingLastPathComponent) else { return nil }
+        guard stat(real, &st) == 0, st.st_mode & S_IFMT == S_IFREG, access(real, X_OK) == 0, safe(real) else { return nil }
+        var dir = real
+        repeat {
+            dir = (dir as NSString).deletingLastPathComponent
+            if !safe(dir) { return nil }
+        } while dir != "/"
         return real
     }
 
