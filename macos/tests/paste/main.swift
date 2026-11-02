@@ -27,5 +27,16 @@ check(end.text == "ls⟦^[[201~ bracketed paste end⟧rm -rf ~⏎\n", "paste end
 check(end.lines == 1, "one line")
 check(PastePreview("\u{1B}[200~").text == "^[[200~", "a paste start is just ESC")
 
+// What Haunt holds back itself; plain text, newlines and tabs stay with Ghostty.
+check(!PastePreview("echo a\necho b\n").needsConfirmation, "multi-line plain text left to Ghostty")
+check(!PastePreview("a\tb").needsConfirmation, "tab left to Ghostty")
+check(!PastePreview("héllo wörld 日本").needsConfirmation, "non-ASCII text left to Ghostty")
+check(PastePreview("ls\u{1B}[201~rm -rf ~\n").needsConfirmation, "bracketed paste end held")
+check(PastePreview("x\u{1B}[31m").needsConfirmation, "any escape held")
+check(PastePreview("a\u{7}b").needsConfirmation, "C0 control held")
+check(PastePreview("a\u{9B}b").needsConfirmation, "C1 control held")
+check(PastePreview("ab\u{202E}cd").needsConfirmation, "bidi override held")
+check(PastePreview("ab\u{200B}cd").needsConfirmation, "zero-width held")
+
 if failures > 0 { print("paste: \(failures) failed"); exit(1) }
 print("paste: all passed")

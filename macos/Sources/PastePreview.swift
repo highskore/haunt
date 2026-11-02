@@ -8,6 +8,11 @@ struct PastePreview: Equatable {
     var hasPasteEnd: Bool
     var hasControls: Bool
 
+    /// Ghostty treats a bracketed paste as safe however it ends, so Haunt asks itself before any paste
+    /// that carries an escape, another control or a hidden character. Plain text, newlines included,
+    /// is left to Ghostty's own paste protection.
+    var needsConfirmation: Bool { hasControls }
+
     static let pasteEnd = "\u{1B}[201~"
 
     init(_ s: String) {

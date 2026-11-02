@@ -16,6 +16,8 @@ enum Fixture: String {
     case codexLog = "codex-log"
     /// No mockup: ui-03 with the paste-confirmation sheet up.
     case pasteConfirm = "paste-confirm"
+    /// No mockup: a selection paste carrying a bracketed paste end, held by Haunt before Ghostty sees it.
+    case pasteRisky = "paste-risky"
 
     static var current: Fixture? {
         ProcessInfo.processInfo.environment["HAUNT_FIXTURE"].flatMap(Fixture.init(rawValue:))
@@ -25,7 +27,7 @@ enum Fixture: String {
     static let windowSize = NSSize(width: 900, height: Tok.Size.windowH)
 
     var titleAccessory: TitleBarView.Accessory {
-        self == .iconOnly || self == .zen || self == .pasteConfirm ? .icons : .kbd
+        self == .iconOnly || self == .zen || self == .pasteConfirm || self == .pasteRisky ? .icons : .kbd
     }
 
     var sidebarHidden: Bool { self == .zen }
@@ -64,7 +66,7 @@ enum Fixture: String {
         }
         guard rows.count == Self.tabs.count else { return SidebarSnapshot(groups: []) }
         switch self {
-        case .iconOnly, .zen, .pasteConfirm:
+        case .iconOnly, .zen, .pasteConfirm, .pasteRisky:
             return SidebarSnapshot(groups: [SidebarGroup(label: "", rows: rows)])
         case .groupedFlat, .palette, .suspicious, .codex, .codexLog:
             return SidebarSnapshot(groups: [
