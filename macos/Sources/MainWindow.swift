@@ -183,6 +183,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let root = RootView()
     var tabs: [Tab] { store.tabs }
     private var observers: [NSObjectProtocol] = []
+    /// The core's branch lookup can stall on a dead mount the shell's cwd points at; serial keeps each surface's updates in order.
+    private let infoQueue = DispatchQueue(label: "haunt.surface-info", qos: .utility)
     /// One-shot, for when a running subagent's elapsed time next reads differently.
     private var ticker: Timer?
     /// The version of the snapshot on screen; 0 is older than any the core makes.
@@ -291,9 +293,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let tab = Tab(env: env, view: view, size: root.pane.bounds.size)
         tab.subscriptions.append(view.$title.combineLatest(view.$pwd)
             .debounce(for: .milliseconds(50), scheduler: DispatchQueue.main)
-            .sink { [weak self] title, pwd in
+            .sink { [core, infoQueue] title, pwd in
                 // The core finds the branch itself.
-                self?.core.setSurfaceInfo(surfaceId: env.surfaceId, title: title, cwd: pwd ?? dir, gitBranch: nil)
+                infoQueue.async { core.setSurfaceInfo(surfaceId: env.surfaceId, title: title, cwd: pwd ?? dir, gitBranch: nil) }
             })
         store.add(tab)
         tab.host.frame = root.pane.bounds

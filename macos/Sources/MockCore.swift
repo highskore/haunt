@@ -38,7 +38,12 @@ final class MockCore: CoreAPI {
         notify()
     }
 
+    /// Called off the main queue, as the real core is; the mock's state lives on main.
     func setSurfaceInfo(surfaceId: String, title: String, cwd: String, gitBranch: String?) {
+        DispatchQueue.main.async { self.applySurfaceInfo(surfaceId: surfaceId, title: title, cwd: cwd, gitBranch: gitBranch) }
+    }
+
+    private func applySurfaceInfo(surfaceId: String, title: String, cwd: String, gitBranch: String?) {
         guard let i = surfaces.firstIndex(where: { $0.id == surfaceId }) else { return }
         let next = Surface(id: surfaceId, title: title, cwd: cwd, branch: gitBranch)
         guard surfaces[i].title != next.title || surfaces[i].cwd != next.cwd || surfaces[i].branch != next.branch else { return }
