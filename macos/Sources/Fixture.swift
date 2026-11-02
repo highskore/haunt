@@ -25,6 +25,12 @@ enum Fixture: String {
     case setupChange = "setup-change"
     /// No mockup: ui-03 with the Settings window open, Claude Code set up.
     case settings = "settings"
+    /// Review screen versions 01, 06 and 09 (haunt-review) on that mockup's turn; see ReviewFixture.swift.
+    case reviewFiles = "rv-01-files"
+    case reviewSend = "rv-06-comment"
+    case reviewOverview = "rv-09-overview"
+    /// Review inbox, version 11 (haunt-review-2).
+    case reviewInbox = "rv-11-inbox"
     /// No mockup: ui-06 arranged by the tabs plugin, colours drawn as dots.
     case tabsDot = "tabs-dot"
     /// No mockup: the same with tinted rows.
@@ -37,11 +43,23 @@ enum Fixture: String {
     }
 
     var titleAccessory: TitleBarView.Accessory {
-        self == .iconOnly || self == .zen || isSheet || self == .pasteRisky ? .icons : .kbd
+        if self == .reviewFiles { return .empty }
+        return self == .iconOnly || self == .zen || self == .reviewSend || isSheet || self == .pasteRisky ? .icons : .kbd
     }
 
     /// Mockup 03 shows ⌕ + ⚙; other fixtures keep the default.
     var titlebarButtons: [TitlebarButton] { self == .iconOnly ? [.search, .newTab, .settings] : TitlebarButton.defaults }
+
+    var isReview: Bool { [.reviewFiles, .reviewSend, .reviewOverview, .reviewInbox].contains(self) }
+
+    /// The review mockups' windows: 1100 × 600 (640 for the second set) less the `.win`'s 1 px border.
+    var size: NSSize? {
+        if self == .reviewInbox { return NSSize(width: Tok.Size.reviewWindowW, height: Tok.Size.inboxWindowH - 2) }
+        return isReview ? NSSize(width: Tok.Size.reviewWindowW, height: Tok.Size.reviewWindowH - 2) : nil
+    }
+
+    /// Version 06 draws its flat sidebar 230 pt wide; the app's is 250 everywhere else.
+    var sidebarWidth: CGFloat { self == .reviewSend ? Tok.Size.reviewSidebarSendW : Tok.Size.sidebarW }
 
     var sidebarHidden: Bool { self == .zen }
 
@@ -88,7 +106,23 @@ enum Fixture: String {
         uiTabs[2],
     ]
 
-    private var tabs: [Tab] { self == .narrowList ? Self.agentTabs : Self.uiTabs }
+    // haunt-review/index.html's TABS, the reviewed tab first so it starts selected.
+    private static let reviewTabs: [Tab] = [
+        Tab(kind: .claude, name: "haunt", meta: "notify-quiet · 5 files to review", status: "review", needs: true, progress: nil, subs: []),
+        uiTabs[1],
+        Tab(kind: .codex, name: "haunt-ui2", meta: "sidebar-rail · Running tests", status: "3/5", needs: false,
+            progress: Progress(done: 3, total: 5), subs: []),
+        uiTabs[2],
+    ]
+
+    // haunt-review-2 version 11's agent branches, by the tab each runs in.
+    private static let inboxTabs: [Tab] = ["pawr", "codex-1", "main tab", "hooks", "ui"].map {
+        Tab(kind: $0 == "codex-1" ? .codex : .claude, name: $0, meta: "", status: "", needs: false, progress: nil, subs: [])
+    }
+
+    private var tabs: [Tab] {
+        self == .narrowList ? Self.agentTabs : self == .reviewInbox ? Self.inboxTabs : isReview ? Self.reviewTabs : Self.uiTabs
+    }
 
     var tabCount: Int { tabs.count }
 
@@ -104,8 +138,15 @@ enum Fixture: String {
         }
         guard rows.count == tabs.count else { return SidebarSnapshot(groups: [], colorStyle: .dot) }
         switch self {
-        case .iconOnly, .zen, .pasteConfirm, .pasteRisky, .narrowList, .setupPicker, .setupChange, .settings:
+        case .iconOnly, .zen, .pasteConfirm, .pasteRisky, .narrowList, .setupPicker, .setupChange, .settings, .reviewSend, .reviewInbox:
             return SidebarSnapshot(groups: [SidebarGroup(id: "tabs", label: "", rows: rows)], colorStyle: .dot)
+        case .reviewFiles, .reviewOverview:
+            return SidebarSnapshot(groups: [
+                SidebarGroup(id: "needs-you", label: "NEEDS YOU", rows: [rows[1]]),
+                SidebarGroup(id: "review", label: "REVIEW", rows: [rows[0]]),
+                SidebarGroup(id: "running", label: "RUNNING", rows: [rows[2]]),
+                SidebarGroup(id: "idle", label: "IDLE", rows: [rows[3]]),
+            ], colorStyle: .dot)
         case .groupedFlat, .palette, .suspicious, .codex, .codexLog:
             return SidebarSnapshot(groups: [
                 SidebarGroup(id: "needs-you", label: "NEEDS YOU", rows: [rows[1]]),
@@ -201,5 +242,8 @@ enum Fixture: Equatable {
     var sidebarHidden: Bool { switch self {} }
     var agentsView: Bool { switch self {} }
     var tabCount: Int { switch self {} }
+    var isReview: Bool { switch self {} }
+    var size: NSSize? { switch self {} }
+    var sidebarWidth: CGFloat { switch self {} }
 }
 #endif

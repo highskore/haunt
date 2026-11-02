@@ -17,6 +17,7 @@ final class PasteGuard {
     private let reveal: (HauntSurfaceView) -> Void
     private var queue: [Ask] = []
     private var shown: (ask: Ask, alert: NSAlert)?
+    private var showScheduled = false
 
     init(window: NSWindow?, reveal: @escaping (HauntSurfaceView) -> Void) {
         self.window = window
@@ -40,8 +41,11 @@ final class PasteGuard {
         showNext()
     }
 
-    /// A paste Haunt held itself; it is written, exactly as shown, only if the user says so.
+    /// A paste Haunt held itself; it is written, exactly as shown, only if the user says so. The same text
+    /// held again on the same surface while it waits is one ask.
     func hold(_ text: String, on view: HauntSurfaceView) {
+        let same = { (a: Ask) in a.view === view && a.request == nil && a.text == text }
+        if queue.contains(where: same) || shown.map({ same($0.ask) }) == true { return }
         enqueue(Ask(view: view, text: text, request: nil) { [weak view] ok in
             if ok { view?.sendPaste(text) }
         })
@@ -52,7 +56,18 @@ final class PasteGuard {
         showNext()
     }
 
+    /// Sheets begin on a later pass of the run loop: never inside another sheet's completion handler
+    /// (a finish can call back into `confirm`), nor while one just ended is still closing.
     private func showNext() {
+        guard !showScheduled else { return }
+        showScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            self?.showScheduled = false
+            self?.showNow()
+        }
+    }
+
+    private func showNow() {
         guard shown == nil, let window else { return }
         queue.removeAll { $0.view == nil }
         guard !queue.isEmpty else { return }
@@ -64,8 +79,7 @@ final class PasteGuard {
             guard let self, self.shown?.alert === alert else { return }
             self.shown = nil
             ask.finish(r == .alertSecondButtonReturn)
-            // The next sheet can't begin until this one has finished ending.
-            DispatchQueue.main.async { self.showNext() }
+            self.showNext()
         }
     }
 
@@ -77,7 +91,7 @@ final class PasteGuard {
         alert.messageText = preview.lines == 1 ? "Paste 1 line?" : "Paste \(preview.lines) lines?"
         var notes: [String] = []
         if preview.hasPasteEnd {
-            notes.append("It contains a bracketed paste end (^[[201~): the text after it would run as typed commands.")
+            notes.append("It contains a bracketed paste end (^[[201~), which tries to run the text after it as typed commands. Ghostty pastes its escape as a space, so it won't.")
         }
         if preview.hasControls { notes.append("Control characters are shown as ^[ and \\u{…}.") }
         alert.informativeText = notes.joined(separator: "\n")

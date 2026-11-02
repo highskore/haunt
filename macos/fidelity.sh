@@ -1,6 +1,6 @@
 #!/bin/bash
 # Launches build/haunt-fixtures.app on a mockup fixture, captures its window and runs design/check.
-# Usage: macos/fidelity.sh [screen...]   (default: ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list)
+# Usage: macos/fidelity.sh [screen...]   (default: ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox)
 # HAUNT_INACTIVE=1 captures the window unfocused; captures then get an -inactive suffix.
 set -uo pipefail
 cd "$(dirname "$0")"
@@ -21,7 +21,7 @@ if [ ! -d "$APP" ] || [ "$FBIN" -nt "$APP/Contents/MacOS/haunt" ] || [ "$ROOT/bu
   codesign --force --sign - "$APP" >/dev/null 2>&1
 fi
 status=0
-for screen in "${@:-ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list}"; do
+for screen in "${@:-ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox}"; do
   for s in $screen; do
     tag="$s${HAUNT_INACTIVE:+-inactive}"
     # The palette is its own window over the main one; the mockup's crop leaves out its 1 pt border.

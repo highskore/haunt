@@ -14,6 +14,7 @@ protocol CoreAPI: AnyObject {
     func setListener(listener: CoreListener)
     func answerPermission(surfaceId: String, requestKey: UInt64, allow: Bool) -> Data?
     func onUserInput(surfaceId: String)
+    func reviewTurn(surfaceId: String) -> ReviewTurn?
     func gatePluginRequest(request: HostRequest) -> PtyWrite?
 }
 
@@ -285,6 +286,46 @@ enum HostRequest: Equatable, Hashable {
 struct PtyWrite: Equatable, Hashable {
     var surfaceId: String
     var bytes: Data
+}
+
+enum CommandOutcome: Equatable, Hashable {
+    case running
+    case passed
+    case failed
+    case unknown
+}
+
+struct TurnCommand: Equatable, Hashable {
+    var command: String
+    var outcome: CommandOutcome
+}
+
+struct TurnTask: Equatable, Hashable {
+    var subject: String
+    var status: String
+}
+
+struct TurnSubagent: Equatable, Hashable {
+    var label: String
+    var toolCount: UInt64?
+    var durationMs: UInt64?
+}
+
+struct ReviewTurn: Equatable, Hashable {
+    var agent: Agent
+    var number: UInt32
+    var prompt: String?
+    var cwd: String?
+    var startedMs: UInt64?
+    var finishedMs: UInt64?
+    var failed: Bool
+    var headAtStart: String?
+    var toolCount: UInt32
+    var editCount: UInt32
+    var tasks: [TurnTask]
+    var commands: [TurnCommand]
+    var files: [String]
+    var subagents: [TurnSubagent]
 }
 
 protocol CoreListener: AnyObject, Sendable {

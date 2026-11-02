@@ -19,6 +19,32 @@ enum Tok {
         static let cardBorder: NSColor = NSColor(srgbRed: 31.0 / 255, green: 31.0 / 255, blue: 31.0 / 255, alpha: 1)
         /// color.claude
         static let claude: NSColor = NSColor(srgbRed: 217.0 / 255, green: 119.0 / 255, blue: 87.0 / 255, alpha: 1)
+        /// color.diff.add.bg
+        static let diffAddBg: NSColor = NSColor(srgbRed: 24.0 / 255, green: 24.0 / 255, blue: 24.0 / 255, alpha: 1)
+        /// color.diff.add.ink
+        static let diffAddInk: NSColor = NSColor(srgbRed: 244.0 / 255, green: 244.0 / 255, blue: 244.0 / 255, alpha: 1)
+        /// color.diff.add.mark
+        static let diffAddMark: NSColor = NSColor(srgbRed: 208.0 / 255, green: 208.0 / 255, blue: 208.0 / 255, alpha: 1)
+        /// color.diff.add.num
+        static let diffAddNum: NSColor = NSColor(srgbRed: 90.0 / 255, green: 90.0 / 255, blue: 90.0 / 255, alpha: 1)
+        /// color.diff.del.bg
+        static let diffDelBg: NSColor = NSColor(srgbRed: 14.0 / 255, green: 14.0 / 255, blue: 14.0 / 255, alpha: 1)
+        /// color.diff.del.ink
+        static let diffDelInk: NSColor = NSColor(srgbRed: 106.0 / 255, green: 106.0 / 255, blue: 106.0 / 255, alpha: 1)
+        /// color.diff.hunk.bg
+        static let diffHunkBg: NSColor = NSColor(srgbRed: 13.0 / 255, green: 13.0 / 255, blue: 13.0 / 255, alpha: 1)
+        /// color.diff.mark
+        static let diffMark: NSColor = NSColor(srgbRed: 68.0 / 255, green: 68.0 / 255, blue: 68.0 / 255, alpha: 1)
+        /// color.diff.num
+        static let diffNum: NSColor = NSColor(srgbRed: 62.0 / 255, green: 62.0 / 255, blue: 62.0 / 255, alpha: 1)
+        /// color.diff.rule
+        static let diffRule: NSColor = NSColor(srgbRed: 22.0 / 255, green: 22.0 / 255, blue: 22.0 / 255, alpha: 1)
+        /// color.diff.sel
+        static let diffSel: NSColor = NSColor(srgbRed: 58.0 / 255, green: 58.0 / 255, blue: 58.0 / 255, alpha: 1)
+        /// color.diff.sq.add
+        static let diffSqAdd: NSColor = NSColor(srgbRed: 216.0 / 255, green: 216.0 / 255, blue: 216.0 / 255, alpha: 1)
+        /// color.diff.text
+        static let diffText: NSColor = NSColor(srgbRed: 184.0 / 255, green: 184.0 / 255, blue: 184.0 / 255, alpha: 1)
         /// color.dot
         static let dot: NSColor = NSColor(srgbRed: 232.0 / 255, green: 232.0 / 255, blue: 232.0 / 255, alpha: 1)
         /// color.dot.hollow
@@ -35,6 +61,52 @@ enum Tok {
         static let iconBg: NSColor = NSColor(srgbRed: 27.0 / 255, green: 27.0 / 255, blue: 27.0 / 255, alpha: 1)
         /// color.icon.fg
         static let iconFg: NSColor = NSColor(srgbRed: 154.0 / 255, green: 154.0 / 255, blue: 154.0 / 255, alpha: 1)
+        /// color.inbox.blocks.del
+        static let inboxBlocksDel: NSColor = NSColor(srgbRed: 90.0 / 255, green: 90.0 / 255, blue: 90.0 / 255, alpha: 1)
+        /// color.inbox.btn.key.border
+        static let inboxBtnKeyBorder: NSColor = NSColor(srgbRed: 154.0 / 255, green: 154.0 / 255, blue: 154.0 / 255, alpha: 1)
+        /// color.inbox.ck.border
+        static let inboxCkBorder: NSColor = NSColor(srgbRed: 74.0 / 255, green: 74.0 / 255, blue: 74.0 / 255, alpha: 1)
+        /// color.inbox.diff.add.bar
+        static let inboxDiffAddBar: NSColor = NSColor(srgbRed: 154.0 / 255, green: 154.0 / 255, blue: 154.0 / 255, alpha: 1)
+        /// color.inbox.diff.add.bg
+        static let inboxDiffAddBg: NSColor = NSColor(srgbRed: 22.0 / 255, green: 22.0 / 255, blue: 22.0 / 255, alpha: 1)
+        /// color.inbox.diff.add.ink
+        static let inboxDiffAddInk: NSColor = NSColor(srgbRed: 242.0 / 255, green: 242.0 / 255, blue: 242.0 / 255, alpha: 1)
+        /// color.inbox.diff.add.mark
+        static let inboxDiffAddMark: NSColor = NSColor(srgbRed: 232.0 / 255, green: 232.0 / 255, blue: 232.0 / 255, alpha: 1)
+        /// color.inbox.diff.add.num
+        static let inboxDiffAddNum: NSColor = NSColor(srgbRed: 111.0 / 255, green: 111.0 / 255, blue: 111.0 / 255, alpha: 1)
+        /// color.inbox.diff.cm
+        static let inboxDiffCm: NSColor = NSColor(srgbRed: 95.0 / 255, green: 95.0 / 255, blue: 95.0 / 255, alpha: 1)
+        /// color.inbox.diff.del.bar
+        static let inboxDiffDelBar: NSColor = NSColor(srgbRed: 51.0 / 255, green: 51.0 / 255, blue: 51.0 / 255, alpha: 1)
+        /// color.inbox.diff.del.ink
+        static let inboxDiffDelInk: NSColor = NSColor(srgbRed: 112.0 / 255, green: 112.0 / 255, blue: 112.0 / 255, alpha: 1)
+        /// color.inbox.diff.del.mark
+        static let inboxDiffDelMark: NSColor = NSColor(srgbRed: 138.0 / 255, green: 138.0 / 255, blue: 138.0 / 255, alpha: 1)
+        /// color.inbox.diff.hunk.bg
+        static let inboxDiffHunkBg: NSColor = NSColor(srgbRed: 15.0 / 255, green: 15.0 / 255, blue: 15.0 / 255, alpha: 1)
+        /// color.inbox.diff.hunk.ink
+        static let inboxDiffHunkInk: NSColor = NSColor(srgbRed: 107.0 / 255, green: 107.0 / 255, blue: 107.0 / 255, alpha: 1)
+        /// color.inbox.diff.hunk.rule
+        static let inboxDiffHunkRule: NSColor = NSColor(srgbRed: 23.0 / 255, green: 23.0 / 255, blue: 23.0 / 255, alpha: 1)
+        /// color.inbox.diff.kw
+        static let inboxDiffKw: NSColor = NSColor(srgbRed: 232.0 / 255, green: 232.0 / 255, blue: 232.0 / 255, alpha: 1)
+        /// color.inbox.diff.num
+        static let inboxDiffNum: NSColor = NSColor(srgbRed: 74.0 / 255, green: 74.0 / 255, blue: 74.0 / 255, alpha: 1)
+        /// color.inbox.diff.str
+        static let inboxDiffStr: NSColor = NSColor(srgbRed: 189.0 / 255, green: 189.0 / 255, blue: 189.0 / 255, alpha: 1)
+        /// color.inbox.diff.text
+        static let inboxDiffText: NSColor = NSColor(srgbRed: 166.0 / 255, green: 166.0 / 255, blue: 166.0 / 255, alpha: 1)
+        /// color.inbox.fh.bg
+        static let inboxFhBg: NSColor = NSColor(srgbRed: 13.0 / 255, green: 13.0 / 255, blue: 13.0 / 255, alpha: 1)
+        /// color.inbox.file.ink
+        static let inboxFileInk: NSColor = NSColor(srgbRed: 189.0 / 255, green: 189.0 / 255, blue: 189.0 / 255, alpha: 1)
+        /// color.inbox.file.sel
+        static let inboxFileSel: NSColor = NSColor(srgbRed: 255.0 / 255, green: 255.0 / 255, blue: 255.0 / 255, alpha: 1)
+        /// color.inbox.prompt
+        static let inboxPrompt: NSColor = NSColor(srgbRed: 207.0 / 255, green: 207.0 / 255, blue: 207.0 / 255, alpha: 1)
         /// color.kbd.border
         static let kbdBorder: NSColor = NSColor(srgbRed: 44.0 / 255, green: 44.0 / 255, blue: 44.0 / 255, alpha: 1)
         /// color.lights
@@ -59,6 +131,20 @@ enum Tok {
         static let paletteRule: NSColor = NSColor(srgbRed: 42.0 / 255, green: 42.0 / 255, blue: 42.0 / 255, alpha: 1)
         /// color.palette.sel
         static let paletteSel: NSColor = NSColor(srgbRed: 42.0 / 255, green: 42.0 / 255, blue: 42.0 / 255, alpha: 1)
+        /// color.review.avatar.bg
+        static let reviewAvatarBg: NSColor = NSColor(srgbRed: 42.0 / 255, green: 42.0 / 255, blue: 42.0 / 255, alpha: 1)
+        /// color.review.body
+        static let reviewBody: NSColor = NSColor(srgbRed: 207.0 / 255, green: 207.0 / 255, blue: 207.0 / 255, alpha: 1)
+        /// color.review.input.border
+        static let reviewInputBorder: NSColor = NSColor(srgbRed: 42.0 / 255, green: 42.0 / 255, blue: 42.0 / 255, alpha: 1)
+        /// color.review.mark.off
+        static let reviewMarkOff: NSColor = NSColor(srgbRed: 85.0 / 255, green: 85.0 / 255, blue: 85.0 / 255, alpha: 1)
+        /// color.review.note.bg
+        static let reviewNoteBg: NSColor = NSColor(srgbRed: 15.0 / 255, green: 15.0 / 255, blue: 15.0 / 255, alpha: 1)
+        /// color.review.note.border
+        static let reviewNoteBorder: NSColor = NSColor(srgbRed: 38.0 / 255, green: 38.0 / 255, blue: 38.0 / 255, alpha: 1)
+        /// color.review.panel.bg
+        static let reviewPanelBg: NSColor = NSColor(srgbRed: 13.0 / 255, green: 13.0 / 255, blue: 13.0 / 255, alpha: 1)
         /// color.row.selected
         static let rowSelected: NSColor = NSColor(srgbRed: 26.0 / 255, green: 26.0 / 255, blue: 26.0 / 255, alpha: 1)
         /// color.sidebar.bg
@@ -165,6 +251,110 @@ enum Tok {
         static let iconRadius: CGFloat = 5
         /// size.icon.size
         static let iconSize: CGFloat = 18
+        /// size.inbox.blocks.gap
+        static let inboxBlocksGap: CGFloat = 2
+        /// size.inbox.blocks.radius
+        static let inboxBlocksRadius: CGFloat = 1
+        /// size.inbox.blocks.size
+        static let inboxBlocksSize: CGFloat = 7
+        /// size.inbox.btn.font
+        static let inboxBtnFont: CGFloat = 11
+        /// size.inbox.btn.gap
+        static let inboxBtnGap: CGFloat = 6
+        /// size.inbox.btn.key.font
+        static let inboxBtnKeyFont: CGFloat = 10
+        /// size.inbox.btn.key.line
+        static let inboxBtnKeyLine: CGFloat = 13
+        /// size.inbox.btn.key.pad
+        static let inboxBtnKeyPad: [CGFloat] = [0, 4]
+        /// size.inbox.btn.key.radius
+        static let inboxBtnKeyRadius: CGFloat = 3
+        /// size.inbox.btn.line
+        static let inboxBtnLine: CGFloat = 17
+        /// size.inbox.btn.pad
+        static let inboxBtnPad: [CGFloat] = [1, 8]
+        /// size.inbox.btn.radius
+        static let inboxBtnRadius: CGFloat = 5
+        /// size.inbox.checks.label.padtop
+        static let inboxChecksLabelPadtop: CGFloat = 16
+        /// size.inbox.ck.radius
+        static let inboxCkRadius: CGFloat = 3
+        /// size.inbox.ck.size
+        static let inboxCkSize: CGFloat = 13
+        /// size.inbox.claude.small
+        static let inboxClaudeSmall: CGFloat = 13
+        /// size.inbox.diff.bar.w
+        static let inboxDiffBarW: CGFloat = 2
+        /// size.inbox.diff.font
+        static let inboxDiffFont: CGFloat = 11.5
+        /// size.inbox.diff.hatch.alpha
+        static let inboxDiffHatchAlpha: CGFloat = 0.018
+        /// size.inbox.diff.hatch.period
+        static let inboxDiffHatchPeriod: [CGFloat] = [5, 6]
+        /// size.inbox.diff.line
+        static let inboxDiffLine: CGFloat = 1.62
+        /// size.inbox.diff.mark.w
+        static let inboxDiffMarkW: CGFloat = 16
+        /// size.inbox.diff.num.font
+        static let inboxDiffNumFont: CGFloat = 10.5
+        /// size.inbox.diff.num.padr
+        static let inboxDiffNumPadr: CGFloat = 8
+        /// size.inbox.diff.num.w
+        static let inboxDiffNumW: CGFloat = 38
+        /// size.inbox.diff.text.padr
+        static let inboxDiffTextPadr: CGFloat = 12
+        /// size.inbox.dot.size
+        static let inboxDotSize: CGFloat = 6
+        /// size.inbox.fh.font
+        static let inboxFhFont: CGFloat = 12
+        /// size.inbox.fh.gap
+        static let inboxFhGap: CGFloat = 10
+        /// size.inbox.fh.pad
+        static let inboxFhPad: [CGFloat] = [7, 14]
+        /// size.inbox.fh.path.font
+        static let inboxFhPathFont: CGFloat = 11.5
+        /// size.inbox.fh.right.font
+        static let inboxFhRightFont: CGFloat = 11
+        /// size.inbox.file.font
+        static let inboxFileFont: CGFloat = 11.5
+        /// size.inbox.file.gap
+        static let inboxFileGap: CGFloat = 8
+        /// size.inbox.file.pad
+        static let inboxFilePad: [CGFloat] = [5, 14]
+        /// size.inbox.file.st.font
+        static let inboxFileStFont: CGFloat = 10
+        /// size.inbox.file.st.w
+        static let inboxFileStW: CGFloat = 12
+        /// size.inbox.files.label.padtop
+        static let inboxFilesLabelPadtop: CGFloat = 2
+        /// size.inbox.files.padtop
+        static let inboxFilesPadtop: CGFloat = 8
+        /// size.inbox.files.w
+        static let inboxFilesW: CGFloat = 250
+        /// size.inbox.hd.gap
+        static let inboxHdGap: CGFloat = 10
+        /// size.inbox.hd.h
+        static let inboxHdH: CGFloat = 58
+        /// size.inbox.hd.meta.font
+        static let inboxHdMetaFont: CGFloat = 11
+        /// size.inbox.hd.padx
+        static let inboxHdPadx: CGFloat = 18
+        /// size.inbox.hd.rowgap
+        static let inboxHdRowgap: CGFloat = 2
+        /// size.inbox.hd.title.font
+        static let inboxHdTitleFont: CGFloat = 14
+        /// size.inbox.side.w
+        static let inboxSideW: CGFloat = 290
+        /// size.inbox.stat.font
+        static let inboxStatFont: CGFloat = 11
+        /// size.inbox.strip.font
+        static let inboxStripFont: CGFloat = 11.5
+        /// size.inbox.strip.gap
+        static let inboxStripGap: CGFloat = 28
+        /// size.inbox.strip.pad
+        static let inboxStripPad: [CGFloat] = [10, 18]
+        /// size.inbox.window.h
+        static let inboxWindowH: CGFloat = 640
         /// size.kbd.font
         static let kbdFont: CGFloat = 11
         /// size.kbd.line
@@ -259,6 +449,218 @@ enum Tok {
         static let railRingR: CGFloat = 15
         /// size.rail.ring.stroke
         static let railRingStroke: CGFloat = 2
+        /// size.review.avatar.font
+        static let reviewAvatarFont: CGFloat = 9
+        /// size.review.avatar.size
+        static let reviewAvatarSize: CGFloat = 16
+        /// size.review.bar.gap
+        static let reviewBarGap: CGFloat = 10
+        /// size.review.bar.h
+        static let reviewBarH: CGFloat = 46
+        /// size.review.bar.padx
+        static let reviewBarPadx: CGFloat = 14
+        /// size.review.btn.font
+        static let reviewBtnFont: CGFloat = 12
+        /// size.review.btn.gap
+        static let reviewBtnGap: CGFloat = 8
+        /// size.review.btn.pad
+        static let reviewBtnPad: [CGFloat] = [3, 10]
+        /// size.review.btn.radius
+        static let reviewBtnRadius: CGFloat = 5
+        /// size.review.chk.font
+        static let reviewChkFont: CGFloat = 9
+        /// size.review.chk.radius
+        static let reviewChkRadius: CGFloat = 3
+        /// size.review.chk.size
+        static let reviewChkSize: CGFloat = 12
+        /// size.review.claude.small
+        static let reviewClaudeSmall: CGFloat = 13
+        /// size.review.diff.font
+        static let reviewDiffFont: CGFloat = 12
+        /// size.review.diff.line
+        static let reviewDiffLine: CGFloat = 1.62
+        /// size.review.diff.mark.w
+        static let reviewDiffMarkW: CGFloat = 16
+        /// size.review.diff.num.padr
+        static let reviewDiffNumPadr: CGFloat = 8
+        /// size.review.diff.num.w
+        static let reviewDiffNumW: CGFloat = 40
+        /// size.review.draft.font
+        static let reviewDraftFont: CGFloat = 11.5
+        /// size.review.draft.gap
+        static let reviewDraftGap: CGFloat = 8
+        /// size.review.draft.line
+        static let reviewDraftLine: CGFloat = 1.6
+        /// size.review.draft.margin
+        static let reviewDraftMargin: CGFloat = 14
+        /// size.review.draft.pad
+        static let reviewDraftPad: [CGFloat] = [10, 12]
+        /// size.review.draft.radius
+        static let reviewDraftRadius: CGFloat = 8
+        /// size.review.fh.font
+        static let reviewFhFont: CGFloat = 12
+        /// size.review.fh.gap
+        static let reviewFhGap: CGFloat = 10
+        /// size.review.fh.h
+        static let reviewFhH: CGFloat = 34
+        /// size.review.fh.mt
+        static let reviewFhMt: CGFloat = 8
+        /// size.review.fh.padx
+        static let reviewFhPadx: CGFloat = 14
+        /// size.review.fn.font
+        static let reviewFnFont: CGFloat = 11.5
+        /// size.review.hint.font
+        static let reviewHintFont: CGFloat = 11
+        /// size.review.hint.pad
+        static let reviewHintPad: [CGFloat] = [10, 14]
+        /// size.review.hunk.font
+        static let reviewHunkFont: CGFloat = 11
+        /// size.review.hunk.line
+        static let reviewHunkLine: CGFloat = 1.6
+        /// size.review.hunk.pad
+        static let reviewHunkPad: [CGFloat] = [4, 0, 4, 96]
+        /// size.review.note.body.pad
+        static let reviewNoteBodyPad: [CGFloat] = [3, 10, 9]
+        /// size.review.note.font
+        static let reviewNoteFont: CGFloat = 12
+        /// size.review.note.foot.gap
+        static let reviewNoteFootGap: CGFloat = 8
+        /// size.review.note.foot.pad
+        static let reviewNoteFootPad: [CGFloat] = [0, 10, 8]
+        /// size.review.note.head.font
+        static let reviewNoteHeadFont: CGFloat = 11
+        /// size.review.note.head.gap
+        static let reviewNoteHeadGap: CGFloat = 8
+        /// size.review.note.head.pad
+        static let reviewNoteHeadPad: [CGFloat] = [7, 10, 0]
+        /// size.review.note.line
+        static let reviewNoteLine: CGFloat = 1.5
+        /// size.review.note.margin
+        static let reviewNoteMargin: [CGFloat] = [6, 14, 8, 96]
+        /// size.review.note.radius
+        static let reviewNoteRadius: CGFloat = 8
+        /// size.review.ov.check.cols
+        static let reviewOvCheckCols: [CGFloat] = [16, 10, 7]
+        /// size.review.ov.check.font
+        static let reviewOvCheckFont: CGFloat = 12.5
+        /// size.review.ov.check.res.font
+        static let reviewOvCheckResFont: CGFloat = 11.5
+        /// size.review.ov.file.cols
+        static let reviewOvFileCols: [CGFloat] = [12, 6]
+        /// size.review.ov.gap
+        static let reviewOvGap: CGFloat = 8
+        /// size.review.ov.grid.gap
+        static let reviewOvGridGap: CGFloat = 24
+        /// size.review.ov.grid.mt
+        static let reviewOvGridMt: CGFloat = 14
+        /// size.review.ov.grid.ratio
+        static let reviewOvGridRatio: CGFloat = 1.25
+        /// size.review.ov.input.h
+        static let reviewOvInputH: CGFloat = 70
+        /// size.review.ov.input.pad
+        static let reviewOvInputPad: [CGFloat] = [8, 10]
+        /// size.review.ov.input.radius
+        static let reviewOvInputRadius: CGFloat = 7
+        /// size.review.ov.meta.font
+        static let reviewOvMetaFont: CGFloat = 11.5
+        /// size.review.ov.pad
+        static let reviewOvPad: [CGFloat] = [16, 22]
+        /// size.review.ov.radio.gap
+        static let reviewOvRadioGap: CGFloat = 7
+        /// size.review.ov.radio.size
+        static let reviewOvRadioSize: [CGFloat] = [12, 4]
+        /// size.review.ov.sec.mb
+        static let reviewOvSecMb: CGFloat = 6
+        /// size.review.ov.sec.mt
+        static let reviewOvSecMt: [CGFloat] = [16, 4]
+        /// size.review.ov.side.gap
+        static let reviewOvSideGap: CGFloat = 12
+        /// size.review.ov.side.pad
+        static let reviewOvSidePad: [CGFloat] = [16, 14]
+        /// size.review.ov.sub.font
+        static let reviewOvSubFont: CGFloat = 12
+        /// size.review.ov.summary.font
+        static let reviewOvSummaryFont: CGFloat = 12.5
+        /// size.review.ov.summary.line
+        static let reviewOvSummaryLine: CGFloat = 1.55
+        /// size.review.ov.tabs.font
+        static let reviewOvTabsFont: CGFloat = 12.5
+        /// size.review.ov.tabs.gap
+        static let reviewOvTabsGap: CGFloat = 18
+        /// size.review.ov.tabs.mt
+        static let reviewOvTabsMt: CGFloat = 14
+        /// size.review.ov.tabs.pb
+        static let reviewOvTabsPb: CGFloat = 8
+        /// size.review.ov.title.font
+        static let reviewOvTitleFont: CGFloat = 19
+        /// size.review.ov.title.margin
+        static let reviewOvTitleMargin: [CGFloat] = [6, 4]
+        /// size.review.ov.title.tracking_em
+        static let reviewOvTitleTrackingEm: CGFloat = -0.01
+        /// size.review.ov.turn.gap
+        static let reviewOvTurnGap: CGFloat = 3
+        /// size.review.ov.turn.mb
+        static let reviewOvTurnMb: CGFloat = 6
+        /// size.review.ov.w
+        static let reviewOvW: CGFloat = 270
+        /// size.review.panel.foot.gap
+        static let reviewPanelFootGap: CGFloat = 8
+        /// size.review.panel.foot.pad
+        static let reviewPanelFootPad: [CGFloat] = [12, 14]
+        /// size.review.row.font
+        static let reviewRowFont: CGFloat = 12
+        /// size.review.row.gap
+        static let reviewRowGap: CGFloat = 8
+        /// size.review.row.pad
+        static let reviewRowPad: [CGFloat] = [5, 14]
+        /// size.review.sec.font
+        static let reviewSecFont: CGFloat = 10
+        /// size.review.sec.tracking_em
+        static let reviewSecTrackingEm: CGFloat = 0.08
+        /// size.review.send.head.font
+        static let reviewSendHeadFont: CGFloat = 12.5
+        /// size.review.send.head.gap
+        static let reviewSendHeadGap: CGFloat = 8
+        /// size.review.send.head.pad
+        static let reviewSendHeadPad: [CGFloat] = [12, 14, 8]
+        /// size.review.send.w
+        static let reviewSendW: CGFloat = 310
+        /// size.review.sidebar.send.w
+        static let reviewSidebarSendW: CGFloat = 230
+        /// size.review.sidebar.w
+        static let reviewSidebarW: CGFloat = 250
+        /// size.review.sq.gap
+        static let reviewSqGap: CGFloat = 1
+        /// size.review.sq.size
+        static let reviewSqSize: CGFloat = 7
+        /// size.review.st.font
+        static let reviewStFont: CGFloat = 11
+        /// size.review.tag.font
+        static let reviewTagFont: CGFloat = 10
+        /// size.review.tag.line
+        static let reviewTagLine: CGFloat = 15
+        /// size.review.tag.pad
+        static let reviewTagPad: [CGFloat] = [0, 4]
+        /// size.review.tag.radius
+        static let reviewTagRadius: CGFloat = 3
+        /// size.review.tag.tracking_em
+        static let reviewTagTrackingEm: CGFloat = 0.04
+        /// size.review.tree.caret.font
+        static let reviewTreeCaretFont: CGFloat = 9
+        /// size.review.tree.foot.font
+        static let reviewTreeFootFont: CGFloat = 11
+        /// size.review.tree.foot.gap
+        static let reviewTreeFootGap: CGFloat = 3
+        /// size.review.tree.foot.pad
+        static let reviewTreeFootPad: [CGFloat] = [10, 14]
+        /// size.review.tree.indent
+        static let reviewTreeIndent: CGFloat = 14
+        /// size.review.tree.w
+        static let reviewTreeW: CGFloat = 262
+        /// size.review.window.h
+        static let reviewWindowH: CGFloat = 600
+        /// size.review.window.w
+        static let reviewWindowW: CGFloat = 1100
         /// size.row.cols
         static let rowCols: String = "18px 1fr auto"
         /// size.row.gap

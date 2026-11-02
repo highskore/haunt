@@ -42,6 +42,11 @@ check(PastePreview("a\u{7}b").needsConfirmation, "C0 control held")
 check(PastePreview("a\u{9B}b").needsConfirmation, "C1 control held")
 check(PastePreview("ab\u{202E}cd").needsConfirmation, "bidi override held")
 check(PastePreview("ab\u{200B}cd").needsConfirmation, "zero-width held")
+for (c, what) in [("\u{2028}", "line separator"), ("\u{2029}", "paragraph separator"), ("\u{115F}", "Hangul choseong filler"),
+                  ("\u{1160}", "Hangul jungseong filler"), ("\u{3164}", "Hangul filler"), ("\u{FFA0}", "halfwidth Hangul filler"),
+                  ("\u{FE0F}", "variation selector"), ("\u{E0100}", "supplementary variation selector")] {
+    check(PastePreview("a\(c)b").needsConfirmation, "\(what) held")
+}
 
 if failures > 0 { print("paste: \(failures) failed"); exit(1) }
 print("paste: all passed")

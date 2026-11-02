@@ -19,6 +19,7 @@ use crate::intake::{Delivery, Intake, IntakeError, Limits, Nonces, SOCKET_NAME};
 use crate::layout::{self, SidebarSnapshot, SurfaceView};
 use crate::session::{Outcome, Session};
 use crate::sync::{lock, write};
+use crate::turn::{ReviewTurn, TurnLog};
 
 const MAX_SURFACES: usize = 512;
 const MAX_PROPOSALS: usize = 256;
@@ -68,7 +69,8 @@ pub struct SurfaceEnv {
 
 pub type Listener = Arc<dyn Fn() + Send + Sync>;
 /// Sees every event for a registered surface, with whether it was verified; called outside the lock.
-pub type EventTap = Arc<dyn Fn(&AgentEvent, bool) + Send + Sync>;
+/// Returns whether host requests are waiting, so the UI is told to drain them.
+pub type EventTap = Arc<dyn Fn(&AgentEvent, bool) -> bool + Send + Sync>;
 
 struct Surface {
     id: String,
@@ -78,6 +80,8 @@ struct Surface {
     /// Branch at `session.cwd`.
     agent_branch: Option<String>,
     session: Session,
+    /// The latest turn, from verified events, for the review screen.
+    turn: TurnLog,
 }
 
 #[derive(Default)]
@@ -138,7 +142,13 @@ impl State {
     /// One intake delivery; the intake already checked the nonce and the rate limit.
     fn deliver(&mut self, d: &Delivery, now: Instant) -> bool {
         let Some(event) = &d.event else { return false };
-        self.with_surface(&d.surface_id, |s| s.session.apply(event, d.verified, now)) == Some(true)
+        self.with_surface(&d.surface_id, |s| {
+            let changed = s.session.apply(event, d.verified, now);
+            if d.verified {
+                s.turn.apply(event, &s.session.agent);
+            }
+            changed
+        }) == Some(true)
     }
 
     /// None once the surface is gone.
@@ -149,16 +159,37 @@ impl State {
         Some(changed)
     }
 
+    /// The turn number a verified prompt just started, for reading its start commit off the lock.
+    fn started_turn(&mut self, d: &Delivery) -> Option<u32> {
+        if !starts_turn(d) {
+            return None;
+        }
+        self.surface(&d.surface_id).map(|s| s.turn.turn.number)
+    }
+
+    /// Records where turn `number` started, unless a newer turn began meanwhile.
+    fn set_turn_head(&mut self, surface_id: &str, number: u32, head: Option<String>) {
+        if let Some(s) = self.surface(surface_id).filter(|s| s.turn.turn.number == number) {
+            s.turn.turn.head_at_start = head;
+        }
+    }
+
     /// A socket line as the intake would deliver it, minus the socket and the rate limit.
     #[cfg(test)]
     pub(crate) fn handle_line(&mut self, line: &str, now: Instant) -> bool {
         let Some(d) = crate::intake::decode(line, &self.nonces) else { return false };
         let cwd = d.event.as_ref().and_then(|e| e.cwd.clone()).filter(|c| c.starts_with('/'));
         let known = self.surfaces.iter().find(|s| s.id == d.surface_id).and_then(|s| s.session.cwd.clone());
-        let branch = d.verified.then(|| cwd.or(known)).flatten().map(|c| crate::git::branch(&c));
+        let shell = self.surfaces.iter().find(|s| s.id == d.surface_id).map(|s| s.cwd.clone());
+        let at = d.verified.then(|| cwd.or(known)).flatten();
+        let branch = at.as_deref().map(crate::git::branch);
         let mut changed = self.deliver(&d, now);
         if let Some(b) = branch {
             changed |= self.set_agent_branch(&d.surface_id, b) == Some(true);
+        }
+        if let Some(n) = self.started_turn(&d) {
+            let head = at.or(shell).and_then(|c| crate::git::head_commit(&c));
+            self.set_turn_head(&d.surface_id, n, head);
         }
         changed
     }
@@ -266,21 +297,36 @@ pub struct Core {
     servers: Mutex<Option<Servers>>,
 }
 
+/// A verified prompt: the review diffs from the commit HEAD is on now.
+fn starts_turn(d: &Delivery) -> bool {
+    d.verified && d.event.as_ref().is_some_and(|e| matches!(e.kind, crate::event::EventKind::PromptSubmit { .. }))
+}
+
 /// The two slow steps of a delivery, each on its own thread so neither holds up the socket or the
 /// other: the branch lookup reads files a hook-chosen cwd points at (a dead mount can hang it), and
 /// plugins run code and call back into the core.
 #[derive(Clone)]
 struct Offload {
-    branch: SyncSender<(String, Option<String>)>,
+    /// Surface, event cwd, and the turn number when the event started a turn (its start commit is read too).
+    branch: SyncSender<(String, Option<String>, Option<u32>)>,
     tap: SyncSender<(EventTap, AgentEvent, bool)>,
 }
 
 impl Offload {
     fn spawn(state: Arc<Mutex<State>>, branches: Arc<Branches>) -> std::io::Result<Self> {
-        let branch = worker("haunt-branch", move |(surface, cwd): (String, Option<String>)| {
-            let Some(b) = branches.agent(&surface, cwd.as_deref()) else { return };
+        let tap_state = state.clone();
+        let branch = worker("haunt-branch", move |(surface, cwd, turn): (String, Option<String>, Option<u32>)| {
+            let b = branches.agent(&surface, cwd.as_deref());
+            let head = turn.map(|n| (n, branches.turn_cwd(&surface).and_then(|c| crate::git::head_commit(&c))));
+            if b.is_none() && head.is_none() {
+                return;
+            }
             let mut gone = false;
             update_state(&state, |st, _| {
+                if let Some((n, h)) = head {
+                    st.set_turn_head(&surface, n, h);
+                }
+                let Some(b) = b else { return false };
                 let changed = st.set_agent_branch(&surface, b);
                 gone = changed.is_none();
                 changed == Some(true)
@@ -290,8 +336,22 @@ impl Offload {
                 branches.forget(&surface);
             }
         })?;
-        let tap = worker("haunt-tap", |(tap, event, verified): (EventTap, AgentEvent, bool)| tap(&event, verified))?;
+        let tap = worker("haunt-tap", move |(tap, event, verified): (EventTap, AgentEvent, bool)| {
+            if tap(&event, verified) {
+                requests_queued(&tap_state);
+            }
+        })?;
         Ok(Self { branch, tap })
+    }
+}
+
+/// Plugin requests are waiting. The listener fired for the delivery came before the tap ran, or
+/// never fired (nothing changed, or it is waiting for a snapshot), and a waiting request may be all
+/// that unblocks the agent, so this fires it whatever `notified` says.
+fn requests_queued(state: &Mutex<State>) {
+    let listener = lock(state).listener.clone();
+    if let Some(l) = listener {
+        l();
     }
 }
 
@@ -305,13 +365,16 @@ fn worker<T: Send + 'static>(name: &str, mut f: impl FnMut(T) + Send + 'static) 
 /// One intake delivery: the state now, the branch lookup and the plugins after, off this thread.
 fn deliver(state: &Mutex<State>, offload: &Offload, d: Delivery) -> bool {
     let mut tap = None;
+    let mut turn = None;
     let changed = update_state(state, |st, now| {
         tap = st.tap_for(&d.surface_id);
-        st.deliver(&d, now)
+        let changed = st.deliver(&d, now);
+        turn = st.started_turn(&d);
+        changed
     });
     if let Some(event) = d.event {
         if d.verified {
-            let _ = offload.branch.try_send((d.surface_id, event.cwd.clone()));
+            let _ = offload.branch.try_send((d.surface_id, event.cwd.clone(), turn));
         }
         if let Some(tap) = tap {
             let _ = offload.tap.try_send((tap, event, d.verified));
@@ -442,7 +505,7 @@ impl Core {
                 return false;
             }
             let (id, cwd) = (env.surface_id.clone(), cwd.to_owned());
-            st.surfaces.push(Surface { id, cwd, branch: None, agent_branch: None, session: Session::new(now) });
+            st.surfaces.push(Surface { id, cwd, branch: None, agent_branch: None, session: Session::new(now), turn: TurnLog::default() });
             write(&st.nonces).insert(env.surface_id.clone(), env.nonce.clone());
             true
         });
@@ -467,8 +530,8 @@ impl Core {
         });
     }
 
-    /// `title` is accepted for the contract; rows are named after the cwd. The core reads the
-    /// branch at `cwd` itself, outside its lock, so `_git_branch` is ignored (to be dropped from the API).
+    /// `_title` and `_git_branch` are ignored, kept so the app's call needs no change: rows are named
+    /// after the cwd, and the core reads the branch at `cwd` itself, outside every lock.
     pub fn set_surface_info(&self, surface_id: &str, _title: &str, cwd: &str, _git_branch: Option<String>) {
         if !lock(&self.state).surfaces.iter().any(|s| s.id == surface_id) {
             return;
@@ -509,8 +572,8 @@ impl Core {
             tap = st.tap_for(surface_id);
             st.apply_unverified(surface_id, &event, now)
         });
-        if let Some(tap) = tap {
-            tap(&event, false);
+        if tap.is_some_and(|tap| tap(&event, false)) {
+            requests_queued(&self.state);
         }
     }
 
@@ -564,6 +627,19 @@ impl Core {
     /// A key went to the surface's pty: from now on the terminal answers its pending request.
     pub fn on_user_input(&self, surface_id: &str) {
         self.update(|st, _| st.surface(surface_id).is_some_and(|s| s.session.user_input()));
+    }
+
+    /// The surface's latest turn for the review screen; None for an unknown surface or one that never
+    /// had a verified agent event.
+    pub fn review_turn(&self, surface_id: &str) -> Option<ReviewTurn> {
+        let mut st = lock(&self.state);
+        let s = st.surface(surface_id)?;
+        if !s.session.is_agent || s.turn.turn.number == 0 && s.turn.turn.cwd.is_none() {
+            return None;
+        }
+        let mut t = s.turn.turn.clone();
+        t.cwd = t.cwd.or_else(|| s.session.cwd.clone());
+        Some(t)
     }
 
     /// Ended permission requests, newest first; see `DecisionLog::query`.
@@ -719,7 +795,7 @@ impl Core {
 mod tests {
     use super::*;
     use crate::testdir::TempDir;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
     fn core() -> Core {
@@ -1030,6 +1106,7 @@ mod tests {
         let wait = Mutex::new(wait);
         c.set_event_tap(Some(Arc::new(move |_: &AgentEvent, _| {
             let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(3));
+            false
         })));
         let st = c.state.clone();
         let offload = Offload::spawn(st.clone(), c.branches.clone()).unwrap();
@@ -1045,12 +1122,55 @@ mod tests {
     }
 
     #[test]
+    fn waiting_plugin_requests_always_wake_the_ui() {
+        let c = core();
+        let env = c.register_surface("/w").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        c.set_listener(Arc::new(move || {
+            let _ = tx.lock().unwrap().send(());
+        }));
+        let queue = Arc::new(AtomicBool::new(false));
+        let q = queue.clone();
+        c.set_event_tap(Some(Arc::new(move |_: &AgentEvent, _| q.swap(false, Ordering::SeqCst))));
+        let st = c.state.clone();
+        let offload = Offload::spawn(st.clone(), c.branches.clone()).unwrap();
+        let nonces = lock(&st).nonces.clone();
+        let send = || {
+            let d = crate::intake::decode(&line(&env, Some(&env.nonce), r#""event":"session_start""#), &nonces).unwrap();
+            deliver(&st, &offload, d)
+        };
+        send();
+        rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        // No snapshot from here on, so the listener stays spent for state changes.
+        let osc = || c.on_osc_notification(&env.surface_id, "haunt://cli-agent", r#"{"v":1,"event":"session_start"}"#);
+
+        queue.store(false, Ordering::SeqCst);
+        assert!(!send(), "a repeated start changes nothing");
+        osc();
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "no requests, no wake-up");
+
+        queue.store(true, Ordering::SeqCst);
+        send();
+        rx.recv_timeout(Duration::from_secs(1)).expect("the tap's request wakes the UI");
+        queue.store(true, Ordering::SeqCst);
+        send();
+        rx.recv_timeout(Duration::from_secs(1)).expect("every time, without a snapshot in between");
+        queue.store(true, Ordering::SeqCst);
+        osc();
+        rx.recv_timeout(Duration::from_secs(1)).expect("so does one queued for an OSC event");
+    }
+
+    #[test]
     fn the_event_tap_sees_events_for_registered_surfaces_only() {
         let c = core();
         let env = c.register_surface("/w").unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let s = seen.clone();
-        c.set_event_tap(Some(Arc::new(move |e: &AgentEvent, verified| s.lock().unwrap().push((e.kind.name().to_owned(), verified)))));
+        c.set_event_tap(Some(Arc::new(move |e: &AgentEvent, verified| {
+            s.lock().unwrap().push((e.kind.name().to_owned(), verified));
+            false
+        })));
         let st = c.state.clone();
         let offload = Offload::spawn(st.clone(), c.branches.clone()).unwrap();
         let nonces = lock(&st).nonces.clone();
@@ -1358,5 +1478,31 @@ mod tests {
         rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(answer(&c, &env.surface_id, true), Some(b"1".to_vec()));
         drop(c);
+    }
+
+    #[test]
+    fn the_review_turn_comes_from_verified_events_only() {
+        let repo = std::env::temp_dir().join(format!("haunt-model-turn-{}", std::process::id()));
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        std::fs::write(repo.join(".git/HEAD"), format!("{sha}\n")).unwrap();
+        let c = core();
+        let env = c.register_surface("/Users/me").unwrap();
+        assert_eq!(c.review_turn(&env.surface_id), None);
+        let cmd = r#""event":"tool_start","tool_name":"Bash","tool_input":{"command":"cargo test"}"#;
+        let prompt = format!(r#""event":"prompt_submit","cwd":"{}","query":"fix it""#, repo.display());
+        c.with_state(|st| {
+            st.handle_line(&line(&env, None, &prompt), Instant::now());
+            st.handle_line(&line(&env, None, cmd), Instant::now());
+        });
+        assert_eq!(c.review_turn(&env.surface_id), None, "forged events leave no turn");
+        c.with_state(|st| {
+            st.handle_line(&line(&env, Some(&env.nonce), &prompt), Instant::now());
+            st.handle_line(&line(&env, Some(&env.nonce), cmd), Instant::now());
+        });
+        let t = c.review_turn(&env.surface_id).unwrap();
+        assert_eq!((t.number, t.prompt.as_deref(), t.head_at_start.as_deref()), (1, Some("fix it"), Some(sha)));
+        assert_eq!(t.commands.len(), 1);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }

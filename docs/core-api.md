@@ -10,7 +10,7 @@ object HauntCore {
   fn start() -> Result<(), CoreError>             // binds sock and ctl, opens decisions.jsonl; a second call is a no-op
   fn register_surface(cwd: string) -> Result<SurfaceEnv, CoreError>   // Invalid past 512 surfaces
   fn unregister_surface(surface_id: string)
-  fn set_surface_info(surface_id: string, title: string, cwd: string, git_branch: Option<string>)   // git_branch is ignored
+  fn set_surface_info(surface_id: string, title: string, cwd: string, git_branch: Option<string>)   // title and git_branch are ignored
   fn select_surface(surface_id: string)           // marks Row.selected
   fn on_osc_notification(surface_id: string, title: string, body: string)
   fn snapshot() -> SidebarSnapshot
@@ -23,6 +23,7 @@ object HauntCore {
   fn allow_suggestions() -> sequence<AllowSuggestion>              // plugin proposals that pass every check
   fn accept_allow_suggestion(project: string, command: string) -> Result<(), CoreError>
   fn dismiss_allow_suggestion(project: string, command: string)
+  fn review_turn(surface_id: string) -> Option<ReviewTurn>          // the latest turn, for the review screen (docs/review.md)
 }
 
 callback interface CoreListener { fn changed() }
@@ -48,6 +49,16 @@ record Decision { at_ms: u64, surface_id: string, tool: string, preview: string,
 enum   Agent { Claude, Codex, Other { id: string } }   // "claude", "codex" or the id in decisions.jsonl; absent is Claude
 enum   Outcome { AllowedInHaunt, DeniedInHaunt, AllowedByPlugin { plugin_id: string }, DeniedByPlugin { plugin_id: string }, AnsweredInTerminal, Superseded }
 record AllowSuggestion { project: string, command: string, rule: string, approvals: u32, plugin_id: string }
+
+record ReviewTurn {
+  agent: Agent, number: u32, prompt: Option<string>, cwd: Option<string>, started_ms: Option<u64>, finished_ms: Option<u64>, failed: bool,
+  head_at_start: Option<string>, tool_count: u32, edit_count: u32, tasks: sequence<TurnTask>,
+  commands: sequence<TurnCommand>, files: sequence<string>, subagents: sequence<TurnSubagent>
+}
+record TurnTask { subject: string, status: string }
+record TurnCommand { command: string, outcome: CommandOutcome }
+enum   CommandOutcome { Running, Passed, Failed, Unknown }
+record TurnSubagent { label: string, tool_count: Option<u64>, duration_ms: Option<u64> }
 ```
 
 `select_surface` is an addition to the contract as first agreed, because `Row.selected` needs a source. `SidebarGroup` was renamed from `Group` because a Swift `struct Group` would shadow SwiftUI's `Group`.
@@ -73,7 +84,7 @@ In Swift, the generated `Progress` struct shadows `Foundation.Progress` inside t
 
 ### UI must call
 
-- `onUserInput(surfaceId)` on every keyDown routed to a surface (before or as it goes to the pty). Once the user types at the terminal, the prompt may already be answered and the tool running until `PostToolUse` arrives, so a late Allow (`1`) or Deny (Esc) from haunt would be typed into the running session. The call retires the surface's live request: `pending` disappears, `answerPermission` returns `nil`, and the request is logged when its outcome is known (`AnsweredInTerminal` if the matching tool runs, else `Superseded`). The macOS app makes its surfaces `HauntSurfaceView` (`macos/Sources/MainWindow.swift`), a subclass of the vendored `Ghostty.SurfaceView`. libghostty has no single write choke point the app can hook (clipboard reads also serve OSC 52), so the subclass calls it before `super` on each user write path: `keyDown`, the three paste actions, `insertText` (IME, Character Viewer, dictation), middle-click `otherMouseDown`, `performDragOperation`, `readSelection` (Services), and whenever a paste confirmation resolves. Ghostty's own bindings reach the surface through `keyDown` as well, menu shortcuts never do, and the vendored sources stay unpatched. Mouse clicks and scrolls that a TUI's mouse mode reports, and key-release events, are not counted: a click to focus the terminal shouldn't drop the request. The same paste paths (the paste actions, middle click, drag and drop, Services) also check the text first: one with an escape, another control or a hidden character gets Haunt's own confirmation sheet before Ghostty sees it. Ghostty 1.4 asks only about line breaks and `ESC[201~` (unsafe even in a bracketed paste), and its paste encoding turns ESC and the other controls into spaces, so the user would never see what the text held. A confirmed paste goes out through `ghostty_surface_text`, which encodes it the same way. Ghostty's own paste keybinds (⌘V, ⇧⌘V, the Paste key) are always unbound, and the `[ghostty]` keys that let libghostty paste by itself are refused (see README, Configure), so these paths are the only ones.
+- `onUserInput(surfaceId)` on every keyDown routed to a surface (before or as it goes to the pty). Once the user types at the terminal, the prompt may already be answered and the tool running until `PostToolUse` arrives, so a late Allow (`1`) or Deny (Esc) from haunt would be typed into the running session. The call retires the surface's live request: `pending` disappears, `answerPermission` returns `nil`, and the request is logged when its outcome is known (`AnsweredInTerminal` if the matching tool runs, else `Superseded`). The macOS app makes its surfaces `HauntSurfaceView` (`macos/Sources/HauntSurfaceView.swift`), a subclass of the vendored `Ghostty.SurfaceView`. libghostty has no single write choke point the app can hook (clipboard reads also serve OSC 52), so the subclass calls it before `super` on each user write path: `keyDown`, the three paste actions, `insertText` (IME, Character Viewer, dictation), middle-click `otherMouseDown`, `performDragOperation`, `readSelection` (Services), and whenever a paste confirmation resolves. Ghostty's own bindings reach the surface through `keyDown` as well, menu shortcuts never do, and the vendored sources stay unpatched. Mouse clicks and scrolls that a TUI's mouse mode reports, and key-release events, are not counted: a click to focus the terminal shouldn't drop the request. The same paste paths (the paste actions, middle click, drag and drop, Services) also check the text first: one with an escape, another control or a hidden character gets Haunt's own confirmation sheet before Ghostty sees it. Ghostty 1.4 asks only about line breaks and `ESC[201~` (unsafe even in a bracketed paste), and its paste encoding turns ESC and the other controls into spaces, so the user would never see what the text held. A paste that passes is handed to `ghostty_surface_paste_text` as the text that was checked, so Ghostty's own protection still applies and the clipboard is never read twice. A confirmed paste goes out through `ghostty_surface_text`, which encodes it the same way. Because Haunt hands over the text itself, an app that turns on kitty paste events gets a plain paste, not Ghostty's MIME-listing event. Middle click is Haunt's: Ghostty's `middle-click-action` is always `ignore`, and Haunt pastes only when the app isn't capturing the mouse and the user hasn't set `[ghostty] middle-click-action = ignore`. Any other clipboard access Ghostty asks about (an OSC 52 read under `clipboard-read = ask`) is denied and logged; writes, allowed by default, never ask. Ghostty's own paste keybinds (⌘V, ⇧⌘V, the Paste key) are always unbound, and the `[ghostty]` keys that let libghostty paste by itself are refused (see README, Configure), so these paths are the only ones.
 - `try registerSurface(cwd:)`: it throws now (past 512 surfaces), so `CoreAPI.registerSurface` must be `throws` and its callers need `try`.
 - `gatePluginRequest(request:)` for every `.ptyAnswer` from `HauntPlugins.takeRequests()`, writing only the bytes it returns (see Plugins).
 
@@ -117,7 +128,7 @@ Groups, in order: `NEEDS YOU`, `RUNNING`, `IDLE`. Done, failed and shell rows go
 | `name` | last path component of the cwd (`~` for home) | same, of the agent cwd |
 | `meta` | `~cwd · <shell>`, e.g. `~/code/vibes · zsh` (the basename of `$SHELL`) | `branch · task`; the agent cwd stands in for a missing branch |
 
-The agent cwd is the latest verified hook event's `cwd`, falling back to the surface cwd from `setSurfaceInfo`. A Claude launched as the surface's command never changes the shell's `PWD`, so the hook is the only place its cwd shows up. The core reads every branch itself, from `.git/HEAD` above the cwd: the surface cwd's on each `set_surface_info`, and the agent cwd's on every verified event, so a checkout inside the session shows up. The lookups run outside the state lock and are cached per surface by cwd and HEAD (inode, size, mtime), so an unchanged HEAD costs one `lstat`. `git_branch` is ignored and will be dropped from the API once the app stops passing it.
+The agent cwd is the latest verified hook event's `cwd`, falling back to the surface cwd from `setSurfaceInfo`. A Claude launched as the surface's command never changes the shell's `PWD`, so the hook is the only place its cwd shows up. The core reads every branch itself, from `.git/HEAD` above the cwd: the surface cwd's on each `set_surface_info`, and the agent cwd's on every verified event, so a checkout inside the session shows up. The lookups run outside the state lock and are cached per surface by cwd and HEAD (inode, size, mtime), so an unchanged HEAD costs one `lstat`. `title` and `git_branch` are ignored; they stay in the signature so the app's call needs no change.
 | `status_text` | empty | `needs you`, `3/5` (running with progress), empty (running without progress), `done`, `failed`, empty (idle) |
 | `progress` | none | `done/total` of the main agent's tasks, else of its latest TodoWrite |
 | `subagents` | none | while running or needing you: `label` = `Explore · trace hooks`, `meta` = `2/4 · 1m12s` or `14 tools · 48s` |
@@ -199,7 +210,7 @@ Installed with `haunt plugin install <path>` (cli/), which shows the capabilitie
 | `paletteItems(mode: nil, query:)` | registered commands and modes (`isMode`), title-filtered by `query` |
 | `paletteItems(mode: "word", query:)` | the items that mode's plugin returns for `query`, each with optional `atMs` (time column), `mark` (`open`, `filled`, `round`) and `surfaceId` (Enter jumps to that tab, if it is open, instead of invoking the item) |
 | `invokePaletteItem(pluginId:itemId:)` | calls the plugin's `on-action(itemId, "")` |
-| `takeRequests()` | `HostRequest.notify` / `.ptyAnswer` queued by plugins |
+| `takeRequests()` | `HostRequest.notify` / `.ptyAnswer` queued by plugins. Drain it on every listener call. After each event a plugin handles, the listener fires again while any request is waiting, whether or not the event changed anything and without waiting for a snapshot (the version does not move for it). It never blocks: while a plugin is busy with an event it returns none, and the listener fires again once that event is done. |
 | `rowMenuItems(surfaceId:)` | every plugin's entries for that row's context menu, built when it opens: `RowMenuItem { pluginId, id, title, checked, parent }`. An entry whose `parent` is another entry's id goes in that entry's submenu (one level). |
 | `invokeRowMenuItem(pluginId:itemId:surfaceId:)` | calls the plugin's `on-action(itemId, surfaceId)` |
 | `rowMoved(surfaceId:groupId:beforeSurfaceId:)` | a sidebar drag ended: the row was dropped into the `SidebarGroup.id` `groupId`, above `beforeSurfaceId` (`nil`: at the end). It goes to plugins granted `sidebar`, whose new arrangement then fires `changed()`. Don't offer drops into `needs-you`; they are ignored. |

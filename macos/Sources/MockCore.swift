@@ -68,6 +68,8 @@ final class MockCore: CoreAPI {
 
     func onUserInput(surfaceId: String) {}
 
+    func reviewTurn(surfaceId: String) -> ReviewTurn? { fixture?.reviewTurn }
+
     func gatePluginRequest(request: HostRequest) -> PtyWrite? { nil }
 
     func snapshotIfNewer(version: UInt64) -> SidebarSnapshot? {

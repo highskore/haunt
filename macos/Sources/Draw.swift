@@ -114,12 +114,19 @@ enum Draw {
     /// The Codex icon: the OpenAI mark tinted `color`. `rect` should be backing-aligned and mark-sized.
     static func codexMark(in rect: NSRect, color: NSColor, ctx: CGContext) {
         guard let img = openAIMark else { return }
-        ctx.saveGState()
-        ctx.beginTransparencyLayer(in: rect, auxiliaryInfo: nil)
-        img.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-        color.setFill()
-        rect.fill(using: .sourceAtop)
-        ctx.endTransparencyLayer()
-        ctx.restoreGState()
+        // Tinted off to the side: a transparency layer in the view's own context dithers everything it draws.
+        let mark = tintedMarks[color] ?? {
+            let t = NSImage(size: img.size, flipped: false) { r in
+                img.draw(in: r)
+                color.setFill()
+                r.fill(using: .sourceAtop)
+                return true
+            }
+            tintedMarks[color] = t
+            return t
+        }()
+        mark.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     }
+
+    private static var tintedMarks: [NSColor: NSImage] = [:]
 }
