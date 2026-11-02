@@ -285,7 +285,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let tab = Tab(env: env, view: view, size: root.pane.bounds.size)
         tab.subscriptions.append(view.$title.combineLatest(view.$pwd)
             .debounce(for: .milliseconds(50), scheduler: DispatchQueue.main)
-            .sink { [weak self] title, pwd in self?.reportInfo(tab, title: title, pwd: pwd ?? dir) })
+            .sink { [weak self] title, pwd in
+                // The core finds the branch itself.
+                self?.core.setSurfaceInfo(surfaceId: env.surfaceId, title: title, cwd: pwd ?? dir, gitBranch: nil)
+            })
         store.add(tab)
         tab.host.frame = root.pane.bounds
         tab.host.autoresizingMask = [.width, .height]
@@ -327,21 +330,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     #else
     private func fixtureCommand() -> String? { nil }
     #endif
-
-    private static let gitQueue = DispatchQueue(label: "dev.haunt.git", qos: .utility)
-
-    /// The branch lookup reads files a pty-chosen pwd points at, so it stays off the main thread.
-    private func reportInfo(_ tab: Tab, title: String, pwd: String) {
-        tab.infoGeneration += 1
-        let gen = tab.infoGeneration
-        Self.gitQueue.async { [weak self, weak tab] in
-            let branch = Git.branch(at: pwd)
-            DispatchQueue.main.async {
-                guard let self, let tab, tab.infoGeneration == gen else { return }
-                self.core.setSurfaceInfo(surfaceId: tab.env.surfaceId, title: title, cwd: pwd, gitBranch: branch)
-            }
-        }
-    }
 
     func select(_ id: String) {
         guard let tab = store.tab(id) else { return }
