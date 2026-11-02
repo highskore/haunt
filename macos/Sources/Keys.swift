@@ -57,6 +57,9 @@ struct Shortcut: Equatable, Hashable {
         return m
     }()
 
+    /// Other spellings of a named key, stored as one so equal chords compare and hash equal.
+    private static let namedAlias = ["return": "enter", "esc": "escape"]
+
     /// nil for anything malformed: no key, an unknown key or modifier, or a repeated part.
     static func parse(_ text: String) -> Shortcut? {
         let parts = text.lowercased().split(separator: "+", omittingEmptySubsequences: false).map {
@@ -73,7 +76,7 @@ struct Shortcut: Equatable, Hashable {
         // A bare letter or digit would be stolen from the terminal on every keystroke.
         let isFKey = key.hasPrefix("f") && named[key] != nil
         if mods.isDisjoint(with: [.command, .control, .option]) && !isFKey { return nil }
-        return Shortcut(mods: mods, key: punct[key]?.1 ?? key)
+        return Shortcut(mods: mods, key: punct[key]?.1 ?? namedAlias[key] ?? key)
     }
 
     /// What shift turns punctuation and digits into on a US layout. AppKit matches a menu key equivalent

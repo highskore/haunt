@@ -143,6 +143,15 @@ check(guarded.plugin["dev.x.y/home"] == nil, "a plugin default can't take termin
 check(guarded.plugin["dev.x.y/up"] == Shortcut.parse("cmd+opt+up"), "cmd+opt+up is accepted")
 check(guarded.plugin["dev.x.y/user"] == Shortcut.parse("ctrl+r"), "a user-configured ctrl chord is honoured")
 check(guardLogs.filter { $0.contains("needs cmd") }.count == 4, "each refused default is logged")
+// One chord, however it's spelled, is one Shortcut, so an alias can't slip past `reserved`.
+for (a, b) in [("cmd+return", "cmd+enter"), ("cmd+opt+esc", "cmd+opt+escape"), ("cmd+,", "cmd+comma"),
+               ("cmd+=", "cmd+equal"), ("cmd+`", "cmd+backquote"), ("command+alt+escape", "cmd+opt+escape")] {
+    check(Shortcut.parse(a) == Shortcut.parse(b) && Set([Shortcut.parse(a)!, Shortcut.parse(b)!]).count == 1, "\(a) is \(b)")
+}
+check(Shortcut.parse("cmd+return")?.display == "⌘↩" && Shortcut.parse("cmd+esc")?.ghosttyTriggers == ["super+escape"], "aliases keep their glyph and trigger")
+let aliased = ["dev.x.y/r": "cmd+return", "dev.x.y/e": "cmd+opt+esc", "dev.x.y/p": "cmd+,", "dev.x.y/q": "cmd+=", "dev.x.y/g": "cmd+`"]
+let viaAlias = KeyMap(table: [:], pluginDefaults: aliased) { _ in }
+check(viaAlias.plugin.isEmpty, "reserved chords are refused under any spelling: \(viaAlias.plugin.keys.sorted())")
 let pg = HauntConfig.ghosttyConfig([:], defaultSize: 11, keys: withPlugins)
 check(pg.contains("keybind = alt+super+arrow_up=unbind\n"), "plugin chords are unbound in Ghostty")
 
