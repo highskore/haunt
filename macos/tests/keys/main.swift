@@ -60,5 +60,24 @@ check(conf.components(separatedBy: "keybind = super+t=unbind").count == 2, "unbi
 let custom = HauntConfig.ghosttyConfig([:], defaultSize: 11, keys: keys)
 check(custom.contains("keybind = super+p=unbind\n"), "configured chord unbound")
 
+// Agents-only view: its shortcut, [layout] agents_view, and the persisted state.
+check(defaults[.agentsView] == Shortcut.parse("cmd+shift+a"), "agents_view defaults to cmd+shift+a")
+check(conf.contains("keybind = shift+super+a=unbind\n"), "ghostty loses cmd+shift+a")
+check(KeyMap(table: TOML.parse("[keys]\nagents_view = \"cmd+opt+a\"")["keys"]!) { _ in }[.agentsView] == Shortcut.parse("cmd+opt+a"),
+      "agents_view is configurable")
+var layoutLogs: [String] = []
+check(AgentsViewStyle.parse(nil) { layoutLogs.append($0) } == .narrowList && layoutLogs.isEmpty, "agents_view defaults to narrow-list")
+check(AgentsViewStyle.parse(TOML.parse("[layout]\nagents_view = \"narrow-list\"")["layout"]?["agents_view"]) { layoutLogs.append($0) } == .narrowList
+      && layoutLogs.isEmpty, "narrow-list parses")
+check(AgentsViewStyle.parse(.scalar("dashboard")) { layoutLogs.append($0) } == .narrowList, "unknown view falls back")
+check(layoutLogs.count == 1 && layoutLogs[0].contains("dashboard"), "unknown view logged")
+let old = try! JSONDecoder().decode(HauntConfig.State.self, from: Data(#"{"sidebar_hidden":true}"#.utf8))
+check(old.sidebarHidden && !old.agentsView, "older state.json keeps sidebar_hidden")
+var st = HauntConfig.State()
+st.agentsView = true
+let round = try! JSONDecoder().decode(HauntConfig.State.self, from: JSONEncoder().encode(st))
+check(round.agentsView && !round.sidebarHidden, "agents_view round-trips")
+check(String(data: try! JSONEncoder().encode(st), encoding: .utf8)!.contains("\"agents_view\":true"), "stored as agents_view")
+
 print(failures == 0 ? "keys: all passed" : "keys: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

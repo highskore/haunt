@@ -69,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             // Agent events are the core's; other notifications still reach macOS.
             return title == "haunt://cli-agent" || title == "warp://cli-agent"
         }
-        for _ in 0..<(fixture == nil ? 1 : Fixture.tabCount) { c.newTab(select: false) }
+        for _ in 0..<(fixture?.tabCount ?? 1) { c.newTab(select: false) }
         c.refresh()
         c.window?.center()
         c.showWindow(nil)
@@ -127,10 +127,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc func selectTab(_ sender: NSMenuItem) { controller?.select(index: sender.tag) }
     @objc func toggleSidebar(_ sender: Any?) { controller?.toggleSidebar() }
     @objc func togglePalette(_ sender: Any?) { controller?.togglePalette() }
+    // Checked with responds(to:): no NSWindow/NSApplication/NSResponder method of this name (cf. toggleSidebar:).
+    @objc func toggleAgentsOnlyView(_ sender: Any?) { controller?.toggleAgentsView() }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleSidebar(_:)) {
             item.title = controller?.isSidebarHidden == true ? "Show Sidebar" : "Hide Sidebar"
+        }
+        if item.action == #selector(toggleAgentsOnlyView(_:)) {
+            item.state = controller?.isAgentsViewOn == true ? .on : .off
         }
         return true
     }
@@ -146,6 +151,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             # Shortcuts, as "cmd+shift+b" (cmd, shift, ctrl, opt). Commented lines show the defaults.
             [keys]
             \(KeyMap.Action.allCases.map { "# \($0.rawValue) = \"\($0.defaultKey)\"" }.joined(separator: "\n"))
+
+            # The view cmd+shift+a shows. Only "narrow-list" for now.
+            [layout]
+            # agents_view = "narrow-list"
 
             # Raw Ghostty keys, passed through as is.
             [ghostty]
@@ -193,6 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         submenu("View", [
             item("Command Palette", #selector(togglePalette(_:)), .palette),
             item("Hide Sidebar", #selector(toggleSidebar(_:)), .toggleSidebar),
+            item("Agents Only", #selector(toggleAgentsOnlyView(_:)), .agentsView),
             .separator(),
             item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), .fullScreen),
         ])
