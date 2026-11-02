@@ -243,23 +243,55 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: Paste confirmation
 
-    private var pasteAlert: (alert: NSAlert, request: Ghostty.ClipboardConfirmationRequest)?
+    /// One paste waiting for the user. `request` is Ghostty's, when it raised the question; it can be
+    /// withdrawn (replaced or cleared) before the sheet is answered.
+    private struct PasteAsk {
+        weak var view: HauntSurfaceView?
+        let text: String
+        let request: Ghostty.ClipboardConfirmationRequest?
+        let finish: (Bool) -> Void
+    }
 
-    /// Ghostty's paste protection asks before an unsafe paste: a native sheet with the first lines.
+    /// One sheet at a time per window; asks from other surfaces wait their turn.
+    private var pasteQueue: [PasteAsk] = []
+    private var pasteShown: (ask: PasteAsk, alert: NSAlert)?
+
+    /// Ghostty's paste protection asks before an unsafe paste; nil withdraws what this surface had asked.
     private func confirmPaste(_ request: Ghostty.ClipboardConfirmationRequest?, on view: HauntSurfaceView) {
-        if let open = pasteAlert, open.request !== request, let window {
-            pasteAlert = nil
-            window.endSheet(open.alert.window, returnCode: .abort)
+        let stale = { (a: PasteAsk) in a.view === view && a.request != nil && a.request !== request }
+        pasteQueue.removeAll(where: stale)
+        if let shown = pasteShown, stale(shown.ask) || shown.ask.view == nil {
+            pasteShown = nil
+            window?.endSheet(shown.alert.window, returnCode: .abort)
         }
-        guard let request, pasteAlert == nil, let window else { return }
-        if let tab = tab(for: view), tab.env.surfaceId != selectedId { select(tab.env.surfaceId) }
-        let alert = Self.pasteAlert(request.contents)
-        pasteAlert = (alert, request)
-        alert.beginSheetModal(for: window) { [weak self, weak view] r in
-            guard let self, self.pasteAlert?.request === request else { return }
-            self.pasteAlert = nil
-            if r == .alertSecondButtonReturn { request.complete() } else { request.cancel() }
-            if view?.pendingClipboardConfirmation === request { view?.pendingClipboardConfirmation = nil }
+        if let request {
+            askPaste(PasteAsk(view: view, text: request.contents, request: request) { [weak view] ok in
+                if ok { request.complete() } else { request.cancel() }
+                if view?.pendingClipboardConfirmation === request { view?.pendingClipboardConfirmation = nil }
+            })
+        }
+        showNextPaste()
+    }
+
+    private func askPaste(_ ask: PasteAsk) {
+        pasteQueue.append(ask)
+        showNextPaste()
+    }
+
+    private func showNextPaste() {
+        guard pasteShown == nil, let window else { return }
+        pasteQueue.removeAll { $0.view == nil }
+        guard !pasteQueue.isEmpty else { return }
+        let ask = pasteQueue.removeFirst()
+        if let view = ask.view, let tab = tab(for: view), tab.env.surfaceId != selectedId { select(tab.env.surfaceId) }
+        let alert = Self.pasteAlert(ask.text)
+        pasteShown = (ask, alert)
+        alert.beginSheetModal(for: window) { [weak self] r in
+            guard let self, self.pasteShown?.alert === alert else { return }
+            self.pasteShown = nil
+            ask.finish(r == .alertSecondButtonReturn)
+            // The next sheet can't begin until this one has finished ending.
+            DispatchQueue.main.async { self.showNextPaste() }
         }
     }
 
