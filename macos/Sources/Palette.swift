@@ -203,7 +203,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
             foot = ["↵ run"]
         }
         if rows.isEmpty { foot = [] }
-        view.update(chip: mode, query: query, placeholder: mode == nil ? "Jump to a tab, or type log" : "",
+        view.update(chip: mode, query: query, placeholder: mode == nil ? "Jump to a tab or command, or type log" : "",
                     rows: rows.isEmpty ? [PaletteRow(title: "No matches", sub: "", dim: true)] : rows,
                     foot: foot, maxRows: Self.maxRows)
         resize()
