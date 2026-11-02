@@ -222,6 +222,9 @@ final class PaletteController: NSObject, NSWindowDelegate {
             (.toggleSidebar, host.isSidebarHidden ? "Show Sidebar" : "Hide Sidebar", "View"),
             (.newTab, "New Tab", "Window"),
             (.closeTab, "Close Tab", "Window"),
+            (.nextTab, "Next Tab", "Window"),
+            (.previousTab, "Previous Tab", "Window"),
+            (.renameTab, "Rename Tab", "Window"),
             (.settings, "Open Settings", "Haunt · config.toml"),
             (.fullScreen, host.isFullScreen ? "Exit Full Screen" : "Enter Full Screen", "View"),
         ]

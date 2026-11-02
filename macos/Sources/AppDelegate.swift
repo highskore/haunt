@@ -105,6 +105,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             }
             c.drainPluginRequests()
         }
+        // HAUNT_RENAME=<n>:<text> opens the rename editor on the nth row with <text>; <n>=<text> names it.
+        if let spec = ProcessInfo.processInfo.environment["HAUNT_RENAME"],
+           let sep = spec.firstIndex(where: { $0 == ":" || $0 == "=" }), let n = Int(spec[..<sep]) {
+            let text = String(spec[spec.index(after: sep)...])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak c] in
+                guard let c else { return }
+                if spec[sep] == "=" { return c.setCustomName(text, at: n - 1) }
+                c.select(index: n - 1)
+                c.renameSelectedTab(text: text)
+            }
+        }
         if fixture == .pasteConfirm {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak c] in c?.showPasteFixture() }
         }
@@ -138,6 +149,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc func newTab(_ sender: Any?) { controller?.newTab() }
     @objc func closeTab(_ sender: Any?) { controller?.closeSelectedTab() }
     @objc func selectTab(_ sender: NSMenuItem) { controller?.select(index: sender.tag) }
+    // Not selectNextTab(_:)/selectPreviousTab(_:): NSWindow answers those for its own window tabs.
+    @objc func selectNextHauntTab(_ sender: Any?) { controller?.selectAdjacent(1) }
+    @objc func renameHauntTab(_ sender: Any?) { controller?.renameSelectedTab() }
+    @objc func selectPreviousHauntTab(_ sender: Any?) { controller?.selectAdjacent(-1) }
     // Not toggleSidebar(_:): NSWindow answers that selector and sits ahead of us in the responder chain,
     // so the menu item validated (and kept its title) against the window instead of us.
     @objc func toggleHauntSidebar(_ sender: Any?) { controller?.toggleSidebar() }
@@ -150,8 +165,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if item.action == #selector(toggleAgentsOnlyView(_:)) {
             item.state = controller?.isAgentsViewOn == true ? .on : .off
         }
-        return true
+        // While a tab name is being edited, Haunt's own shortcuts stay out of the way; disabled items
+        // don't take their key equivalents, so the keys reach the text field.
+        return !(controller?.isRenaming == true && Self.renameBlocked.contains(item.action))
     }
+
+    private static let renameBlocked: Set<Selector?> = [
+        #selector(newTab(_:)), #selector(closeTab(_:)), #selector(selectTab(_:)), #selector(selectNextHauntTab(_:)),
+        #selector(selectPreviousHauntTab(_:)), #selector(renameHauntTab(_:)), #selector(toggleHauntSidebar(_:)),
+        #selector(togglePalette(_:)), #selector(openConfig(_:)), #selector(NSWindow.toggleFullScreen(_:)),
+        #selector(toggleAgentsOnlyView(_:)),
+    ]
 
     private var sidebarHidden: Bool { controller?.isSidebarHidden ?? false }
 
@@ -172,7 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
             # Shortcuts, as "cmd+shift+b" (cmd, shift, ctrl, opt). Commented lines show the defaults.
             [keys]
-            \(KeyMap.Action.allCases.map { "# \($0.rawValue) = \"\($0.defaultKey)\"" }.joined(separator: "\n"))
+            \(KeyMap.Action.allCases.map { a in a.defaultKey.map { "# \(a.rawValue) = \"\($0)\"" } ?? "# \(a.rawValue): no default" }.joined(separator: "\n"))
 
             # The view cmd+shift+a shows. Only "narrow-list" for now.
             [layout]
@@ -252,6 +276,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             item("New Tab", #selector(newTab(_:)), .newTab),
             item("Close Tab", #selector(closeTab(_:)), .closeTab),
             .separator(),
+            item("Next Tab", #selector(selectNextHauntTab(_:)), .nextTab),
+            item("Previous Tab", #selector(selectPreviousHauntTab(_:)), .previousTab),
+            item("Rename Tab…", #selector(renameHauntTab(_:)), .renameTab),
         ] + tabs + [
             .separator(),
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), .minimize),
