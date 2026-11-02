@@ -1,10 +1,16 @@
 import AppKit
 
 /// Mockup 06's grouped flat sidebar, drawn from a core `SidebarSnapshot`.
-final class SidebarView: NSView {
+final class SidebarView: NSView, NSTextFieldDelegate {
     var snapshot = SidebarSnapshot(groups: []) { didSet { relayout() } }
     var onSelect: ((String) -> Void)?
     var onClose: ((String) -> Void)?
+    /// Agents view 01's list: the window's background and no right hairline.
+    var panel = false { didSet { needsDisplay = true } }
+    /// A rename saved from the inline editor; an empty name means back to the automatic one.
+    var onRename: ((String, String) -> Void)?
+    /// The editor closed, saved or not; focus can go back to the terminal.
+    var onRenameEnd: (() -> Void)?
 
     // No mockup has row hover: a × in the status slot, meta grey, primary while the pointer is on it.
     // HAUNT_ROW_HOVER=<n> pins hover on the nth row (1-based); <n>x also pins it on the ×.
@@ -36,7 +42,7 @@ final class SidebarView: NSView {
     private let lh = Tok.Font.baseLine
     private var rowLine1: CGFloat { max(Tok.Size.iconSize, Tok.Size.rowName * lh, Tok.Size.rowRight * lh) }
     private var labelHeight: CGFloat { Tok.Size.labelPad[0] + Tok.Size.labelFont * lh + Tok.Size.labelPad[2] }
-    private var contentWidth: CGFloat { bounds.width - 1 }
+    private var contentWidth: CGFloat { panel ? bounds.width : bounds.width - 1 }
 
     private func rowHeight(_ r: Row) -> CGFloat {
         let gap = Tok.Size.rowGap[0]
@@ -61,6 +67,7 @@ final class SidebarView: NSView {
                 y += h
             }
         }
+        positionEditor()
         if let p = Self.pinned {
             let ids = orderedIds
             hoverId = ids.indices.contains(p.index) ? ids[p.index] : nil
@@ -110,12 +117,85 @@ final class SidebarView: NSView {
     override func menu(for event: NSEvent) -> NSMenu? {
         guard let (row, _) = row(at: convert(event.locationInWindow, from: nil)) else { return nil }
         let menu = NSMenu()
-        let item = NSMenuItem(title: "Close Tab", action: #selector(closeFromMenu(_:)), keyEquivalent: "")
-        item.target = self
-        item.representedObject = row.surfaceId
-        menu.addItem(item)
+        for (title, action) in [("Rename Tab…", #selector(renameFromMenu(_:))), ("Close Tab", #selector(closeFromMenu(_:)))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = row.surfaceId
+            menu.addItem(item)
+        }
         return menu
     }
+
+    @objc private func renameFromMenu(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? String { beginRename(id) }
+    }
+
+    // MARK: Rename
+
+    private var editor: (id: String, field: NSTextField)?
+    var isRenaming: Bool { editor != nil }
+
+    /// Where a row's name is drawn, widened to the row's right padding for editing.
+    private func nameRect(top: CGFloat) -> NSRect {
+        let col2 = Tok.Size.rowPad[1] + Tok.Size.iconSize + Tok.Size.rowGap[1]
+        let h = Tok.Size.rowName * lh
+        return NSRect(x: col2, y: top + Tok.Size.rowPad[0] + (rowLine1 - h) / 2,
+                      width: contentWidth - Tok.Size.rowPad[1] - col2, height: h)
+    }
+
+    /// Edits the row's title in place, starting from `text` or the name it shows.
+    func beginRename(_ id: String, text: String? = nil) {
+        endRename(save: false)
+        guard let row = snapshot.groups.lazy.flatMap(\.rows).first(where: { $0.surfaceId == id }) else { return }
+        let field = NSTextField(string: text ?? row.name)
+        field.isBordered = false
+        field.focusRingType = .none
+        field.drawsBackground = true
+        field.font = Draw.ui(Tok.Size.rowName)
+        field.textColor = Tok.Color.textPrimary
+        field.cell?.usesSingleLineMode = true
+        field.cell?.lineBreakMode = .byClipping
+        field.delegate = self
+        addSubview(field)
+        editor = (id, field)
+        positionEditor()
+        window?.makeFirstResponder(field)
+        field.currentEditor()?.selectAll(nil)
+    }
+
+    private func positionEditor() {
+        guard let (id, field) = editor else { return }
+        guard case let .row(row, top, _)? = items.first(where: {
+            if case let .row(r, _, _) = $0 { return r.surfaceId == id } else { return false }
+        }) else { return endRename(save: false) }
+        // The field's cell insets its text 2 pt and sizes its own line; centre that on the drawn name.
+        let r = nameRect(top: top)
+        let h = field.cell?.cellSize.height ?? r.height
+        field.frame = NSRect(x: r.minX - 2, y: (r.midY - h / 2).rounded(), width: r.width + 2, height: h)
+        field.backgroundColor = row.selected ? Tok.Color.rowSelected : Tok.Color.sidebarBg
+    }
+
+    private func endRename(save: Bool) {
+        guard let (id, field) = editor else { return }
+        editor = nil
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        field.delegate = nil
+        field.removeFromSuperview()
+        if save { onRename?(id, name) }
+        onRenameEnd?()
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+        switch sel {
+        case #selector(NSResponder.insertNewline(_:)): endRename(save: true)
+        case #selector(NSResponder.cancelOperation(_:)): endRename(save: false)
+        default: return false
+        }
+        return true
+    }
+
+    /// Clicking away keeps what was typed, as Finder does.
+    func controlTextDidEndEditing(_ obj: Notification) { endRename(save: true) }
 
     @objc private func closeFromMenu(_ sender: NSMenuItem) {
         if let id = sender.representedObject as? String { onClose?(id) }
@@ -123,8 +203,8 @@ final class SidebarView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        Draw.fill(bounds, Tok.Color.sidebarBg)
-        Draw.fill(NSRect(x: bounds.width - 1, y: 0, width: 1, height: bounds.height), Tok.Color.hairline)
+        Draw.fill(bounds, panel ? Tok.Color.windowBg : Tok.Color.sidebarBg)
+        if !panel { Draw.fill(NSRect(x: bounds.width - 1, y: 0, width: 1, height: bounds.height), Tok.Color.hairline) }
         for item in items {
             switch item {
             case let .label(text, top):
@@ -242,6 +322,8 @@ final class SidebarView: NSView {
         guard let (row, top) = row(at: p) else { return }
         if closeRect(top: top).insetBy(dx: -4, dy: -4).contains(p) {
             onClose?(row.surfaceId)
+        } else if event.clickCount == 2, nameRect(top: top).contains(p) {
+            beginRename(row.surfaceId)
         } else {
             onSelect?(row.surfaceId)
         }

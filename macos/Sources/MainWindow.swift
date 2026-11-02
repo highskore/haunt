@@ -91,11 +91,23 @@ private final class RootView: NSView {
     let pane = NSView()
     /// The palette mockup's scrim over everything below the title bar.
     let scrim = NSView()
+    let agents = AgentsView()
 
     var sidebarHidden = false {
         didSet {
             titleBar.zen = sidebarHidden
-            sidebar.isHidden = sidebarHidden
+            sidebar.isHidden = sidebarHidden || agentsOn
+            needsLayout = true
+        }
+    }
+
+    /// The agents-only view covers the window; the panes keep their last frames so no terminal resizes.
+    var agentsOn = false {
+        didSet {
+            agents.isHidden = !agentsOn
+            titleBar.isHidden = agentsOn
+            pane.isHidden = agentsOn
+            sidebar.isHidden = agentsOn || sidebarHidden
             needsLayout = true
         }
     }
@@ -109,13 +121,16 @@ private final class RootView: NSView {
         scrim.wantsLayer = true
         scrim.layer?.backgroundColor = NSColor(white: 0, alpha: Tok.Size.paletteScrimAlpha).cgColor
         scrim.isHidden = true
-        for v in [titleBar, sidebar, pane, scrim] { addSubview(v) }
+        agents.isHidden = true
+        for v in [titleBar, sidebar, pane, scrim, agents] { addSubview(v) }
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override func layout() {
         super.layout()
+        agents.frame = bounds
+        if agentsOn { return }
         let top = TitleBarView.height(zen: sidebarHidden), w = sidebarHidden ? 0 : Tok.Size.sidebarW
         titleBar.frame = NSRect(x: 0, y: 0, width: bounds.width, height: top)
         sidebar.frame = NSRect(x: 0, y: top, width: Tok.Size.sidebarW, height: bounds.height - top)
@@ -142,6 +157,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var refreshQueued = false
     private var observers: [NSObjectProtocol] = []
     private var ticker: Timer?
+    /// Applied in showWindow, once the window has its launch position to restore to.
+    private var agentsViewAtLaunch = false
     private lazy var listener = MainQueueListener { [weak self] in self?.coalescedRefresh() }
 
     init(core: CoreAPI, ghostty: Ghostty.App, fixture: Fixture?, config: HauntConfig, plugins: PluginsAPI?) {
@@ -180,9 +197,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
         // Fixtures neither read nor overwrite the user's saved state.
         root.sidebarHidden = fixture?.sidebarHidden ?? config.loadState().sidebarHidden
+        agentsViewAtLaunch = fixture?.agentsView ?? config.loadState().agentsView
         updateKeys(config.keys)
         root.sidebar.onSelect = { [weak self] id in self?.select(id) }
         root.sidebar.onClose = { [weak self] id in self?.closeTab(id) }
+        root.agents.list.onSelect = { [weak self] id in self?.expandAgentsView(to: id) }
+        root.agents.list.onClose = { [weak self] id in self?.closeTab(id) }
+        root.sidebar.onRename = { [weak self] id, name in
+            self?.customNames[id] = name.isEmpty ? nil : name
+            self?.refresh()
+        }
+        root.sidebar.onRenameEnd = { [weak self] in self?.focusSelectedSurface() }
         core.setListener(listener: listener)
         // Subagent elapsed times are computed in snapshot(), so poll once a second to keep them ticking.
         ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -334,7 +359,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         core.selectSurface(surfaceId: id)
         // Every surface stays in the window (hidden when not selected) so its size and display stay current.
         for t in tabs { t.host.isHidden = t !== tab }
-        window?.makeFirstResponder(tab.view)
+        window?.makeFirstResponder(root.agentsOn ? root.agents : tab.view)
         syncFocus()
     }
 
@@ -356,6 +381,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func select(index: Int) {
         let ids = root.sidebar.orderedIds
         if ids.indices.contains(index) { select(ids[index]) }
+    }
+
+    /// Next (+1) or previous (-1) tab in sidebar order, wrapping around.
+    func selectAdjacent(_ step: Int) {
+        let ids = root.sidebar.orderedIds
+        guard !ids.isEmpty else { return }
+        let i = selectedId.flatMap(ids.firstIndex(of:)) ?? 0
+        select(ids[((i + step) % ids.count + ids.count) % ids.count])
     }
 
     func closeSelectedTab() {
@@ -388,6 +421,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         tab.subscriptions.removeAll()
         tab.host.removeFromSuperview()
         tabs.remove(at: i)
+        customNames[tab.env.surfaceId] = nil
         core.unregisterSurface(surfaceId: tab.env.surfaceId)
         guard !tabs.isEmpty else {
             window?.close()
@@ -413,9 +447,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    /// Names given with Rename Tab, for the life of the tab. They replace only the row title.
+    private var customNames: [String: String] = [:]
+
     func refresh() {
-        let snap = core.snapshot()
+        var snap = core.snapshot()
+        if !customNames.isEmpty {
+            for g in snap.groups.indices {
+                for r in snap.groups[g].rows.indices {
+                    if let n = customNames[snap.groups[g].rows[r].surfaceId] { snap.groups[g].rows[r].name = n }
+                }
+            }
+        }
         if snap != root.sidebar.snapshot { root.sidebar.snapshot = snap }
+        root.agents.update(snap)
         let sel = snap.groups.lazy.flatMap(\.rows).first { $0.selected }
         root.titleBar.progress = sel?.progress.map { $0.total == 0 ? 0 : CGFloat($0.done) / CGFloat($0.total) }
     }
@@ -425,6 +470,21 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     var isSidebarHidden: Bool { root.sidebarHidden }
 
     var onSidebarToggle: (() -> Void)?
+
+    var isRenaming: Bool { root.sidebar.isRenaming }
+
+    func renameSelectedTab(text: String? = nil) {
+        guard let id = selectedId else { return }
+        if root.sidebarHidden { toggleSidebar() }
+        root.sidebar.beginRename(id, text: text)
+    }
+
+    func setCustomName(_ name: String, at index: Int) {
+        let ids = root.sidebar.orderedIds
+        guard ids.indices.contains(index) else { return }
+        customNames[ids[index]] = name
+        refresh()
+    }
 
     func toggleSidebar() {
         root.sidebarHidden.toggle()
@@ -443,10 +503,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             keys[a].map { "\($0.display) \(word)" } ?? word
         }
         root.titleBar.hints = [(.agents, hint(.toggleSidebar, "agents")), (.search, hint(.palette, "search"))]
+        root.agents.shortcut = AgentsView.mockupDisplay(keys[.agentsView])
     }
 
     func togglePalette() {
         if palette.isOpen { return palette.close() }
+        // The 400 pt palette doesn't fit the 278 pt strip.
+        if root.agentsOn { return NSSound.beep() }
         openPalette()
     }
 
@@ -516,9 +579,61 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         switch icon {
         case .search: togglePalette()
         case .newTab: newTab()
-        case .settings: (NSApp.delegate as? AppDelegate)?.openConfig(nil)
+        case .settings: (NSApp.delegate as? AppDelegate)?.openSettings(nil)
         case .sidebar: toggleSidebar()
         }
+    }
+
+    // MARK: Agents-only view
+
+    var isAgentsViewOn: Bool { root.agentsOn }
+
+    override func showWindow(_ sender: Any?) {
+        if agentsViewAtLaunch {
+            agentsViewAtLaunch = false
+            setAgentsView(true, animate: false)
+        }
+        super.showWindow(sender)
+    }
+
+    func toggleAgentsView() {
+        setAgentsView(!root.agentsOn, animate: true)
+        if fixture == nil {
+            var state = config.loadState()
+            state.agentsView = root.agentsOn
+            config.saveState(state)
+        }
+    }
+
+    /// A row click: the full window comes back on that tab.
+    private func expandAgentsView(to id: String) {
+        if root.agentsOn { toggleAgentsView() }
+        select(id)
+    }
+
+    private func setAgentsView(_ on: Bool, animate: Bool) {
+        guard let window, on != root.agentsOn else { return }
+        if window.styleMask.contains(.fullScreen) { return NSSound.beep() }
+        if on {
+            if palette.isOpen { palette.close() }
+            root.agents.restore = (window.frame, window.minSize)
+            root.agentsOn = true
+            window.minSize = NSSize(width: Tok.Size.narrowW - 2, height: 200)
+            let frame = AgentsView.dockedFrame(on: window.screen ?? NSScreen.main, height: fixture.map { _ in Fixture.narrowHeight })
+            window.setFrame(frame, display: true, animate: animate)
+            window.makeFirstResponder(root.agents)
+        } else {
+            // Grow first, then lay the panes out once at their full size.
+            if let r = root.agents.restore {
+                window.setFrame(r.frame, display: true, animate: animate)
+                window.minSize = r.minSize
+            }
+            root.agents.restore = nil
+            root.agentsOn = false
+            root.layoutSubtreeIfNeeded()
+            if let tab = tabs.first(where: { $0.env.surfaceId == selectedId }) { window.makeFirstResponder(tab.view) }
+        }
+        syncFocus()
     }
 
     // MARK: NSWindowDelegate
@@ -586,8 +701,12 @@ extension MainWindowController: PaletteHost {
 
     func paletteDidClose() {
         root.scrim.isHidden = true
+        window?.makeKeyAndOrderFront(nil)
+        focusSelectedSurface()
+    }
+
+    private func focusSelectedSurface() {
         guard let window else { return }
-        window.makeKeyAndOrderFront(nil)
         if let tab = tabs.first(where: { $0.env.surfaceId == selectedId }) { window.makeFirstResponder(tab.view) }
         syncFocus()
     }

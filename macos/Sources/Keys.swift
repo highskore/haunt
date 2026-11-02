@@ -76,8 +76,17 @@ struct Shortcut: Equatable, Hashable {
         return Shortcut(mods: mods, key: punct[key]?.1 ?? key)
     }
 
+    /// What shift turns punctuation and digits into on a US layout. AppKit matches a menu key equivalent
+    /// against the shifted character, so ⇧⌘] must be "}".
+    private static let shifted: [String: String] = [
+        "[": "{", "]": "}", ",": "<", ".": ">", "/": "?", ";": ":", "'": "\"", "-": "_", "=": "+", "`": "~",
+        "\\": "|", "1": "!", "2": "@", "3": "#", "4": "$", "5": "%", "6": "^", "7": "&", "8": "*", "9": "(", "0": ")",
+    ]
+
     /// The `NSMenuItem.keyEquivalent` string.
     var keyEquivalent: String {
+        let base = Self.punct[key]?.0 ?? key
+        if mods.contains(.shift), let s = Self.shifted[base] { return s }
         if let p = Self.punct[key] { return p.0 }
         if let n = Self.named[key] { return n.0 }
         return key
@@ -118,8 +127,12 @@ struct KeyMap: Equatable {
         case selectTab1 = "select_tab_1", selectTab2 = "select_tab_2", selectTab3 = "select_tab_3"
         case selectTab4 = "select_tab_4", selectTab5 = "select_tab_5", selectTab6 = "select_tab_6"
         case selectTab7 = "select_tab_7", selectTab8 = "select_tab_8", selectTab9 = "select_tab_9"
+        case nextTab = "next_tab"
+        case previousTab = "previous_tab"
+        case renameTab = "rename_tab"
         case palette
         case toggleSidebar = "toggle_sidebar"
+        case agentsView = "agents_view"
         case settings
         case fullScreen = "full_screen"
         case hide
@@ -130,12 +143,17 @@ struct KeyMap: Equatable {
         case selectAll = "select_all"
 
         /// Warp's defaults where Warp has the action (⌘⇧B is its vertical tabs panel); macOS standards otherwise.
-        var defaultKey: String {
+        /// nil: no shortcut unless the table gives one.
+        var defaultKey: String? {
             switch self {
             case .newTab: return "cmd+t"
+            case .nextTab: return "cmd+shift+]"
+            case .previousTab: return "cmd+shift+["
+            case .renameTab: return nil
             case .closeTab: return "cmd+w"
             case .palette: return "cmd+k"
             case .toggleSidebar: return "cmd+shift+b"
+            case .agentsView: return "cmd+shift+a"
             case .settings: return "cmd+comma"
             case .fullScreen: return "cmd+ctrl+f"
             case .hide: return "cmd+h"
@@ -170,11 +188,11 @@ struct KeyMap: Equatable {
                 continue
             }
             guard case let .scalar(text) = value, let s = Shortcut.parse(text) else {
-                log("[keys] \(name) = \(value.strings.joined(separator: ",")): not a shortcut like \"cmd+shift+b\", using \(action.defaultKey)")
+                log("[keys] \(name) = \(value.strings.joined(separator: ",")): not a shortcut like \"cmd+shift+b\", using \(action.defaultKey ?? "none")")
                 continue
             }
             if let other = configured.first(where: { $0.value == s })?.key {
-                log("[keys] \(name): \(text) is already \(other.rawValue), using \(action.defaultKey)")
+                log("[keys] \(name): \(text) is already \(other.rawValue), using \(action.defaultKey ?? "none")")
                 continue
             }
             configured[action] = s
@@ -182,9 +200,10 @@ struct KeyMap: Equatable {
         bindings = configured
         // A configured chord takes precedence over another action's default, which then has none.
         for a in Action.allCases where configured[a] == nil {
-            let s = Shortcut.parse(a.defaultKey)!
+            guard let d = a.defaultKey else { continue }
+            let s = Shortcut.parse(d)!
             if let owner = configured.first(where: { $0.value == s })?.key {
-                log("[keys] \(owner.rawValue) took \(a.defaultKey); \(a.rawValue) has no shortcut")
+                log("[keys] \(owner.rawValue) took \(d); \(a.rawValue) has no shortcut")
                 continue
             }
             bindings[a] = s

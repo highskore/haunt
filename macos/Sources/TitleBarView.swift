@@ -26,6 +26,8 @@ final class TitleBarView: NSView {
     }
 
     var accessory: Accessory = .icons { didSet { needsDisplay = true } }
+    /// The `.kbd` accessory's shortcut.
+    var kbdLabel = "⌘K" { didSet { needsDisplay = true } }
     var onIcon: ((Icon) -> Void)?
     var onHint: ((Hint) -> Void)?
 
@@ -214,7 +216,7 @@ final class TitleBarView: NSView {
                 }
             }
         case .kbd:
-            drawKbd("⌘K", in: ctx)
+            drawKbd(kbdLabel, in: ctx)
         }
     }
 

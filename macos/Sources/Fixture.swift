@@ -16,6 +16,14 @@ enum Fixture: String {
     case codexLog = "codex-log"
     /// No mockup: ui-03 with the paste-confirmation sheet up.
     case pasteConfirm = "paste-confirm"
+    /// Agents-only view 01 on the agents mockup's six tabs.
+    case narrowList = "av-01-narrow-list"
+    /// No mockup: ui-03 with the first-launch agent picker up.
+    case setupPicker = "setup-picker"
+    /// No mockup: ui-03 with the picker's next sheet, the change for Claude Code and Codex.
+    case setupChange = "setup-change"
+    /// No mockup: ui-03 with the Settings window open, Claude Code set up.
+    case settings = "settings"
 
     static var current: Fixture? {
         ProcessInfo.processInfo.environment["HAUNT_FIXTURE"].flatMap(Fixture.init(rawValue:))
@@ -25,10 +33,17 @@ enum Fixture: String {
     static let windowSize = NSSize(width: 900, height: Tok.Size.windowH)
 
     var titleAccessory: TitleBarView.Accessory {
-        self == .iconOnly || self == .zen || self == .pasteConfirm ? .icons : .kbd
+        self == .iconOnly || self == .zen || isSheet ? .icons : .kbd
     }
 
     var sidebarHidden: Bool { self == .zen }
+
+    var agentsView: Bool { self == .narrowList }
+
+    /// The mockup's strip: the 500 pt desk less its 24 pt margins and the strip's border.
+    static let narrowHeight: CGFloat = 448
+    /// Fixtures that put a sheet or window over ui-03.
+    var isSheet: Bool { [.pasteConfirm, .setupPicker, .setupChange, .settings].contains(self) }
 
     /// The palette mockup's input: the `log` chip and "push".
     var paletteQuery: String? { self == .palette ? "log push" : self == .codexLog ? "log " : nil }
@@ -39,7 +54,7 @@ enum Fixture: String {
     }
 
     // The mockup's TABS array (pawr-ui/index.html), in order.
-    private static let tabs: [Tab] = [
+    private static let uiTabs: [Tab] = [
         Tab(kind: .claude, name: "pawr", meta: "agent-sidebar · Writing tests", status: "3/5", needs: false,
             progress: Progress(done: 3, total: 5),
             subs: [Subrow(label: "Explore · trace hooks", meta: "2/4 · 1m12s"),
@@ -51,20 +66,34 @@ enum Fixture: String {
             progress: Progress(done: 6, total: 6), subs: []),
     ]
 
-    static let tabCount = tabs.count
+    // pawr-agents-view/index.html's TABS: five agents and the shell tab every view hides.
+    private static let agentTabs: [Tab] = [
+        uiTabs[0],
+        uiTabs[1],
+        Tab(kind: .claude, name: "docs", meta: "shortcuts-page · Updating examples", status: "2/7", needs: false,
+            progress: Progress(done: 2, total: 7), subs: [Subrow(label: "Explore · find old keys", meta: "9 tools · 22s")]),
+        Tab(kind: .claude, name: "sdk", meta: "fix/types · Running tsc", status: "1/4", needs: false,
+            progress: Progress(done: 1, total: 4), subs: []),
+        uiTabs[3],
+        uiTabs[2],
+    ]
+
+    private var tabs: [Tab] { self == .narrowList ? Self.agentTabs : Self.uiTabs }
+
+    var tabCount: Int { tabs.count }
 
     func snapshot(surfaceIds ids: [String], selected: String?) -> SidebarSnapshot {
         let codex = self == .codex || self == .codexLog
-        let rows = zip(Self.tabs, ids).map { t, id in
+        let rows = zip(tabs, ids).map { t, id in
             let kind = codex && t.name == "warp upstream" ? RowKind.codex : t.kind
             let pending = self == .suspicious && t.needs
                 ? PendingRequest(key: 1, tool: "Bash", preview: "ls #⏎rm -rf ~/x", suspicious: true) : nil
             return Row(surfaceId: id, kind: kind, name: t.name, meta: t.meta, statusText: t.status,
                        needsYou: t.needs, progress: t.progress, subagents: t.subs, selected: id == selected, pending: pending)
         }
-        guard rows.count == Self.tabs.count else { return SidebarSnapshot(groups: []) }
+        guard rows.count == tabs.count else { return SidebarSnapshot(groups: []) }
         switch self {
-        case .iconOnly, .zen, .pasteConfirm:
+        case .iconOnly, .zen, .pasteConfirm, .narrowList, .setupPicker, .setupChange, .settings:
             return SidebarSnapshot(groups: [SidebarGroup(label: "", rows: rows)])
         case .groupedFlat, .palette, .suspicious, .codex, .codexLog:
             return SidebarSnapshot(groups: [

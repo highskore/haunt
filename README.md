@@ -43,18 +43,30 @@ macos/build.sh && macos/make-app.sh     # builds core, bindings and build/haunt.
 open build/haunt.app
 ```
 
-`make-app.sh` needs the Claude adapter checked out (see below).
+`make-app.sh` needs the Claude adapter checked out (see below). It also bundles the Codex adapter if `../haunt-plugins/haunt-codex` is there (or `HAUNT_CODEX_ADAPTER`), and the `haunt` CLI as `haunt.app/Contents/Helpers/haunt`.
 
 Signing: set `HAUNT_SIGN_ID`, or put your identity in a `.sign-id` file (gitignored). Without either, the app is signed ad hoc.
 
-## Set up Claude Code
+## Set up
+
+```sh
+haunt setup                  # asks: Claude Code, Codex, both, or just the terminal
+haunt setup claude|codex     # set up one
+haunt setup --remove codex   # take one out
+```
+
+Each run first prints the exact change and asks before making it: the `claude plugin` commands for Claude Code, a diff of `~/.codex/config.toml` for Codex. `--dry-run` only prints; `--yes` skips the question. The choice is kept in `~/.haunt/state.json`. On first launch the app asks the same question in a sheet and runs the same command; change it later in Settings (⌘,).
+
+For Claude Code it runs:
 
 ```sh
 claude plugin marketplace add ../haunt-plugins/haunt-claude
 claude plugin install haunt@haunt
 ```
 
-The adapter is the haunt-claude repo, cloned next to this one as `../haunt-plugins/haunt-claude`. `make-app.sh` also bundles a copy into `haunt.app/Contents/Resources/adapters/claude`: the commit `macos/adapters.lock` pins, taken with `git archive`. It refuses a checkout with uncommitted changes or at another commit; bump the pin after pushing the adapter, or set `HAUNT_ADAPTER_UNPINNED=1` to bundle the working tree while iterating. Set `HAUNT_CLAUDE_ADAPTER` to use a checkout somewhere else. Or try it without installing: `claude --plugin-dir ../haunt-plugins/haunt-claude`. Needs `jq` 1.6+ and `nc`, both on macOS by default.
+For Codex it runs the adapter's own `install.sh`, which adds a marked block of hooks to `$CODEX_HOME/config.toml` and backs the file up first; then trust the hooks with `/hooks` in Codex. See [haunt-codex](../haunt-plugins/haunt-codex).
+
+The Claude adapter is the haunt-claude repo, cloned next to this one as `../haunt-plugins/haunt-claude`. `make-app.sh` also bundles a copy into `haunt.app/Contents/Resources/adapters/claude` (and haunt-codex into `adapters/codex`): the commit `macos/adapters.lock` pins, taken with `git archive`. It refuses a checkout with uncommitted changes or at another commit; bump the pin after pushing the adapter, or set `HAUNT_ADAPTER_UNPINNED=1` to bundle the working tree while iterating. Set `HAUNT_CLAUDE_ADAPTER` to use a checkout somewhere else. Or try it without installing: `claude --plugin-dir ../haunt-plugins/haunt-claude`. Needs `jq` 1.6+ and `nc`, both on macOS by default.
 
 Optional: `shell/install.sh` installs a matching Claude Code theme and prints the zsh lines for a minimal prompt inside Haunt. It never edits your `~/.zshrc`.
 
@@ -77,6 +89,7 @@ haunt dump                       # sidebar state as JSON
 haunt decisions [query]          # permission decision log
 haunt plugin install ./my-plugin # shows the capabilities, asks before installing
 haunt plugin list | remove <id> | approve <id>
+haunt setup [claude|codex|none] [--remove] [--yes] [--dry-run]
 ```
 
 ## Plugins
