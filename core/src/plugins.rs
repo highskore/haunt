@@ -15,7 +15,7 @@ use crate::plugin_cache::{CacheError, CwasmCache, cache_name};
 use crate::plugin_fs::FsScope;
 use crate::arrange::{Arrangement, ColorStyle, Section, StateGroup, TabColor};
 use crate::layout::RowKind;
-use crate::model::CoreHandle;
+use crate::model::{CoreHandle, SidebarToken};
 use crate::plugin_manifest::{Capabilities, KV_CAP};
 use crate::session::Outcome;
 
@@ -198,6 +198,14 @@ pub struct HostState {
     fs: FsScope,
     pty_times: VecDeque<Instant>,
     core: Option<CoreHandle>,
+    /// Set while this instance may arrange the sidebar.
+    sidebar: Option<SidebarToken>,
+}
+
+impl Drop for HostState {
+    fn drop(&mut self) {
+        self.release_sidebar();
+    }
 }
 
 impl HostState {
@@ -213,7 +221,22 @@ impl HostState {
             outbox: Vec::new(),
             fs: FsScope::new(&caps.fs_read, &caps.fs_write, haunt_dir),
             pty_times: VecDeque::new(),
+            sidebar: match &core {
+                Some(c) if caps.sidebar => Some(c.attach_sidebar()),
+                Some(c) => {
+                    c.forget_arrangement_of(id);
+                    None
+                }
+                None => None,
+            },
             core,
+        }
+    }
+
+    /// Gives up the sidebar: a disabled, reloaded or dropped instance's arrangement goes with it.
+    fn release_sidebar(&mut self) {
+        if let (Some(core), Some(token)) = (&self.core, self.sidebar.take()) {
+            core.detach_sidebar(token);
         }
     }
 
@@ -427,12 +450,13 @@ impl wside::Host for HostState {
                 wside::ColorStyle::Tint => ColorStyle::Tint,
             },
         };
-        core.set_arrangement(&self.id, a).map_err(|e| e.to_string())
+        let token = self.sidebar.ok_or("not loaded with the sidebar capability")?;
+        core.set_arrangement(&self.id, token, a).map_err(|e| e.to_string())
     }
 
     fn clear(&mut self) {
-        if let Some(core) = &self.core {
-            core.clear_arrangement(&self.id);
+        if let (Some(core), Some(token)) = (&self.core, self.sidebar) {
+            core.clear_arrangement(token);
         }
     }
 }
@@ -551,6 +575,7 @@ impl LoadedPlugin {
                 format!("plugin {} trapped and was disabled: {e:#}", self.id())
             };
             self.disabled = Some(why.clone());
+            self.store.data_mut().release_sidebar();
             PluginError(why)
         })
     }
@@ -914,7 +939,8 @@ mod tests {
             st.handle_line(&line(&a, r#""event":"prompt_submit","query":"x""#), Instant::now());
             st.handle_line(&line(&b, r#""event":"permission_seen","tool_name":"Bash","tool_input":{"command":"ls"}"#), Instant::now());
         });
-        let mut st = HostState::new("dev.haunt.tabs", &Capabilities::default(), None, None, Some(core.handle()));
+        let sidebar = Capabilities { sidebar: true, ..Default::default() };
+        let mut st = HostState::new("dev.haunt.tabs", &sidebar, None, None, Some(core.handle()));
         let rows = st.rows();
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().any(|r| r.surface == b.surface_id && r.group == wside::StateGroup::NeedsYou));
@@ -933,12 +959,29 @@ mod tests {
         assert_eq!(ids, [("needs-you", vec![b.surface_id.clone()]), ("pinned", vec![a.surface_id.clone()])]);
         assert_eq!((snap.groups[1].rows[0].color, snap.color_style), (Some(TabColor::Blue), ColorStyle::Tint));
 
-        let mut other = HostState::new("dev.x.other", &Capabilities::default(), None, None, Some(core.handle()));
-        assert!(other.arrange(arrangement).unwrap_err().contains("dev.haunt.tabs"), "one arranger at a time");
+        let mut other = HostState::new("dev.x.other", &sidebar, None, None, Some(core.handle()));
+        assert!(other.arrange(arrangement.clone()).unwrap_err().contains("dev.haunt.tabs"), "one arranger at a time");
         other.clear();
         assert_eq!(core.snapshot().groups[1].id, "pinned", "only the owner clears");
+        let mut no_cap = HostState::new("dev.x.nocap", &Capabilities::default(), None, None, Some(core.handle()));
+        assert!(no_cap.arrange(arrangement.clone()).unwrap_err().contains("sidebar capability"));
         st.clear();
         assert_eq!(core.snapshot().groups[1].id, "running");
+        st.arrange(arrangement.clone()).unwrap();
+
+        // A reload: the new instance takes over, and dropping the old one leaves the new arrangement.
+        let mut reloaded = HostState::new("dev.haunt.tabs", &sidebar, None, None, Some(core.handle()));
+        reloaded.arrange(wside::Arrangement { flat: true, ..arrangement.clone() }).unwrap();
+        drop(st);
+        assert_eq!(core.snapshot().groups[1].id, "pinned", "the reloaded instance's arrangement stays");
+        reloaded.release_sidebar();
+        assert_eq!(core.snapshot().groups[1].id, "running", "a disabled instance's arrangement goes with it");
+        assert!(reloaded.arrange(arrangement.clone()).is_err(), "and it can't arrange again");
+
+        let mut dropped = HostState::new("dev.haunt.tabs", &sidebar, None, None, Some(core.handle()));
+        dropped.arrange(arrangement).unwrap();
+        drop(dropped);
+        assert_eq!(core.snapshot().groups[1].id, "running", "a removed or reloaded plugin's arrangement goes");
     }
 
     #[test]

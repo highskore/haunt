@@ -90,11 +90,23 @@ pub(crate) struct State {
     /// Rules plugins proposed, newest first, as (plugin id, project, command).
     allow_proposals: Vec<(String, String, String)>,
     event_tap: Option<EventTap>,
-    /// The arranging plugin's id and its arrangement.
-    arrangement: Option<(String, Arrangement)>,
+    /// The arranging plugin's id, the token of the instance that set it, and its arrangement.
+    arrangement: Option<(String, u64, Arrangement)>,
+    /// Tokens of plugin instances loaded with the sidebar capability and not disabled.
+    sidebar_live: HashSet<u64>,
+    next_sidebar_token: u64,
 }
 
 impl State {
+    /// Whether an arrangement set by `token` was dropped.
+    fn drop_arrangement(&mut self, token: u64) -> bool {
+        let owned = self.arrangement.as_ref().is_some_and(|(_, t, _)| *t == token);
+        if owned {
+            self.arrangement = None;
+        }
+        owned
+    }
+
     fn surface(&mut self, id: &str) -> Option<&mut Surface> {
         self.surfaces.iter_mut().find(|s| s.id == id)
     }
@@ -199,8 +211,8 @@ impl State {
     pub(crate) fn snapshot(&self, now: Instant) -> SidebarSnapshot {
         let snap = self.core_snapshot(now);
         match &self.arrangement {
-            Some((_, a)) => arrange::arrange(snap, a),
-            None => snap,
+            Some((_, t, a)) if self.sidebar_live.contains(t) => arrange::arrange(snap, a),
+            _ => snap,
         }
     }
 
@@ -521,6 +533,10 @@ impl Core {
 
 /// The core as plugins see it. Plugin calls hold the plugin lock and then take the core's, so the
 /// core never calls a plugin while holding its own.
+/// One plugin instance's claim on the sidebar, from `CoreHandle::attach_sidebar`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidebarToken(u64);
+
 #[derive(Clone)]
 pub struct CoreHandle {
     state: Arc<Mutex<State>>,
@@ -556,31 +572,59 @@ impl CoreHandle {
         arrange::row_infos(&lock(&self.state).core_snapshot(Instant::now()))
     }
 
-    /// The first plugin to arrange owns the sidebar until it clears.
-    pub fn set_arrangement(&self, plugin_id: &str, a: Arrangement) -> Result<(), CoreError> {
+    /// The first live plugin to arrange owns the sidebar until it clears or goes away.
+    pub fn set_arrangement(&self, plugin_id: &str, token: SidebarToken, a: Arrangement) -> Result<(), CoreError> {
         a.validate().map_err(|reason| CoreError::Invalid { reason })?;
         let mut res = Ok(());
-        update_state(&self.state, |st, _| match &st.arrangement {
-            Some((owner, _)) if owner != plugin_id => {
-                res = Err(CoreError::Invalid { reason: format!("the sidebar is arranged by {owner}") });
-                false
+        update_state(&self.state, |st, _| {
+            if !st.sidebar_live.contains(&token.0) {
+                res = Err(CoreError::Invalid { reason: "not loaded with the sidebar capability".into() });
+                return false;
             }
-            Some((_, old)) if *old == a => false,
-            _ => {
-                st.arrangement = Some((plugin_id.to_owned(), a));
-                true
+            match &st.arrangement {
+                Some((owner, t, _)) if owner != plugin_id && st.sidebar_live.contains(t) => {
+                    res = Err(CoreError::Invalid { reason: format!("the sidebar is arranged by {owner}") });
+                    false
+                }
+                Some((_, t, old)) if *t == token.0 && *old == a => false,
+                _ => {
+                    st.arrangement = Some((plugin_id.to_owned(), token.0, a));
+                    true
+                }
             }
         });
         res
     }
 
-    pub fn clear_arrangement(&self, plugin_id: &str) {
+    pub fn clear_arrangement(&self, token: SidebarToken) {
+        update_state(&self.state, |st, _| st.drop_arrangement(token.0));
+    }
+
+    /// Marks a plugin instance loaded with the sidebar capability; only its arrangement is applied.
+    pub fn attach_sidebar(&self) -> SidebarToken {
+        let mut st = lock(&self.state);
+        st.next_sidebar_token += 1;
+        let t = st.next_sidebar_token;
+        st.sidebar_live.insert(t);
+        SidebarToken(t)
+    }
+
+    /// The instance was disabled, reloaded or dropped: its arrangement goes with it.
+    pub fn detach_sidebar(&self, token: SidebarToken) {
         update_state(&self.state, |st, _| {
-            let owned = st.arrangement.as_ref().is_some_and(|(owner, _)| owner == plugin_id);
-            if owned {
+            st.sidebar_live.remove(&token.0);
+            st.drop_arrangement(token.0)
+        });
+    }
+
+    /// A plugin loaded without the sidebar capability loses any arrangement an earlier load left.
+    pub fn forget_arrangement_of(&self, plugin_id: &str) {
+        update_state(&self.state, |st, _| {
+            let stale = st.arrangement.as_ref().is_some_and(|(owner, t, _)| owner == plugin_id && !st.sidebar_live.contains(t));
+            if stale {
                 st.arrangement = None;
             }
-            owned
+            stale
         });
     }
 }
@@ -865,6 +909,27 @@ mod tests {
         std::fs::remove_file(&project).unwrap();
         std::fs::remove_dir_all(&moved).unwrap();
         std::fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[test]
+    fn an_arrangement_applies_only_while_its_instance_is_live() {
+        let c = core();
+        c.register_surface("/a").unwrap();
+        let flat = Arrangement { flat: true, ..Default::default() };
+        let h = c.handle();
+        let t = h.attach_sidebar();
+        h.set_arrangement("p", t, flat.clone()).unwrap();
+        assert_eq!(c.snapshot().groups[0].id, arrange::TABS_ID);
+
+        // An arrangement left by an instance that is gone is never applied, and a sidebar-less load drops it.
+        c.with_state(|st| {
+            st.sidebar_live.remove(&t.0);
+        });
+        assert_ne!(c.snapshot().groups[0].id, arrange::TABS_ID);
+        c.with_state(|st| st.arrangement = Some(("p".into(), t.0, flat.clone())));
+        h.forget_arrangement_of("p");
+        assert!(c.with_state(|st| st.arrangement.is_none()));
+        assert!(h.set_arrangement("p", t, flat).is_err(), "a detached token can't arrange");
     }
 
     #[test]

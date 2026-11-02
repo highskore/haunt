@@ -157,6 +157,7 @@ interface sidebar {
   record section {
     // Lowercase letters, digits and '-'; the group id in the snapshot is `section:<id>`.
     id: string,
+    // 1 to 32 ASCII letters, digits, spaces and basic punctuation; may not spell a core group.
     title: string,
     surfaces: list<string>,
   }

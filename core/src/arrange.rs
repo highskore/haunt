@@ -87,12 +87,18 @@ pub fn row_infos(snap: &SidebarSnapshot) -> Vec<RowInfo> {
         .collect()
 }
 
-/// The title as shown: cleaned, single-spaced and uppercased like the core's labels. None if it is
-/// empty, longer than 32 characters, or would pass for a core group.
+/// The title as shown: single-spaced and uppercased like the core's labels. None unless it is 1 to 32
+/// ASCII letters, digits, spaces and basic punctuation (no lookalikes), or if its letters and digits
+/// spell a core group's label.
 pub fn section_title(title: &str) -> Option<String> {
-    let t = crate::event::clean(title).split_whitespace().collect::<Vec<_>>().join(" ").to_uppercase();
+    let allowed = |c: char| c.is_ascii_alphanumeric() || c.is_ascii_whitespace() || "-_.,:;!?'&()/+#".contains(c);
+    if !title.chars().all(allowed) {
+        return None;
+    }
+    let t = title.split_ascii_whitespace().collect::<Vec<_>>().join(" ").to_ascii_uppercase();
+    let key = |s: &str| s.chars().filter(char::is_ascii_alphanumeric).collect::<String>();
     let core = [NEEDS_YOU, RUNNING, IDLE, PINNED, TABS];
-    (!t.is_empty() && t.chars().count() <= MAX_TITLE && !core.contains(&t.as_str())).then_some(t)
+    (!t.is_empty() && t.len() <= MAX_TITLE && !key(&t).is_empty() && !core.iter().any(|c| key(c) == key(&t))).then_some(t)
 }
 
 fn valid_section_id(id: &str) -> bool {
@@ -115,7 +121,7 @@ impl Arrangement {
                 return Err(format!("section id {:?} must be unique lowercase letters, digits and '-'", s.id));
             }
             if section_title(&s.title).is_none() {
-                return Err(format!("section title {:?} must be 1 to {MAX_TITLE} visible characters and not a core group's", s.title));
+                return Err(format!("section title {:?} must be 1 to {MAX_TITLE} ASCII letters, digits, spaces or basic punctuation, and not a core group's", s.title));
             }
         }
         Ok(())
@@ -325,7 +331,20 @@ mod tests {
 
     #[test]
     fn sections_cannot_pass_for_core_groups() {
-        for bad in ["needs you", "Needs  You", "NEEDS\u{200b} YOU", "pinned", "Running", "", "   ", &"x".repeat(33)] {
+        let confusables = [
+            "N\u{0415}\u{0415}DS YOU",                  // Cyrillic Е
+            "\u{FF2E}\u{FF25}\u{FF25}\u{FF24}\u{FF33} YOU", // fullwidth
+            "NEEDS\u{00a0}YOU",                         // no-break space
+            "\u{0280}UNNING",                           // small capital R
+            "\u{0399}DLE",                              // Greek Ι
+            "Caf\u{e9}",                                // any non-ASCII
+        ];
+        let spaced = ["N-E-E-D-S YOU", "needs_you", "Needs.You!", "P I N N E D", "(tabs)", "---", "a\u{7}b"];
+        for bad in ["needs you", "Needs  You", "NEEDS\u{200b} YOU", "pinned", "Running", "", "   ", &"x".repeat(33)]
+            .into_iter()
+            .chain(confusables)
+            .chain(spaced)
+        {
             assert_eq!(section_title(bad), None, "{bad:?}");
             let a = Arrangement { sections: vec![section("x", bad, &["r1"])], ..Default::default() };
             assert!(a.validate().is_err(), "{bad:?}");
@@ -334,6 +353,8 @@ mod tests {
             assert_eq!(layout(&out)[1], ("RUNNING".into(), ids(&["r1", "r2"])), "{bad:?}: its rows fall back");
         }
         assert_eq!(section_title(" side\tprojects ").as_deref(), Some("SIDE PROJECTS"));
+        assert_eq!(section_title("Q3: web/api (v2) #1").as_deref(), Some("Q3: WEB/API (V2) #1"));
+        assert_eq!(section_title("needs you later").as_deref(), Some("NEEDS YOU LATER"));
     }
 
     #[test]
