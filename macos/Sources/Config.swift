@@ -19,9 +19,10 @@ final class HauntConfig {
     private var lastKeyProblems: [String] = []
     private var lastLayoutProblems: [String] = []
 
-    /// ~/.haunt unless HAUNT_CONFIG_DIR points elsewhere.
+    /// HAUNT_CONFIG_DIR, else HAUNT_HOME, else ~/.haunt: the same order as `haunt setup`.
     init(dir: URL? = nil) {
-        let env = ProcessInfo.processInfo.environment["HAUNT_CONFIG_DIR"].map { URL(fileURLWithPath: $0) }
+        let e = ProcessInfo.processInfo.environment
+        let env = (e["HAUNT_CONFIG_DIR"] ?? e["HAUNT_HOME"]).map { URL(fileURLWithPath: $0) }
         self.dir = dir ?? env ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".haunt")
     }
 

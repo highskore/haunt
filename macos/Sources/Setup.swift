@@ -67,31 +67,11 @@ enum SetupCLI {
         }
     }
 
-    /// An app opened from Finder gets launchd's bare PATH, which misses claude; the login shell's PATH finds it.
+    /// An app opened from Finder gets launchd's bare PATH, which misses claude.
     private static let userPath: String = {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let marker = "__HAUNT_PATH__"
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: shell)
-        p.arguments = ["-l", "-i", "-c", "printf '\\n\(marker)%s\\n' \"$PATH\""]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = FileHandle.nullDevice
-        p.standardInput = FileHandle.nullDevice
-        let done = DispatchSemaphore(value: 0)
-        p.terminationHandler = { _ in done.signal() }
-        var found: String?
-        if (try? p.run()) != nil {
-            if done.wait(timeout: .now() + 5) == .timedOut { p.terminate() }
-            // Non-blocking: a daemon the shell started may still hold the pipe open.
-            _ = fcntl(pipe.fileHandleForReading.fileDescriptor, F_SETFL, O_NONBLOCK)
-            let out = String(decoding: (try? pipe.fileHandleForReading.read(upToCount: 1 << 16)) ?? Data(), as: UTF8.self)
-            found = out.split(separator: "\n").first { $0.hasPrefix(marker) }.map { String($0.dropFirst(marker.count)) }
-        }
-        let home = NSHomeDirectory()
-        let extra = ["\(home)/.local/bin", "\(home)/.claude/local", "/opt/homebrew/bin", "/usr/local/bin"]
-        let base = found ?? ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
-        return ([base] + extra).joined(separator: ":")
+        let env = ProcessInfo.processInfo.environment
+        let found = LoginPath.fetch(shell: env["SHELL"] ?? "/bin/zsh")
+        return LoginPath.compose(found: found, inherited: env["PATH"], home: NSHomeDirectory())
     }()
 }
 
@@ -154,18 +134,23 @@ final class SetupSheets {
         let args = (remove ? ["--remove"] : []) + agents.map(\.rawValue)
         SetupCLI.run(args + ["--dry-run"], config: config, fixture: fixture) { [weak self, weak window] ok, text in
             guard let self, let window else { return }
-            guard ok else { return self.report("Couldn't prepare the change", text, on: window, then: back ?? done) }
+            // Apply runs separately, so it carries the preview's hash and the CLI refuses a change that differs.
+            let marker = "preview sha256 "
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+            let sha = lines.last { $0.hasPrefix(marker) }.map { String($0.dropFirst(marker.count)) }
+            guard ok, let sha else { return self.report("Couldn't prepare the change", text, on: window, then: back ?? done) }
+            let preview = lines.filter { !$0.hasPrefix(marker) }.joined(separator: "\n")
             let alert = NSAlert()
             alert.messageText = remove ? "Remove \(SetupAgent.names(agents))?" : "Set up \(SetupAgent.names(agents))?"
             alert.informativeText = "This is what `haunt setup \(args.joined(separator: " "))` will do:"
-            alert.accessoryView = Self.textBox(text)
+            alert.accessoryView = Self.textBox(preview)
             alert.addButton(withTitle: back == nil ? "Cancel" : "Back")
             let apply = alert.addButton(withTitle: remove ? "Remove" : "Apply")
             apply.keyEquivalent = ""
             alert.beginSheetModal(for: window) { [weak self] r in
                 guard let self else { return }
                 guard r == .alertSecondButtonReturn else { return (back ?? done)() }
-                self.run(args + ["--yes"], on: window, report: true) { _ in done() }
+                self.run(args + ["--yes", "--expect", sha], on: window, report: true) { _ in done() }
             }
         }
     }
