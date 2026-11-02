@@ -188,3 +188,125 @@ extension Fixture {
     /// 06's second note is open in the editor.
     var reviewEditingComment: Int? { self == .reviewSend ? 1 : nil }
 }
+
+/// haunt-review-2 version 11: five agent branches, session-restore selected. Its diff goes through the real
+/// parser; hunks the mockup doesn't show are filled to the file list's counts.
+extension Fixture {
+    private static let inboxSaveHunk = #"""
+       private let url: URL
+       private let queue = DispatchQueue(label: "haunt.session")
+
+    -  func save(_ tabs: [Tab]) {
+    -    let data = try? JSONEncoder().encode(tabs)
+    -    try? data?.write(to: url)
+    +  func save(_ snapshot: Snapshot) {
+    +    pending?.cancel()
+    +    let work = DispatchWorkItem { [url] in
+    +      do {
+    +        let data = try JSONEncoder.haunt.encode(snapshot)
+    +        try data.write(to: url, options: .atomic)
+    +      } catch {
+    +        Log.session.error("save failed: \(error)")
+    +      }
+    +    }
+    +    pending = work
+    +    queue.asyncAfter(deadline: .now() + 0.25, execute: work)
+       }
+
+       func load() -> Snapshot? {
+    """#
+
+    private static let inboxSnapshotStart = ["struct Snapshot: Codable, Equatable {", "  var version = 2", "  var windows: [WindowState]", "}"]
+
+    /// Path, added, the mockup's +/− counts.
+    private static let inboxFiles: [(String, Bool, Int, Int)] = [
+        ("Sources/Haunt/Session/SessionStore.swift", false, 14, 3),
+        ("Sources/Haunt/Session/Snapshot.swift", true, 62, 0),
+        ("Sources/Haunt/Window/WindowController.swift", false, 41, 18),
+        ("Sources/Haunt/App/AppDelegate.swift", false, 9, 2),
+        ("Sources/Haunt/Splits/SplitTree.swift", false, 22, 15),
+        ("Tests/HauntTests/SessionStoreTests.swift", true, 66, 0),
+    ]
+
+    static func inboxPatch() -> String {
+        func hunk(_ old: Int, _ new: Int, _ label: String, _ lines: [String]) -> String {
+            let add = lines.filter { $0.hasPrefix("+") }.count, del = lines.filter { $0.hasPrefix("-") }.count
+            let oc = old == 0 && add == lines.count ? "0,0" : "\(old),\(lines.count - add)"
+            return "@@ -\(oc) +\(new),\(lines.count - del) @@ \(label)\n" + lines.joined(separator: "\n") + "\n"
+        }
+        func filler(_ n: Int, _ sign: String, _ word: String) -> [String] { (0..<n).map { "\(sign)  \(word)(\($0))" } }
+        var out = ""
+        for (path, added, a, d) in inboxFiles {
+            out += "diff --git a/\(path) b/\(path)\n" + (added ? "new file mode 100644\n--- /dev/null\n" : "--- a/\(path)\n") + "+++ b/\(path)\n"
+            if path.hasSuffix("SessionStore.swift") {
+                let save = inboxSaveHunk.split(separator: "\n", omittingEmptySubsequences: false).map { $0.isEmpty ? " " : String($0) }
+                out += hunk(18, 18, "final class SessionStore {", save)
+            } else if path.hasSuffix("Snapshot.swift") {
+                out += hunk(0, 1, "", inboxSnapshotStart.map { "+" + $0 } + filler(a - inboxSnapshotStart.count, "+", "field"))
+            } else {
+                out += hunk(added ? 0 : 10, added ? 1 : 10, "", filler(d, "-", "old") + filler(a, "+", "new"))
+            }
+        }
+        return out
+    }
+
+    private static func agoMs(_ s: Int) -> UInt64 { UInt64((Date().timeIntervalSince1970 - TimeInterval(s)) * 1000) }
+
+    private static func turn(_ agent: Agent, _ n: UInt32, prompt: String, finishedAgo: Int?, took: Int = 400, tasks: Int = 0,
+                             subagents: Int = 0, _ cmds: [(String, CommandOutcome)]) -> ReviewTurn {
+        let end = finishedAgo.map(agoMs)
+        return ReviewTurn(
+            agent: agent, number: n, prompt: prompt, cwd: "/Users/me/code/haunt-wt", startedMs: (end ?? agoMs(0)) - UInt64(took * 1000),
+            finishedMs: end, failed: false, headAtStart: nil, toolCount: 0, editCount: 0,
+            tasks: (0..<tasks).map { TurnTask(subject: "task \($0 + 1)", status: "completed") },
+            commands: cmds.map { TurnCommand(command: $0.0, outcome: $0.1) }, files: [],
+            subagents: (0..<subagents).map { TurnSubagent(label: "Explore · \($0 + 1)", toolCount: nil, durationMs: nil) })
+    }
+
+    func inboxTurn(tab: String) -> ReviewTurn? {
+        switch tab {
+        case "pawr":
+            return Self.turn(.claude, 4, prompt: "restore tabs, splits and cwd on relaunch; keep startup under 250ms", finishedAgo: 240,
+                             tasks: 5, subagents: 2, [("swift build", .passed), ("swift test", .passed), ("swiftlint", .passed)])
+        case "codex-1":
+            return Self.turn(.codex, 2, prompt: "coalesce notifications from one agent", finishedAgo: 900, [("swift test", .unknown)])
+        case "main tab":
+            return Self.turn(.claude, 9, prompt: "cache gas prices per chain", finishedAgo: 1800, [("cargo test", .passed)])
+        case "hooks":
+            return Self.turn(.claude, 6, prompt: "Two changes from review", finishedAgo: nil, [])
+        case "ui":
+            return Self.turn(.claude, 3, prompt: "show task progress in sidebar rows", finishedAgo: nil, [("swift test", .running)])
+        default:
+            return nil
+        }
+    }
+
+    /// Each entry's diff, checks, and the one sent-back review (hooks).
+    func setUpInbox(_ e: InboxEntry) {
+        let s = e.state
+        func stub(_ branch: String, repo: String = "haunt", _ counts: [(Int, Int)]) -> ReviewDiff {
+            ReviewDiff(root: "/Users/me/code/haunt-wt/" + branch,
+                       files: counts.enumerated().map { FileDiff(path: "f\($0.offset).swift", additions: $0.element.0, deletions: $0.element.1) },
+                       branch: branch, upstream: "main", commits: 1, baseNote: "HEAD", uncommitted: true, repo: repo)
+        }
+        switch e.row.name {
+        case "pawr":
+            // The mockup lists SessionStore.swift as +14 −3 but shows one hunk of +12 −3.
+            var files = DiffParser.parse(Self.inboxPatch())
+            files[0].additions = 14
+            s.diff = ReviewDiff(root: "/Users/me/code/haunt-wt/pawr", files: files, branch: "session-restore",
+                                upstream: "main", commits: 3, baseNote: "the commit the turn started on", uncommitted: false, isWorktree: true,
+                                repo: "haunt")
+        case "codex-1": s.diff = stub("notify-coalesce", [(40, 20), (30, 15), (18, 6)])
+        case "main tab": s.diff = stub("fix-gas-cache", repo: "orchestrator", [(20, 5), (11, 4)])
+        case "hooks":
+            s.diff = stub("hooks-timeout", [(47, 12)])
+            e.sentBack = (2, true)
+        case "ui": s.diff = stub("sidebar-progress", [(12, 3)])
+        default: break
+        }
+        s.checks = Checks.merge(turn: Checks.fromTurn(s.turn?.commands ?? []),
+                                expected: Checks.expected(files: ["Package.swift", ".swiftlint.yml"], packageScripts: []))
+        s.selectedFile = 0
+    }
+}

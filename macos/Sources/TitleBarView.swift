@@ -237,7 +237,8 @@ final class TitleBarView: NSView {
         let s = NSMutableAttributedString()
         for (i, part) in crumb.enumerated() {
             if i > 0 { s.append(NSAttributedString(string: " › ", attributes: [.font: font, .foregroundColor: Tok.Color.textLabel])) }
-            let color = i == crumb.count - 1 ? Tok.Color.textPrimary : Tok.Color.textSub
+            // A lone part is a title, not a place (version 11's "Review").
+            let color = i == crumb.count - 1 && crumb.count > 1 ? Tok.Color.textPrimary : Tok.Color.textSub
             s.append(NSAttributedString(string: part, attributes: [.font: font, .foregroundColor: color]))
         }
         let line = CTLineCreateWithAttributedString(s)

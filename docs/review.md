@@ -1,6 +1,28 @@
 # Review screen
 
-Reviews the selected tab's latest agent turn: the diff (mockup 01), line comments that collect into a follow-up prompt (06), and an overview of the turn (09). Open it with the `[keys]` action `review` (default `cmd+shift+r`), View > Review Changes, or the palette. Esc closes it from any mode. Keys `1` and `2`, the crumb, and the Overview's "Files" tab switch between Files and Overview.
+Open it with the `[keys]` action `review` (default `cmd+shift+r`), View > Review Changes, or the palette. It opens on the inbox (haunt-review-2 version 11), with the current tab's entry selected. Enter opens that entry's full review: the diff (01), line comments that collect into a follow-up prompt (06), and an overview of the turn (09). In the full review, keys `1` and `2`, the crumb, and the Overview's "Files" tab switch between Files and Overview. Esc goes back to the inbox, and Esc in the inbox closes the screen.
+
+## Inbox (11)
+
+There is one entry per agent tab whose latest turn has a verified cwd. Entries are grouped from real state only:
+
+- **Changes requested**: notes were sent back from this review, and the agent either hasn't started on them or is in the turn that follows. The row says "N notes sent" or "agent working on N notes".
+- **Waiting on checks**: the unfinished turn is running a test or build command right now.
+- **Approved**: approved in this review, in memory.
+- **Ready for review**: everything else, including a turn that is still running something that isn't a check.
+
+There is no "Merged today" group, because Haunt doesn't know what was merged. Row stats and the file count come from each entry's git diff, loaded in the background. "tests ✓" means every check the agent ran passed. A check with an unknown result, as from Codex, reads "tests ran".
+
+Keys: `j`/`k` (or the arrow keys) move between entries, Enter opens one, `a` approves, `r` opens the follow-up prompt (06) for it. There is no snooze (`x`), because it would hide data without a reason Haunt can show. Opening an entry switches to its tab, so a follow-up is pasted where the user can see it.
+
+The detail pane shows the following:
+
+- the prompt's first line as the title, because the hooks carry no summary;
+- repo/branch → upstream, the tab, commits made during the turn, and when it finished;
+- the prompt, tasks done, the test run's result (with no pass counts, which the hooks don't give), the number of subagents, and how long the turn took;
+- the files, then the checks with their result in place of a duration, then every file's diff, read-only.
+
+`ReviewDiff` keeps `base` and `head` per entry, ready for a merge-order view.
 
 ## Data
 

@@ -78,13 +78,13 @@ ISOLATE_REVIEW = r"""
   const secs = [...document.querySelectorAll('section.item')];
   secs.forEach((s, i) => { if (i !== S.index - 1) s.remove(); });
   const sec = secs[S.index - 1];
-  sec.querySelector(':scope > .head').remove();
+  sec.querySelector(':scope > .head, :scope > .spec').remove();
   Object.assign(document.querySelector('main').style, { padding: '0', margin: '0', maxWidth: 'none' });
   root = sec.querySelector('.scroll');
   Object.assign(root.style, { width: (S.width + 2) + 'px', borderRadius: '0' });
   Object.assign(root.querySelector('.win').style, { boxShadow: 'none', borderRadius: '0' });
 """
-ISOLATE = {"ui": ISOLATE_ITEMS, "av": ISOLATE_ITEMS, "dl": ISOLATE_PLACEMENTS, "rv": ISOLATE_REVIEW}
+ISOLATE = {"ui": ISOLATE_ITEMS, "av": ISOLATE_ITEMS, "dl": ISOLATE_PLACEMENTS, "rv": ISOLATE_REVIEW, "rv2": ISOLATE_REVIEW}
 
 
 def expand(spec, groups):

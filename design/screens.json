@@ -2449,6 +2449,510 @@
      "expect": "top"
     }
    ]
+  },
+  "rv-11-inbox": {
+   "file": "rv2",
+   "index": 1,
+   "crop": ".win",
+   "width": 1100,
+   "groups": [
+    "chrome"
+   ],
+   "anchors": [
+    {
+     "name": "crumb.text",
+     "sel": ".crumb",
+     "text": true,
+     "token": "color.text.sub"
+    },
+    {
+     "name": "kbd.border",
+     "sel": ".title .kbd",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "kbd.text",
+     "sel": ".title .kbd",
+     "text": true,
+     "token": "color.text.sub"
+    },
+    {
+     "name": "side.bg",
+     "sel": ".side",
+     "at": [
+      "right-20",
+      "bottom-60"
+     ],
+     "token": "color.sidebar.bg"
+    },
+    {
+     "name": "side.hairline",
+     "sel": ".side",
+     "at": [
+      "right-0.5",
+      "bottom-60"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "label.text",
+     "sel": ".side .label",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "row.sel.bg",
+     "sel": ".tab.sel",
+     "at": [
+      "right-4",
+      "bottom-4"
+     ],
+     "token": "color.row.selected"
+    },
+    {
+     "name": "row.name.text",
+     "sel": ".tab.sel .name",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "row.meta.text",
+     "sel": ".tab.sel .meta",
+     "text": true,
+     "token": "color.text.meta"
+    },
+    {
+     "name": "row.stat.add",
+     "sel": ".tab.sel .stat .p",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "row.stat.del",
+     "sel": ".tab.sel .stat .m",
+     "text": true,
+     "token": "color.text.meta"
+    },
+    {
+     "name": "row.claude",
+     "sel": ".tab.sel .ic svg",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.claude"
+    },
+    {
+     "name": "dot.hollow",
+     "sel": ".dot.hollow",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.text.sub"
+    },
+    {
+     "name": "foot.hairline",
+     "sel": ".side .foot",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "foot.kbd.border",
+     "sel": ".side .foot .kbd",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "hd.hairline",
+     "sel": ".hd",
+     "at": [
+      "40%",
+      "bottom-0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "hd.title.text",
+     "sel": ".hd .t",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "hd.claude",
+     "sel": ".hd .dim svg",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.claude"
+    },
+    {
+     "name": "btn.pri.bg",
+     "sel": ".hd .btn.pri",
+     "at": [
+      "left+3",
+      "cy"
+     ],
+     "token": "color.btn.primary.bg"
+    },
+    {
+     "name": "btn.pri.key.border",
+     "sel": ".hd .btn.pri .kbd",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.inbox.btn.key.border"
+    },
+    {
+     "name": "btn.border",
+     "sel": ".hd .btn:not(.pri)",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "btn.key.border",
+     "sel": ".hd .btn:not(.pri) .kbd",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "strip.hairline",
+     "sel": "div[style*='gap:28px']",
+     "at": [
+      "40%",
+      "bottom-0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "strip.label.text",
+     "sel": "div[style*='gap:28px'] .muted",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "strip.prompt.text",
+     "sel": "span[style*='color:#cfcfcf']",
+     "text": true,
+     "token": "color.inbox.prompt"
+    },
+    {
+     "name": "files.hairline",
+     "sel": ".flist",
+     "at": [
+      "right-0.5",
+      "bottom-20"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "files.label.text",
+     "sel": ".flist .label",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "file.sel.bg",
+     "sel": ".flist .f.sel",
+     "at": [
+      "right-4",
+      "top+3"
+     ],
+     "token": "color.row.selected"
+    },
+    {
+     "name": "file.sel.text",
+     "sel": ".flist .f.sel .nm",
+     "text": true,
+     "token": "color.inbox.file.sel"
+    },
+    {
+     "name": "file.text",
+     "sel": ".flist .f:not(.sel) .nm",
+     "text": true,
+     "token": "color.inbox.file.ink"
+    },
+    {
+     "name": "file.st.text",
+     "sel": ".flist .f.sel .st",
+     "text": true,
+     "token": "color.text.meta"
+    },
+    {
+     "name": "fh.bg",
+     "sel": ".fh",
+     "at": [
+      "65%",
+      "top+3"
+     ],
+     "token": "color.inbox.fh.bg"
+    },
+    {
+     "name": "fh.hairline",
+     "sel": ".fh",
+     "at": [
+      "65%",
+      "bottom-0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "fh.dir.text",
+     "sel": ".fh .path .dir",
+     "text": true,
+     "token": "color.text.meta"
+    },
+    {
+     "name": "fh.ck",
+     "sel": ".fh .ck",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.inbox.ck.border"
+    },
+    {
+     "name": "fh.blocks.add",
+     "sel": ".fh .blocks i",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.text.primary"
+    },
+    {
+     "name": "fh.blocks.del",
+     "sel": ".fh .blocks i:nth-child(5)",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.inbox.blocks.del"
+    },
+    {
+     "name": "hunk.bg",
+     "sel": ".diff > .r.h",
+     "at": [
+      "right-10",
+      "cy"
+     ],
+     "token": "color.inbox.diff.hunk.bg"
+    },
+    {
+     "name": "hunk.rule",
+     "sel": ".diff > .r.h",
+     "at": [
+      "right-10",
+      "top+0.5"
+     ],
+     "token": "color.inbox.diff.hunk.rule"
+    },
+    {
+     "name": "hunk.text",
+     "sel": ".diff > .r.h > span:last-child",
+     "text": true,
+     "token": "color.inbox.diff.hunk.ink"
+    },
+    {
+     "name": "add.bg",
+     "sel": ".diff > .r.a",
+     "at": [
+      "right-6",
+      "cy"
+     ],
+     "token": "color.inbox.diff.add.bg"
+    },
+    {
+     "name": "add.bar",
+     "sel": ".diff > .r.a",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.inbox.diff.add.bar"
+    },
+    {
+     "name": "add.mark",
+     "sel": ".diff > .r.a .mk",
+     "text": true,
+     "token": "color.inbox.diff.add.mark"
+    },
+    {
+     "name": "add.num",
+     "sel": ".diff > .r.a .ln:nth-child(2)",
+     "text": true,
+     "token": "color.inbox.diff.add.num"
+    },
+    {
+     "name": "del.bar",
+     "sel": ".diff > .r.d",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.inbox.diff.del.bar"
+    },
+    {
+     "name": "del.mark",
+     "sel": ".diff > .r.d .mk",
+     "text": true,
+     "token": "color.inbox.diff.del.mark"
+    },
+    {
+     "name": "kw.text",
+     "sel": ".diff > .r:nth-child(2) .kw",
+     "text": true,
+     "token": "color.inbox.diff.kw"
+    },
+    {
+     "name": "str.text",
+     "sel": ".diff > .r:nth-child(3) .str",
+     "text": true,
+     "token": "color.inbox.diff.str"
+    },
+    {
+     "name": "ctx.text",
+     "sel": ".diff > .r:nth-child(20) > span:last-child",
+     "text": true,
+     "token": "color.inbox.diff.text"
+    },
+    {
+     "name": "ctx.num",
+     "sel": ".diff > .r:nth-child(20) .ln",
+     "text": true,
+     "token": "color.inbox.diff.num"
+    }
+   ],
+   "edges": [
+    {
+     "name": "side.right",
+     "sel": ".side",
+     "from": [
+      "right-20",
+      "bottom-60"
+     ],
+     "dir": "right",
+     "expect": "right-1"
+    },
+    {
+     "name": "row.sel.top",
+     "sel": ".tab.sel",
+     "from": [
+      "right-4",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "foot.top",
+     "sel": ".side .foot",
+     "from": [
+      "40%",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "hd.bottom",
+     "sel": ".hd",
+     "from": [
+      "right-6",
+      "top+4"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "strip.bottom",
+     "sel": "div[style*='gap:28px']",
+     "from": [
+      "right-6",
+      "top+3"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "files.right",
+     "sel": ".flist",
+     "from": [
+      "right-20",
+      "bottom-20"
+     ],
+     "dir": "right",
+     "expect": "right-1"
+    },
+    {
+     "name": "file.sel.top",
+     "sel": ".flist .f.sel",
+     "from": [
+      "right-4",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "fh.bottom",
+     "sel": ".fh",
+     "from": [
+      "right-6",
+      "top+3"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "btn.pri.left",
+     "sel": ".hd .btn.pri",
+     "from": [
+      "left-3",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "btn.pri.top",
+     "sel": ".hd .btn.pri",
+     "from": [
+      "left+6",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "btn.left",
+     "sel": ".hd .btn:not(.pri)",
+     "from": [
+      "left-3",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    }
+   ]
   }
  }
 }

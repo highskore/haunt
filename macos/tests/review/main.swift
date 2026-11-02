@@ -132,6 +132,41 @@ if case .blocked = SendBack.check("a\rb") {} else { check(false, "lone CR blocks
 if case .blocked = SendBack.check("a\u{7}") {} else { check(false, "BEL blocks") }
 check(SendBack.check("a\tb") == .ok("a\tb"), "tab allowed")
 
+// MARK: Inbox
+
+func turn(_ n: UInt32, finished: Bool, _ cmds: [TurnCommand]) -> ReviewTurn {
+    ReviewTurn(agent: .claude, number: n, prompt: "p", cwd: "/x/haunt", startedMs: 1, finishedMs: finished ? 2 : nil, failed: false,
+               headAtStart: nil, toolCount: 0, editCount: 0, tasks: [], commands: cmds, files: [], subagents: [])
+}
+func entry(_ name: String, _ t: ReviewTurn) -> InboxEntry {
+    let s = ReviewState(surfaceId: name)
+    s.turn = t
+    s.diff = ReviewDiff(root: "/x/haunt", files: [FileDiff(path: "a"), FileDiff(path: "b")], branch: name, upstream: nil, commits: 0,
+                        baseNote: "HEAD", uncommitted: true, repo: "haunt")
+    return InboxEntry(surfaceId: name, row: Row(surfaceId: name, kind: .claude, name: "tab-" + name, meta: "", statusText: "",
+                                                 needsYou: false, progress: nil, subagents: [], selected: false, pending: nil), state: s)
+}
+let ready = entry("ready", turn(3, finished: true, [TurnCommand(command: "swift test", outcome: .passed)]))
+let waiting = entry("waiting", turn(1, finished: false, [TurnCommand(command: "cargo test -p core", outcome: .running)]))
+let busy = entry("busy", turn(1, finished: false, [TurnCommand(command: "ls", outcome: .running)]))
+let sent = entry("sent", turn(5, finished: false, []))
+sent.sentBack = Inbox.sentBack(notes: 2, sentTurn: 4, turn: sent.state.turn)
+let approved = entry("approved", turn(2, finished: true, [TurnCommand(command: "swift test", outcome: .unknown)]))
+approved.state.approved = true
+check(ready.status == .ready && ready.meta == "haunt · tab-ready · 2 files · tests ✓", "ready \(ready.meta)")
+check(waiting.status == .waiting && waiting.meta == "haunt · tab-waiting · cargo test -p core running", "waiting \(waiting.meta)")
+check(busy.status == .ready, "a running non-check isn't waiting on checks")
+check(sent.status == .changesRequested && sent.meta == "haunt · tab-sent · agent working on 2 notes", "sent \(sent.meta)")
+check(approved.status == .approved && approved.tests == "tests ran", "approved, codex-style unknown result isn't a pass")
+check(Inbox.sentBack(notes: 2, sentTurn: 4, turn: turn(4, finished: true, [])).map { $0.pickedUp } == false, "not picked up yet")
+check(Inbox.sentBack(notes: 2, sentTurn: 4, turn: turn(5, finished: true, [])) == nil, "the next turn finished: ready again")
+check(Inbox.grouped([approved, sent, ready, waiting, busy]).map(\.label)
+      == ["Ready for review · 2", "Changes requested · 1", "Waiting on checks · 1", "Approved · 1"], "groups")
+
+let hs = Highlight.spans(#"  let q = DispatchQueue(label: "haunt") // why"#).filter { $0.1 != .plain }.map { $0.1 }
+check(hs == [.keyword, .string, .comment], "highlight \(hs)")
+check(Highlight.spans("letter = selfish").allSatisfy { $0.1 == .plain }, "keywords only as whole words")
+
 // MARK: A real repository
 
 func sh(_ args: [String], _ dir: String) {
@@ -177,6 +212,7 @@ case let .success(d):
     check(byPath["sub/new.txt"]?.status == .added, "untracked shown as new")
     check(d.commits == 1 && d.baseNote == "the commit the turn started on", "base \(d.commits) \(d.baseNote)")
     check(d.branch == "main" && d.uncommitted && d.root.hasSuffix(repo.split(separator: "/").last.map(String.init) ?? ""), "repo info")
+    check(d.repo == (repo as NSString).lastPathComponent && d.base == start && d.head != nil && d.head != start, "repo \(d.repo ?? "nil"), base and head")
 case let .failure(e):
     check(false, "load failed: \(e)")
 }

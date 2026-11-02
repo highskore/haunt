@@ -289,3 +289,145 @@ final class ReviewState {
 
     func comments(in path: String) -> [ReviewComment] { comments.filter { $0.path == path } }
 }
+
+/// One agent tab's latest turn in the review inbox (version 11). Its diff keeps base and head, so a
+/// merge-order view can be built on the same entries later.
+final class InboxEntry {
+    enum Status: Equatable { case ready, changesRequested, waiting, approved }
+
+    let surfaceId: String
+    var row: Row
+    let state: ReviewState
+    /// Notes sent back from this review: still waiting for the agent, or being worked on in its next turn.
+    var sentBack: (notes: Int, pickedUp: Bool)?
+
+    init(surfaceId: String, row: Row, state: ReviewState) {
+        self.surfaceId = surfaceId
+        self.row = row
+        self.state = state
+    }
+
+    /// A check the unfinished turn is running right now.
+    var runningCheck: String? {
+        guard let t = state.turn, t.finishedMs == nil else { return nil }
+        return t.commands.last { $0.outcome == .running && Checks.isCheck($0.command) }?.command
+    }
+
+    var status: Status {
+        if sentBack != nil { return .changesRequested }
+        if runningCheck != nil { return .waiting }
+        return state.approved ? .approved : .ready
+    }
+
+    var name: String { state.diff?.branch ?? row.name }
+    var repo: String { state.diff?.repo ?? state.turn?.cwd.map { ($0 as NSString).lastPathComponent } ?? row.name }
+
+    /// "tests ✓" only when every check the agent ran passed; Haunt never guesses a result.
+    var tests: String {
+        let ran = Checks.fromTurn(state.turn?.commands ?? [])
+        if ran.isEmpty { return "no tests run" }
+        if ran.contains(where: { $0.state == .failed }) { return "tests ✗" }
+        if ran.contains(where: { $0.state == .running }) { return "tests running" }
+        if ran.allSatisfy({ $0.state == .passed }) { return "tests ✓" }
+        return "tests ran"
+    }
+
+    var meta: String {
+        var parts = [repo, row.name]
+        switch status {
+        case .changesRequested:
+            let n = RVText.plural(sentBack?.notes ?? 0, "note")
+            parts.append(sentBack?.pickedUp == true ? "agent working on \(n)" : "\(n) sent")
+        case .waiting:
+            parts.append("\(runningCheck ?? "a check") running")
+        case .ready, .approved:
+            if state.loadError != nil {
+                parts.append("no diff")
+            } else if let d = state.diff {
+                parts += [RVText.plural(d.files.count, "file"), tests]
+            }
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+enum Inbox {
+    static let groups: [(InboxEntry.Status, String)] = [
+        (.ready, "Ready for review"), (.changesRequested, "Changes requested"), (.waiting, "Waiting on checks"), (.approved, "Approved"),
+    ]
+
+    /// Non-empty groups in the mockup's order, entries in sidebar order within each.
+    static func grouped(_ entries: [InboxEntry]) -> [(label: String, entries: [InboxEntry])] {
+        groups.compactMap { status, label in
+            let es = entries.filter { $0.status == status }
+            return es.isEmpty ? nil : ("\(label) · \(es.count)", es)
+        }
+    }
+
+    /// Whether notes sent after turn `sentTurn` are still outstanding in `turn`: the agent hasn't started,
+    /// or its next turn is still running.
+    static func sentBack(notes: Int, sentTurn: UInt32, turn: ReviewTurn?) -> (notes: Int, pickedUp: Bool)? {
+        guard let t = turn else { return nil }
+        if t.number == sentTurn { return (notes, false) }
+        if t.number == sentTurn + 1, t.finishedMs == nil { return (notes, true) }
+        return nil
+    }
+}
+
+enum RVText {
+    static func plural(_ n: Int, _ word: String) -> String { "\(n) \(word)\(n == 1 ? "" : "s")" }
+}
+
+/// The mockup's colouring (`hl` in haunt-review-2): keywords bright, strings softer, `//` comments dim italic.
+enum Highlight {
+    static let keywords: Set<String> = [
+        "func", "let", "var", "guard", "return", "struct", "final", "class", "private", "try", "catch", "do", "self", "import",
+        "if", "else", "in", "case", "for", "async", "await", "throws", "static", "extension", "enum", "weak", "nil", "true",
+        "false", "init", "override",
+    ]
+
+    enum Kind: Equatable { case plain, keyword, string, comment }
+
+    /// Ranges of `s` (in UTF-16 offsets) and what they are.
+    static func spans(_ s: String) -> [(NSRange, Kind)] {
+        let u = Array(s.utf16)
+        var out: [(NSRange, Kind)] = []
+        var i = 0, plainStart = 0
+        func flush(_ end: Int) { if end > plainStart { out.append((NSRange(location: plainStart, length: end - plainStart), .plain)) } }
+        func isWord(_ c: UInt16) -> Bool { (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 }
+        while i < u.count {
+            let c = u[i]
+            if c == 47, i + 1 < u.count, u[i + 1] == 47 {
+                flush(i)
+                out.append((NSRange(location: i, length: u.count - i), .comment))
+                return out
+            }
+            if c == 34 {
+                var j = i + 1
+                while j < u.count, u[j] != 34 { j += 1 }
+                if j < u.count {
+                    flush(i)
+                    out.append((NSRange(location: i, length: j - i + 1), .string))
+                    i = j + 1
+                    plainStart = i
+                    continue
+                }
+            }
+            if isWord(c), i == 0 || !isWord(u[i - 1]) {
+                var j = i
+                while j < u.count, isWord(u[j]) { j += 1 }
+                let w = String(utf16CodeUnits: Array(u[i..<j]), count: j - i)
+                if keywords.contains(w) {
+                    flush(i)
+                    out.append((NSRange(location: i, length: j - i), .keyword))
+                    plainStart = j
+                }
+                i = j
+                continue
+            }
+            i += 1
+        }
+        flush(u.count)
+        return out
+    }
+}

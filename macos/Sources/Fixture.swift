@@ -28,6 +28,8 @@ enum Fixture: String {
     case reviewFiles = "rv-01-files"
     case reviewSend = "rv-06-comment"
     case reviewOverview = "rv-09-overview"
+    /// Review inbox, version 11 (haunt-review-2).
+    case reviewInbox = "rv-11-inbox"
 
     static var current: Fixture? {
         ProcessInfo.processInfo.environment["HAUNT_FIXTURE"].flatMap(Fixture.init(rawValue:))
@@ -41,11 +43,12 @@ enum Fixture: String {
         return self == .iconOnly || self == .zen || self == .reviewSend || isSheet ? .icons : .kbd
     }
 
-    var isReview: Bool { [.reviewFiles, .reviewSend, .reviewOverview].contains(self) }
+    var isReview: Bool { [.reviewFiles, .reviewSend, .reviewOverview, .reviewInbox].contains(self) }
 
-    /// The review mockup's window: 1100 × 600 less the `.win`'s 1 px border.
+    /// The review mockups' windows: 1100 × 600 (640 for the second set) less the `.win`'s 1 px border.
     var size: NSSize {
-        isReview ? NSSize(width: Tok.Size.reviewWindowW, height: Tok.Size.reviewWindowH - 2) : Self.windowSize
+        if self == .reviewInbox { return NSSize(width: Tok.Size.reviewWindowW, height: Tok.Size.inboxWindowH - 2) }
+        return isReview ? NSSize(width: Tok.Size.reviewWindowW, height: Tok.Size.reviewWindowH - 2) : Self.windowSize
     }
 
     /// Version 06 draws its flat sidebar 230 pt wide; the app's is 250 everywhere else.
@@ -102,7 +105,14 @@ enum Fixture: String {
         uiTabs[2],
     ]
 
-    private var tabs: [Tab] { self == .narrowList ? Self.agentTabs : isReview ? Self.reviewTabs : Self.uiTabs }
+    // haunt-review-2 version 11's agent branches, by the tab each runs in.
+    private static let inboxTabs: [Tab] = ["pawr", "codex-1", "main tab", "hooks", "ui"].map {
+        Tab(kind: $0 == "codex-1" ? .codex : .claude, name: $0, meta: "", status: "", needs: false, progress: nil, subs: [])
+    }
+
+    private var tabs: [Tab] {
+        self == .narrowList ? Self.agentTabs : self == .reviewInbox ? Self.inboxTabs : isReview ? Self.reviewTabs : Self.uiTabs
+    }
 
     var tabCount: Int { tabs.count }
 
@@ -117,7 +127,7 @@ enum Fixture: String {
         }
         guard rows.count == tabs.count else { return SidebarSnapshot(groups: []) }
         switch self {
-        case .iconOnly, .zen, .pasteConfirm, .narrowList, .setupPicker, .setupChange, .settings, .reviewSend:
+        case .iconOnly, .zen, .pasteConfirm, .narrowList, .setupPicker, .setupChange, .settings, .reviewSend, .reviewInbox:
             return SidebarSnapshot(groups: [SidebarGroup(label: "", rows: rows)])
         case .reviewFiles, .reviewOverview:
             return SidebarSnapshot(groups: [

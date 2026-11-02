@@ -61,6 +61,52 @@ enum Tok {
         static let iconBg: NSColor = NSColor(srgbRed: 27.0 / 255, green: 27.0 / 255, blue: 27.0 / 255, alpha: 1)
         /// color.icon.fg
         static let iconFg: NSColor = NSColor(srgbRed: 154.0 / 255, green: 154.0 / 255, blue: 154.0 / 255, alpha: 1)
+        /// color.inbox.blocks.del
+        static let inboxBlocksDel: NSColor = NSColor(srgbRed: 90.0 / 255, green: 90.0 / 255, blue: 90.0 / 255, alpha: 1)
+        /// color.inbox.btn.key.border
+        static let inboxBtnKeyBorder: NSColor = NSColor(srgbRed: 154.0 / 255, green: 154.0 / 255, blue: 154.0 / 255, alpha: 1)
+        /// color.inbox.ck.border
+        static let inboxCkBorder: NSColor = NSColor(srgbRed: 74.0 / 255, green: 74.0 / 255, blue: 74.0 / 255, alpha: 1)
+        /// color.inbox.diff.add.bar
+        static let inboxDiffAddBar: NSColor = NSColor(srgbRed: 154.0 / 255, green: 154.0 / 255, blue: 154.0 / 255, alpha: 1)
+        /// color.inbox.diff.add.bg
+        static let inboxDiffAddBg: NSColor = NSColor(srgbRed: 22.0 / 255, green: 22.0 / 255, blue: 22.0 / 255, alpha: 1)
+        /// color.inbox.diff.add.ink
+        static let inboxDiffAddInk: NSColor = NSColor(srgbRed: 242.0 / 255, green: 242.0 / 255, blue: 242.0 / 255, alpha: 1)
+        /// color.inbox.diff.add.mark
+        static let inboxDiffAddMark: NSColor = NSColor(srgbRed: 232.0 / 255, green: 232.0 / 255, blue: 232.0 / 255, alpha: 1)
+        /// color.inbox.diff.add.num
+        static let inboxDiffAddNum: NSColor = NSColor(srgbRed: 111.0 / 255, green: 111.0 / 255, blue: 111.0 / 255, alpha: 1)
+        /// color.inbox.diff.cm
+        static let inboxDiffCm: NSColor = NSColor(srgbRed: 95.0 / 255, green: 95.0 / 255, blue: 95.0 / 255, alpha: 1)
+        /// color.inbox.diff.del.bar
+        static let inboxDiffDelBar: NSColor = NSColor(srgbRed: 51.0 / 255, green: 51.0 / 255, blue: 51.0 / 255, alpha: 1)
+        /// color.inbox.diff.del.ink
+        static let inboxDiffDelInk: NSColor = NSColor(srgbRed: 112.0 / 255, green: 112.0 / 255, blue: 112.0 / 255, alpha: 1)
+        /// color.inbox.diff.del.mark
+        static let inboxDiffDelMark: NSColor = NSColor(srgbRed: 138.0 / 255, green: 138.0 / 255, blue: 138.0 / 255, alpha: 1)
+        /// color.inbox.diff.hunk.bg
+        static let inboxDiffHunkBg: NSColor = NSColor(srgbRed: 15.0 / 255, green: 15.0 / 255, blue: 15.0 / 255, alpha: 1)
+        /// color.inbox.diff.hunk.ink
+        static let inboxDiffHunkInk: NSColor = NSColor(srgbRed: 107.0 / 255, green: 107.0 / 255, blue: 107.0 / 255, alpha: 1)
+        /// color.inbox.diff.hunk.rule
+        static let inboxDiffHunkRule: NSColor = NSColor(srgbRed: 23.0 / 255, green: 23.0 / 255, blue: 23.0 / 255, alpha: 1)
+        /// color.inbox.diff.kw
+        static let inboxDiffKw: NSColor = NSColor(srgbRed: 232.0 / 255, green: 232.0 / 255, blue: 232.0 / 255, alpha: 1)
+        /// color.inbox.diff.num
+        static let inboxDiffNum: NSColor = NSColor(srgbRed: 74.0 / 255, green: 74.0 / 255, blue: 74.0 / 255, alpha: 1)
+        /// color.inbox.diff.str
+        static let inboxDiffStr: NSColor = NSColor(srgbRed: 189.0 / 255, green: 189.0 / 255, blue: 189.0 / 255, alpha: 1)
+        /// color.inbox.diff.text
+        static let inboxDiffText: NSColor = NSColor(srgbRed: 166.0 / 255, green: 166.0 / 255, blue: 166.0 / 255, alpha: 1)
+        /// color.inbox.fh.bg
+        static let inboxFhBg: NSColor = NSColor(srgbRed: 13.0 / 255, green: 13.0 / 255, blue: 13.0 / 255, alpha: 1)
+        /// color.inbox.file.ink
+        static let inboxFileInk: NSColor = NSColor(srgbRed: 189.0 / 255, green: 189.0 / 255, blue: 189.0 / 255, alpha: 1)
+        /// color.inbox.file.sel
+        static let inboxFileSel: NSColor = NSColor(srgbRed: 255.0 / 255, green: 255.0 / 255, blue: 255.0 / 255, alpha: 1)
+        /// color.inbox.prompt
+        static let inboxPrompt: NSColor = NSColor(srgbRed: 207.0 / 255, green: 207.0 / 255, blue: 207.0 / 255, alpha: 1)
         /// color.kbd.border
         static let kbdBorder: NSColor = NSColor(srgbRed: 44.0 / 255, green: 44.0 / 255, blue: 44.0 / 255, alpha: 1)
         /// color.lights
@@ -205,6 +251,110 @@ enum Tok {
         static let iconRadius: CGFloat = 5
         /// size.icon.size
         static let iconSize: CGFloat = 18
+        /// size.inbox.blocks.gap
+        static let inboxBlocksGap: CGFloat = 2
+        /// size.inbox.blocks.radius
+        static let inboxBlocksRadius: CGFloat = 1
+        /// size.inbox.blocks.size
+        static let inboxBlocksSize: CGFloat = 7
+        /// size.inbox.btn.font
+        static let inboxBtnFont: CGFloat = 11
+        /// size.inbox.btn.gap
+        static let inboxBtnGap: CGFloat = 6
+        /// size.inbox.btn.key.font
+        static let inboxBtnKeyFont: CGFloat = 10
+        /// size.inbox.btn.key.line
+        static let inboxBtnKeyLine: CGFloat = 13
+        /// size.inbox.btn.key.pad
+        static let inboxBtnKeyPad: [CGFloat] = [0, 4]
+        /// size.inbox.btn.key.radius
+        static let inboxBtnKeyRadius: CGFloat = 3
+        /// size.inbox.btn.line
+        static let inboxBtnLine: CGFloat = 17
+        /// size.inbox.btn.pad
+        static let inboxBtnPad: [CGFloat] = [1, 8]
+        /// size.inbox.btn.radius
+        static let inboxBtnRadius: CGFloat = 5
+        /// size.inbox.checks.label.padtop
+        static let inboxChecksLabelPadtop: CGFloat = 16
+        /// size.inbox.ck.radius
+        static let inboxCkRadius: CGFloat = 3
+        /// size.inbox.ck.size
+        static let inboxCkSize: CGFloat = 13
+        /// size.inbox.claude.small
+        static let inboxClaudeSmall: CGFloat = 13
+        /// size.inbox.diff.bar.w
+        static let inboxDiffBarW: CGFloat = 2
+        /// size.inbox.diff.font
+        static let inboxDiffFont: CGFloat = 11.5
+        /// size.inbox.diff.hatch.alpha
+        static let inboxDiffHatchAlpha: CGFloat = 0.018
+        /// size.inbox.diff.hatch.period
+        static let inboxDiffHatchPeriod: [CGFloat] = [5, 6]
+        /// size.inbox.diff.line
+        static let inboxDiffLine: CGFloat = 1.62
+        /// size.inbox.diff.mark.w
+        static let inboxDiffMarkW: CGFloat = 16
+        /// size.inbox.diff.num.font
+        static let inboxDiffNumFont: CGFloat = 10.5
+        /// size.inbox.diff.num.padr
+        static let inboxDiffNumPadr: CGFloat = 8
+        /// size.inbox.diff.num.w
+        static let inboxDiffNumW: CGFloat = 38
+        /// size.inbox.diff.text.padr
+        static let inboxDiffTextPadr: CGFloat = 12
+        /// size.inbox.dot.size
+        static let inboxDotSize: CGFloat = 6
+        /// size.inbox.fh.font
+        static let inboxFhFont: CGFloat = 12
+        /// size.inbox.fh.gap
+        static let inboxFhGap: CGFloat = 10
+        /// size.inbox.fh.pad
+        static let inboxFhPad: [CGFloat] = [7, 14]
+        /// size.inbox.fh.path.font
+        static let inboxFhPathFont: CGFloat = 11.5
+        /// size.inbox.fh.right.font
+        static let inboxFhRightFont: CGFloat = 11
+        /// size.inbox.file.font
+        static let inboxFileFont: CGFloat = 11.5
+        /// size.inbox.file.gap
+        static let inboxFileGap: CGFloat = 8
+        /// size.inbox.file.pad
+        static let inboxFilePad: [CGFloat] = [5, 14]
+        /// size.inbox.file.st.font
+        static let inboxFileStFont: CGFloat = 10
+        /// size.inbox.file.st.w
+        static let inboxFileStW: CGFloat = 12
+        /// size.inbox.files.label.padtop
+        static let inboxFilesLabelPadtop: CGFloat = 2
+        /// size.inbox.files.padtop
+        static let inboxFilesPadtop: CGFloat = 8
+        /// size.inbox.files.w
+        static let inboxFilesW: CGFloat = 250
+        /// size.inbox.hd.gap
+        static let inboxHdGap: CGFloat = 10
+        /// size.inbox.hd.h
+        static let inboxHdH: CGFloat = 58
+        /// size.inbox.hd.meta.font
+        static let inboxHdMetaFont: CGFloat = 11
+        /// size.inbox.hd.padx
+        static let inboxHdPadx: CGFloat = 18
+        /// size.inbox.hd.rowgap
+        static let inboxHdRowgap: CGFloat = 2
+        /// size.inbox.hd.title.font
+        static let inboxHdTitleFont: CGFloat = 14
+        /// size.inbox.side.w
+        static let inboxSideW: CGFloat = 290
+        /// size.inbox.stat.font
+        static let inboxStatFont: CGFloat = 11
+        /// size.inbox.strip.font
+        static let inboxStripFont: CGFloat = 11.5
+        /// size.inbox.strip.gap
+        static let inboxStripGap: CGFloat = 28
+        /// size.inbox.strip.pad
+        static let inboxStripPad: [CGFloat] = [10, 18]
+        /// size.inbox.window.h
+        static let inboxWindowH: CGFloat = 640
         /// size.kbd.font
         static let kbdFont: CGFloat = 11
         /// size.kbd.line

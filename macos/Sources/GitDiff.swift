@@ -298,6 +298,11 @@ struct ReviewDiff: Equatable {
     var isWorktree = false
     /// Honest notes for the screen: cut output, timeouts, skipped untracked files.
     var notes: [String] = []
+    /// The repository's name: its main checkout's folder, shared by its worktrees.
+    var repo: String?
+    /// HEAD and the commit diffed against, so branches can later be ordered for merging.
+    var head: String?
+    var base: String?
 }
 
 enum ReviewLoader {
@@ -374,10 +379,17 @@ enum ReviewLoader {
         }
         let branch = line(["rev-parse", "--abbrev-ref", "HEAD"]).flatMap { $0 == "HEAD" ? nil : $0 }
         let upstream = line(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
-        let dirs = line(["rev-parse", "--git-dir", "--git-common-dir"])?.split(separator: "\n")
+        let dirs = line(["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"])?.split(separator: "\n").map(String.init)
         let worktree = dirs.map { $0.count == 2 && $0[0] != $0[1] } ?? false
+        let common = dirs?.count == 2 ? dirs![1] : nil
+        let repo = common.map { c -> String in
+            let n = c as NSString
+            return n.lastPathComponent == ".git" ? (n.deletingLastPathComponent as NSString).lastPathComponent
+                : (n.lastPathComponent as NSString).deletingPathExtension
+        } ?? (root as NSString).lastPathComponent
         return .success(ReviewDiff(root: root, files: files, branch: branch, upstream: upstream, commits: commits,
-                                   baseNote: baseNote, uncommitted: dirty || files.count > tracked.count, isWorktree: worktree, notes: notes))
+                                   baseNote: baseNote, uncommitted: dirty || files.count > tracked.count, isWorktree: worktree,
+                                   notes: notes, repo: repo, head: head, base: base))
     }
 
     /// Git's well-known empty tree, for a repository without commits.

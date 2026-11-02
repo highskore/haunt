@@ -93,6 +93,8 @@ private final class RootView: NSView {
     let scrim = NSView()
     let agents = AgentsView()
     var sidebarW = Tok.Size.sidebarW
+    /// The review inbox covers the sidebar too; a tab's review only the pane.
+    var reviewCoversSidebar = false
     /// The review screen, over the terminal pane; the pane hides so no surface takes keys under it.
     var review: NSView? {
         didSet {
@@ -145,7 +147,7 @@ private final class RootView: NSView {
         titleBar.frame = NSRect(x: 0, y: 0, width: bounds.width, height: top)
         sidebar.frame = NSRect(x: 0, y: top, width: sidebarW, height: bounds.height - top)
         pane.frame = NSRect(x: w, y: top, width: bounds.width - w, height: bounds.height - top)
-        review?.frame = pane.frame
+        review?.frame = reviewCoversSidebar ? NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top) : pane.frame
         scrim.frame = NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top)
         for v in pane.subviews { v.frame = pane.bounds }
     }
@@ -750,7 +752,10 @@ extension MainWindowController: ReviewHost {
         return (id, root.sidebar.snapshot.groups.lazy.flatMap(\.rows).first { $0.surfaceId == id })
     }
 
-    func showReviewView(_ view: NSView?) {
+    var reviewRows: [Row] { root.sidebar.snapshot.groups.flatMap(\.rows) }
+
+    func showReviewView(_ view: NSView?, coverSidebar: Bool) {
+        root.reviewCoversSidebar = coverSidebar
         root.review = view
         root.layoutSubtreeIfNeeded()
     }
@@ -775,6 +780,8 @@ extension MainWindowController: ReviewHost {
         write(Data(text.utf8), to: surfaceId)
         return true
     }
+
+    func selectTab(_ surfaceId: String) { select(surfaceId) }
 
     func focusTerminal() { focusSelectedSurface() }
 }
