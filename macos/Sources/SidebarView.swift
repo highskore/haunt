@@ -304,8 +304,10 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             let s = Tok.Size.claudeIcon
             Draw.claudeMark(in: NSRect(x: r.midX - s / 2, y: r.midY - s / 2, width: s, height: s))
         case .codex:
-            let s = Tok.Size.claudeIcon
-            Draw.codexMark(in: NSRect(x: r.midX - s / 2, y: r.midY - s / 2, width: s, height: s), ctx: ctx)
+            let s = Draw.openAIMarkSize
+            let box = backingAlignedRect(NSRect(x: r.midX - s / 2, y: r.midY - s / 2, width: s, height: s),
+                                         options: .alignAllEdgesNearest)
+            Draw.codexMark(in: box, color: Tok.Color.textPrimary, ctx: ctx)
         case .shell:
             Tok.Color.iconBg.setFill()
             NSBezierPath(roundedRect: r, xRadius: Tok.Size.iconRadius, yRadius: Tok.Size.iconRadius).fill()
