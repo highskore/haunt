@@ -245,10 +245,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             self?.refresh()
         }
         root.sidebar.onRenameEnd = { [weak self] in self?.focusSelectedSurface() }
-        root.sidebar.rowMenu = { [weak self] id in self?.plugins?.rowMenuItems(surfaceId: id) ?? [] }
+        root.sidebar.rowMenu = { [weak self] id in
+            defer { self?.bridge.drain() }
+            return self?.plugins?.rowMenuItems(surfaceId: id) ?? []
+        }
         root.sidebar.onRowMenu = { [weak self] item, id in self?.bridge.invokeRowMenu(item, surfaceId: id) }
         root.sidebar.onRowMoved = { [weak self] id, group, before in
             self?.plugins?.rowMoved(surfaceId: id, groupId: group, beforeSurfaceId: before)
+            self?.bridge.drain()
         }
         core.setListener(listener: listener)
 
