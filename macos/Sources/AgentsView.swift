@@ -8,7 +8,7 @@ final class AgentsView: NSView {
     private(set) var snapshot = SidebarSnapshot(groups: [], colorStyle: .dot)
     private var hiddenShells = 0
     /// The frame and minimum size the window had before it shrank; nil while the view is off.
-    var restore: (frame: NSRect, minSize: NSSize)?
+    var restore: (frame: NSRect, minSize: NSSize, maxSize: NSSize)?
 
     /// The shortcut as the mockup writes it, "⌘⇧A".
     var shortcut = "⌘⇧A" {

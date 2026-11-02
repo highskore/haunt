@@ -497,12 +497,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         if window.styleMask.contains(.fullScreen) { return NSSound.beep() }
         if on {
             if palette.isOpen { palette.close() }
-            root.agents.restore = (window.frame, window.minSize)
+            root.agents.restore = (window.frame, window.minSize, window.maxSize)
             root.agentsOn = true
             // The strip neither zooms nor goes full screen (windowShouldZoom), whatever asks.
             window.collectionBehavior.insert(.fullScreenNone)
             refresh()
-            window.minSize = NSSize(width: Tok.Size.narrowW - 2 * Tok.App.hairline, height: Tok.App.narrowMinH)
+            // A fixed width, so macOS tiling (Fill, an edge drag, the green button's menu) can't widen the strip.
+            let stripW = Tok.Size.narrowW - 2 * Tok.App.hairline
+            window.minSize = NSSize(width: stripW, height: Tok.App.narrowMinH)
+            window.maxSize = NSSize(width: stripW, height: .greatestFiniteMagnitude)
             let frame = AgentsView.dockedFrame(on: window.screen ?? NSScreen.main, height: fixture == nil ? nil : Fixture.narrowHeight)
             window.setFrame(frame, display: true, animate: animate)
             window.makeFirstResponder(root.agents)
@@ -510,6 +513,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             // Grow first, then lay the panes out once at their full size.
             window.collectionBehavior.remove(.fullScreenNone)
             if let r = root.agents.restore {
+                window.maxSize = r.maxSize
                 let frame = AgentsView.restoredFrame(r.frame, screens: NSScreen.screens.map(\.visibleFrame),
                                                      current: (window.screen ?? NSScreen.main)?.visibleFrame)
                 window.setFrame(frame, display: true, animate: animate)
