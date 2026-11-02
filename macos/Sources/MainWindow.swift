@@ -253,29 +253,45 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         alert.beginSheetModal(for: window) { [weak self, weak view] r in
             guard let self, self.pasteAlert?.request === request else { return }
             self.pasteAlert = nil
-            if r == .alertFirstButtonReturn { request.complete() } else { request.cancel() }
+            if r == .alertSecondButtonReturn { request.complete() } else { request.cancel() }
             if view?.pendingClipboardConfirmation === request { view?.pendingClipboardConfirmation = nil }
         }
     }
 
+    /// The whole paste, read-only and scrollable, with every control character spelled out (PastePreview).
+    /// Cancel is the default; pasting takes an explicit click.
     static func pasteAlert(_ text: String) -> NSAlert {
-        var lines = text.components(separatedBy: .newlines)
-        if lines.count > 1, lines.last?.isEmpty == true { lines.removeLast() }
-        let shown = lines.prefix(5).map { $0.count > 44 ? $0.prefix(43) + "…" : $0 }
-        let preview = shown.joined(separator: "\n") + (lines.count > 5 ? "\n…" : "")
+        let preview = PastePreview(text)
         let alert = NSAlert()
-        alert.messageText = lines.count == 1 ? "Paste 1 line?" : "Paste \(lines.count) lines?"
-        // NSAlert's informative text can't take a font, so the preview is a monospaced accessory label;
-        // lines are cut at 44 characters, about its 300 pt width, so none wraps.
-        let label = NSTextField(wrappingLabelWithString: preview)
-        label.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        label.textColor = .secondaryLabelColor
-        label.lineBreakMode = .byCharWrapping
-        label.preferredMaxLayoutWidth = 300
-        label.frame.size = label.fittingSize
-        alert.accessoryView = label
-        alert.addButton(withTitle: "Paste")
+        alert.messageText = preview.lines == 1 ? "Paste 1 line?" : "Paste \(preview.lines) lines?"
+        var notes: [String] = []
+        if preview.hasPasteEnd {
+            notes.append("It contains a bracketed paste end (^[[201~): the text after it would run as typed commands.")
+        }
+        if preview.hasControls { notes.append("Control characters are shown as ^[ and \\u{…}.") }
+        alert.informativeText = notes.joined(separator: "\n")
+
+        let font = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        let lineH = NSLayoutManager().defaultLineHeight(for: font)
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: (lineH * 10).rounded(.up) + 8))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        let tv = NSTextView(frame: NSRect(origin: .zero, size: scroll.contentSize))
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.isRichText = false
+        tv.font = font
+        tv.textContainerInset = NSSize(width: 2, height: 4)
+        tv.isVerticallyResizable = true
+        tv.autoresizingMask = .width
+        tv.textContainer?.widthTracksTextView = true
+        tv.string = preview.text
+        scroll.documentView = tv
+        alert.accessoryView = scroll
+
         alert.addButton(withTitle: "Cancel")
+        let paste = alert.addButton(withTitle: "Paste")
+        paste.keyEquivalent = ""
         return alert
     }
 

