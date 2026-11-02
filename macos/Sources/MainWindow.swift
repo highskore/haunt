@@ -9,6 +9,8 @@ import UserNotifications
 /// libghostty has no single write choke point the app can hook, so each entry is overridden; see docs/core-api.md.
 final class HauntSurfaceView: Ghostty.SurfaceView {
     var onInput: (() -> Void)?
+    /// A paste that Ghostty's paste protection holds for confirmation; nil when it resolves or is replaced.
+    var onPasteConfirmation: ((Ghostty.ClipboardConfirmationRequest?) -> Void)?
 
     override func keyDown(with event: NSEvent) {
         onInput?()
@@ -57,7 +59,10 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
     /// The request's outcome is private, so retire on every resolution, including a cancel.
     override var pendingClipboardConfirmation: Ghostty.ClipboardConfirmationRequest? {
         didSet {
-            if let old = oldValue, old !== pendingClipboardConfirmation, old.kind == .paste { onInput?() }
+            guard oldValue !== pendingClipboardConfirmation else { return }
+            if let old = oldValue, old.kind == .paste { onInput?() }
+            let new = pendingClipboardConfirmation
+            onPasteConfirmation?(new?.kind == .paste ? new : nil)
         }
     }
 }
@@ -215,6 +220,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let view = HauntSurfaceView(app, baseConfig: config, uuid: nil)
         // Before the keystroke reaches the pty, so a late Allow/Deny can't be typed into a running tool.
         view.onInput = { [weak self] in self?.core.onUserInput(surfaceId: env.surfaceId) }
+        view.onPasteConfirmation = { [weak self, weak view] req in
+            if let view { self?.confirmPaste(req, on: view) }
+        }
         // So the surface starts at the pane's real size.
         root.layoutSubtreeIfNeeded()
         let tab = Tab(env: env, view: view, size: root.pane.bounds.size)
@@ -226,6 +234,56 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         tab.host.isHidden = true
         root.pane.addSubview(tab.host)
         if selectIt || selectedId == nil { select(env.surfaceId) }
+    }
+
+    // MARK: Paste confirmation
+
+    private var pasteAlert: (alert: NSAlert, request: Ghostty.ClipboardConfirmationRequest)?
+
+    /// Ghostty's paste protection asks before an unsafe paste: a native sheet with the first lines.
+    private func confirmPaste(_ request: Ghostty.ClipboardConfirmationRequest?, on view: HauntSurfaceView) {
+        if let open = pasteAlert, open.request !== request, let window {
+            pasteAlert = nil
+            window.endSheet(open.alert.window, returnCode: .abort)
+        }
+        guard let request, pasteAlert == nil, let window else { return }
+        if let tab = tab(for: view), tab.env.surfaceId != selectedId { select(tab.env.surfaceId) }
+        let alert = Self.pasteAlert(request.contents)
+        pasteAlert = (alert, request)
+        alert.beginSheetModal(for: window) { [weak self, weak view] r in
+            guard let self, self.pasteAlert?.request === request else { return }
+            self.pasteAlert = nil
+            if r == .alertFirstButtonReturn { request.complete() } else { request.cancel() }
+            if view?.pendingClipboardConfirmation === request { view?.pendingClipboardConfirmation = nil }
+        }
+    }
+
+    static func pasteAlert(_ text: String) -> NSAlert {
+        var lines = text.components(separatedBy: .newlines)
+        if lines.count > 1, lines.last?.isEmpty == true { lines.removeLast() }
+        let shown = lines.prefix(5).map { $0.count > 44 ? $0.prefix(43) + "…" : $0 }
+        let preview = shown.joined(separator: "\n") + (lines.count > 5 ? "\n…" : "")
+        let alert = NSAlert()
+        alert.messageText = lines.count == 1 ? "Paste 1 line?" : "Paste \(lines.count) lines?"
+        // NSAlert's informative text can't take a font, so the preview is a monospaced accessory label;
+        // lines are cut at 44 characters, about its 300 pt width, so none wraps.
+        let label = NSTextField(wrappingLabelWithString: preview)
+        label.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        label.textColor = .secondaryLabelColor
+        label.lineBreakMode = .byCharWrapping
+        label.preferredMaxLayoutWidth = 300
+        label.frame.size = label.fittingSize
+        alert.accessoryView = label
+        alert.addButton(withTitle: "Paste")
+        alert.addButton(withTitle: "Cancel")
+        return alert
+    }
+
+    /// The paste-confirm fixture: an unsafe paste held on the selected surface, as Ghostty would raise it.
+    func showPasteFixture() {
+        guard let view = tabs.first(where: { $0.env.surfaceId == selectedId })?.view else { return }
+        view.pendingClipboardConfirmation = Ghostty.ClipboardConfirmationRequest(
+            surface: view, contents: Fixture.pasteText, kind: .paste) { _, _, _ in }
     }
 
     private func fixtureCommand() -> String? {
