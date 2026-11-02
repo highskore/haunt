@@ -245,11 +245,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
         root.sidebar.onRenameEnd = { [weak self] in self?.focusSelectedSurface() }
         core.setListener(listener: listener)
-        // Subagent elapsed times are computed in snapshot(), so poll once a second to keep them ticking.
-        ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            self?.refresh()
-            self?.drainPluginRequests()
-        }
 
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: Ghostty.Notification.ghosttyCloseSurface, object: nil, queue: .main) { [weak self] n in
@@ -300,7 +295,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         tab.host.frame = root.pane.bounds
         tab.host.isHidden = true
         root.pane.addSubview(tab.host)
-        if selectIt || selectedId == nil { select(env.surfaceId) }
+        if selectIt || selectedId == nil { select(env.surfaceId) } else { syncFocus() }
     }
 
     // MARK: Paste confirmation
@@ -449,13 +444,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     /// Like Ghostty's own controller: only the selected surface of the key window has focus. Ghostty learns
     /// the display only on screen changes, so it is told up front for its vsync display link.
+    /// Only the selected surface of a visible window renders; the rest are occluded.
     private func syncFocus() {
         let key = window?.isKeyWindow ?? false
         let display = window?.screen?.displayID
+        let paneShown = (window?.occlusionState.contains(.visible) ?? false) && !root.agentsOn
         for t in tabs {
             let selected = t.env.surfaceId == selectedId
             t.view.focusDidChange(key && selected && t.view.isFirstResponder)
             guard let surface = t.view.surface else { continue }
+            ghostty_surface_set_occlusion(surface, paneShown && selected)
             if let display { ghostty_surface_set_display_id(surface, display) }
             if selected { ghostty_surface_refresh(surface) }
         }
@@ -528,7 +526,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.refreshQueued = false
             self?.refresh()
+            self?.drainPluginRequests()
         }
+    }
+
+    /// Subagent elapsed times are computed in snapshot(), so poll once a second to keep them ticking,
+    /// but only while the window can be seen; becoming visible again catches up at once.
+    private func updateTicker() {
+        let visible = window?.occlusionState.contains(.visible) ?? false
+        guard visible != (ticker != nil) else { return }
+        ticker?.invalidate()
+        ticker = nil
+        guard visible else { return }
+        refresh()
+        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            self?.refresh()
+            self?.drainPluginRequests()
+        }
+        t.tolerance = 0.2
+        RunLoop.main.add(t, forMode: .common)
+        ticker = t
     }
 
     /// Names given with Rename Tab, for the life of the tab. They replace only the row title.
@@ -544,7 +561,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             }
         }
         if snap != root.sidebar.snapshot { root.sidebar.snapshot = snap }
-        root.agents.update(snap)
+        if root.agentsOn { root.agents.update(snap) }
         let sel = snap.groups.lazy.flatMap(\.rows).first { $0.selected }
         root.titleBar.progress = sel?.progress.map { $0.total == 0 ? 0 : CGFloat($0.done) / CGFloat($0.total) }
     }
@@ -707,6 +724,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             if palette.isOpen { palette.close() }
             root.agents.restore = (window.frame, window.minSize)
             root.agentsOn = true
+            refresh()
             window.minSize = NSSize(width: Tok.Size.narrowW - 2, height: 200)
             let frame = AgentsView.dockedFrame(on: window.screen ?? NSScreen.main, height: fixture.map { _ in Fixture.narrowHeight })
             window.setFrame(frame, display: true, animate: animate)
@@ -743,6 +761,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func windowDidBecomeKey(_ notification: Notification) { syncFocus() }
     func windowDidResignKey(_ notification: Notification) { syncFocus() }
     func windowDidChangeScreen(_ notification: Notification) { syncFocus() }
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        updateTicker()
+        syncFocus()
+    }
 
     func windowDidResize(_ notification: Notification) {
         guard palette.isOpen, let window else { return }
@@ -750,6 +772,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        ticker?.invalidate()
+        ticker = nil
         for t in tabs { core.unregisterSurface(surfaceId: t.env.surfaceId) }
         tabs.removeAll()
     }
