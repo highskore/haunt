@@ -90,7 +90,9 @@ final class PaletteController: NSObject, NSWindowDelegate {
     }
 
     /// Centred on `parent`, `top` points below its top edge; the height follows the rows shown.
+    /// It keeps the same margin below as above, scrolling rows that don't fit.
     func position(over parent: NSWindow, top: CGFloat) {
+        view.heightLimit = parent.frame.height - top - Tok.Size.paletteTop
         let size = view.fittingSize
         let x = (parent.frame.midX - size.width / 2).rounded()
         panel.setFrame(NSRect(x: x, y: parent.frame.maxY - top - size.height, width: size.width, height: size.height), display: true)
@@ -352,6 +354,9 @@ final class PaletteView: NSView {
     private var maxRows = 8
     private var selected = 0
     private var scroll = 0
+    /// The most the panel may be tall; rows past it scroll, but at least `minRows` stay.
+    var heightLimit = CGFloat.infinity { didSet { if heightLimit != oldValue { clampScroll(); needsDisplay = true } } }
+    private static let minRows = 3
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -383,9 +388,18 @@ final class PaletteView: NSView {
     }
 
     private func clampScroll() {
+        let n = rowsShown
         if selected < scroll { scroll = selected }
-        if selected >= scroll + maxRows { scroll = selected - maxRows + 1 }
-        scroll = max(0, min(scroll, max(0, rows.count - maxRows)))
+        if selected >= scroll + n { scroll = selected - n + 1 }
+        scroll = max(0, min(scroll, max(0, rows.count - n)))
+    }
+
+    /// `maxRows`, cut to what fits in `heightLimit` with every entry at its full (ruled) height.
+    private var rowsShown: Int {
+        let fixed = 2 * border + inputH + footH + Tok.Size.paletteListPad[0] * 2
+        let entry = Tok.Size.paletteEntryPad[0] * 2 + textLines + 1
+        let fit = heightLimit.isFinite ? Int(((heightLimit - fixed) / entry).rounded(.down)) : maxRows
+        return max(Self.minRows, min(maxRows, fit))
     }
 
     // MARK: Geometry (pt, inside the 1 pt border)
@@ -399,7 +413,7 @@ final class PaletteView: NSView {
     private var footH: CGFloat {
         foot.isEmpty ? 0 : 1 + Tok.Size.paletteFootPad[0] * 2 + Tok.Size.paletteSmallFont * lh
     }
-    private var visible: Range<Int> { scroll..<min(rows.count, scroll + maxRows) }
+    private var visible: Range<Int> { scroll..<min(rows.count, scroll + rowsShown) }
 
     /// The mockup's last-child rule: the selected entry (alone in its `.sel` wrapper) and the last one have no rule.
     private func hasRule(_ i: Int) -> Bool { i != selected && i != visible.upperBound - 1 }
@@ -619,7 +633,7 @@ final class PaletteView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         let d = event.scrollingDeltaY > 0 ? -1 : event.scrollingDeltaY < 0 ? 1 : 0
-        scroll = max(0, min(scroll + d, max(0, rows.count - maxRows)))
+        scroll = max(0, min(scroll + d, max(0, rows.count - rowsShown)))
         needsDisplay = true
     }
 }
