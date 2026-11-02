@@ -55,12 +55,14 @@ haunt setup claude|codex     # set up one
 haunt setup --remove codex   # take one out
 ```
 
-Each run first prints the exact change and asks before making it: the `claude plugin` commands for Claude Code, a diff of `~/.codex/config.toml` for Codex. `--dry-run` only prints; `--yes` skips the question. The choice is kept in `~/.haunt/state.json`. On first launch the app asks the same question in a sheet and runs the same command; change it later in Settings (⌘,).
+Each run first prints the exact change and asks before making it: the `claude plugin` commands for Claude Code, a diff of `~/.codex/config.toml` for Codex. `--dry-run` changes no agent config (it only stages the adapter copy below); `--yes` skips the question. The choice is kept in `~/.haunt/state.json` (`$HAUNT_CONFIG_DIR`, else `$HAUNT_HOME`, when set). `--dry-run` ends with `preview sha256 <hex>`; `--expect <hex>` applies only if the change still matches that preview. On first launch the app asks the same question in a sheet and runs the same command; change it later in Settings (⌘,).
+
+The adapter is first copied to `~/.haunt/adapters/<agent>/<content hash>` and installed from there, so moving or rebuilding haunt.app doesn't break it. Removing an agent deletes that copy. Run Haunt from `/Applications`: setup refuses a quarantined, translocated copy of the app.
 
 For Claude Code it runs:
 
 ```sh
-claude plugin marketplace add ../haunt-plugins/haunt-claude
+claude plugin marketplace add ~/.haunt/adapters/claude/<hash>
 claude plugin install haunt@haunt
 ```
 
@@ -84,12 +86,18 @@ cursor-style = "bar"
 
 ## CLI
 
+The CLI is bundled in the app. To put it on your PATH:
+
+```sh
+ln -s /Applications/haunt.app/Contents/Helpers/haunt /usr/local/bin/haunt   # or any folder on PATH, e.g. ~/.local/bin
+```
+
 ```sh
 haunt dump                       # sidebar state as JSON
 haunt decisions [query]          # permission decision log
 haunt plugin install ./my-plugin # shows the capabilities, asks before installing
 haunt plugin list | remove <id> | approve <id>
-haunt setup [claude|codex|none] [--remove] [--yes] [--dry-run]
+haunt setup [claude|codex|none] [--remove] [--yes] [--dry-run] [--expect <sha256>]
 ```
 
 ## Plugins
