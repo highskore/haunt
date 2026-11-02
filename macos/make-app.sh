@@ -9,7 +9,8 @@ if [ ! -f "$ADAPTER/.claude-plugin/plugin.json" ]; then
   echo "Claude adapter not found at $ADAPTER; clone haunt-claude there or set HAUNT_CLAUDE_ADAPTER" >&2
   exit 1
 fi
-[ -x "$ROOT/build/macos/haunt" ] || ./build.sh
+# Always rebuilt, as the real-core shipping binary, so no stale or fixture build gets signed.
+HAUNT_CORE=real HAUNT_FIXTURES=0 ./build.sh
 # The haunt CLI, bundled so the app runs `haunt setup` itself.
 (cd "$ROOT" && MACOSX_DEPLOYMENT_TARGET=14.0 cargo build -q --release -p haunt-cli)
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Compiles the app against macos/deps/libghostty.a and haunt-core's UniFFI bindings.
-# HAUNT_CORE=mock builds without Rust. HAUNT_FIXTURES=1 builds build/macos/haunt-fixtures, which adds the
+# HAUNT_CORE=mock builds build/macos/haunt-mock without Rust. HAUNT_FIXTURES=1 builds build/macos/haunt-fixtures, which adds the
 # mockup fixtures (HAUNT_FIXTURE) and capture switches; the shipping binary has neither.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -15,6 +15,8 @@ CORE=()
 NAME=haunt
 FIXTURES=()
 [ "${HAUNT_FIXTURES:-0}" = 1 ] && NAME=haunt-fixtures
+# A mock core never lands where make-app looks for the shipping binary.
+[ "${HAUNT_CORE:-real}" != real ] && NAME=haunt-mock
 # MockCore is fixture code, so a mock-core build always has fixtures.
 if [ "${HAUNT_FIXTURES:-0}" = 1 ] || [ "${HAUNT_CORE:-real}" != real ]; then FIXTURES=(-D HAUNT_FIXTURES); fi
 if [ "${HAUNT_CORE:-real}" = real ]; then

@@ -10,7 +10,7 @@ mkdir -p "$OUT"
 # Fixtures exist only in the HAUNT_FIXTURES build: build/haunt.app with that binary swapped in, rebuilt when stale.
 APP="$ROOT/build/haunt-fixtures.app"
 FBIN="$ROOT/build/macos/haunt-fixtures"
-[ -d "$ROOT/build/haunt.app" ] || { echo "no build/haunt.app: run macos/build.sh && macos/make-app.sh" >&2; exit 1; }
+[ -d "$ROOT/build/haunt.app" ] || { echo "no build/haunt.app: run macos/make-app.sh" >&2; exit 1; }
 if [ ! -x "$FBIN" ] || [ -n "$(find Sources Vendor deps/lib -newer "$FBIN" -print -quit)" ]; then
   HAUNT_FIXTURES=1 ./build.sh >/dev/null || exit 1
 fi

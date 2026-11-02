@@ -39,7 +39,7 @@ Design tokens live in `design/tokens.json`. `design/check` compares the running 
 Requires Xcode 16.3+ and Rust (pinned in `rust-toolchain.toml`). libghostty is prebuilt in `macos/deps/`. Only `scripts/update-ghostty.sh` needs Zig, when bumping Ghostty.
 
 ```sh
-macos/build.sh && macos/make-app.sh     # builds core, bindings and build/haunt.app
+macos/make-app.sh     # builds core, bindings and build/haunt.app
 open build/haunt.app
 ```
 
