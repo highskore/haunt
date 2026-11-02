@@ -52,10 +52,13 @@ enum Draw {
     }
 
     /// One "…" per font and colour; the entry keeps both alive, so their identities stay unique.
-    private static var ellipses: [[ObjectIdentifier]: (NSFont, NSColor, CTLine)] = [:]
+    private struct EllipsisKey: Hashable {
+        let font: ObjectIdentifier, color: ObjectIdentifier
+    }
+    private static var ellipses: [EllipsisKey: (NSFont, NSColor, CTLine)] = [:]
 
     private static func ellipsis(_ font: NSFont, _ color: NSColor) -> CTLine {
-        let key = [ObjectIdentifier(font), ObjectIdentifier(color)]
+        let key = EllipsisKey(font: ObjectIdentifier(font), color: ObjectIdentifier(color))
         if let e = ellipses[key] { return e.2 }
         let token = line("…", font, color)
         ellipses[key] = (font, color, token)
