@@ -266,7 +266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             # Shortcuts, as "cmd+shift+b" (cmd, shift, ctrl, opt). Commented lines show the defaults.
             [keys]
             \(KeyMap.Action.allCases.map { a in a.defaultKey.map { "# \(a.rawValue) = \"\($0)\"" } ?? "# \(a.rawValue): no default" }.joined(separator: "\n"))
-            # A plugin command by "<plugin id>/<item id>", e.g. "dev.haunt.tabs/move-up" = "alt+cmd+up".
+            # A plugin command by "<plugin id>/<item id>", e.g. "dev.haunt.tabs-plus/move-up" = "alt+cmd+up".
 
             [layout]
             # The view cmd+shift+a shows. Only "narrow-list" for now.

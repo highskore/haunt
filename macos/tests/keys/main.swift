@@ -184,16 +184,16 @@ check(!HauntConfig.ghosttyConfig(TOML.parse("font = \"Mono\\nconfig-file = /x\"\
       "a line break in font is refused")
 
 // Plugin commands: their default keys bind unless taken, `[keys]` overrides them, and Ghostty lets them through.
-let up = KeyMap.pluginName("dev.haunt.tabs", "move-up"), down = KeyMap.pluginName("dev.haunt.tabs", "move-down")
+let up = KeyMap.pluginName("dev.haunt.tabs-plus", "move-up"), down = KeyMap.pluginName("dev.haunt.tabs-plus", "move-down")
 let pluginDefaults = [up: "alt+cmd+up", down: "alt+cmd+down", "dev.x.y/steal": "cmd+t"]
 var pluginLogs: [String] = []
-let withPlugins = KeyMap(table: TOML.parse("[keys]\n\"dev.haunt.tabs/move-down\" = \"ctrl+opt+j\"\n")["keys"] ?? [:],
+let withPlugins = KeyMap(table: TOML.parse("[keys]\n\"dev.haunt.tabs-plus/move-down\" = \"ctrl+opt+j\"\n")["keys"] ?? [:],
                          pluginDefaults: pluginDefaults) { pluginLogs.append($0) }
 check(withPlugins.plugin[up] == Shortcut.parse("cmd+opt+up"), "plugin default binds")
 check(withPlugins.plugin[down] == Shortcut.parse("ctrl+opt+j"), "[keys] overrides a plugin default")
 check(withPlugins.plugin["dev.x.y/steal"] == nil && withPlugins[.newTab] == Shortcut.parse("cmd+t"), "a plugin default never takes a Haunt chord")
 check(pluginLogs.contains { $0.contains("dev.x.y/steal") }, "the refused default is logged")
-let taken = KeyMap(table: TOML.parse("[keys]\n\"dev.haunt.tabs/move-up\" = \"cmd+k\"\n")["keys"] ?? [:], pluginDefaults: pluginDefaults) { _ in }
+let taken = KeyMap(table: TOML.parse("[keys]\n\"dev.haunt.tabs-plus/move-up\" = \"cmd+k\"\n")["keys"] ?? [:], pluginDefaults: pluginDefaults) { _ in }
 check(taken.plugin[up] == Shortcut.parse("cmd+k") && taken[.palette] == nil, "a configured plugin chord beats a Haunt default, as for actions")
 // Plugin defaults need cmd and stay off reserved chords; a chord the user sets in [keys] is unrestricted.
 var guardLogs: [String] = []

@@ -125,9 +125,9 @@ fn log_mode_and_suggestions_come_from_the_plugins() {
 
 #[test]
 fn the_tabs_plugin_arranges_but_never_buries_a_row_that_needs_you() {
-    let dir = repo("haunt-tabs");
+    let dir = repo("haunt-tabs-plus");
     if !dir.join("haunt-plugin.toml").is_file() {
-        eprintln!("skipped: haunt-tabs not found next to this repo; set HAUNT_PLUGINS_DIR");
+        eprintln!("skipped: haunt-tabs-plus not found next to this repo; set HAUNT_PLUGINS_DIR");
         return;
     }
     let home = PathBuf::from(format!("/tmp/haunt-fp-tabs-{}", std::process::id()));
@@ -148,10 +148,10 @@ fn the_tabs_plugin_arranges_but_never_buries_a_row_that_needs_you() {
 
     let (a, b, c) = (&envs[0].surface_id, &envs[1].surface_id, &envs[2].surface_id);
     let menu = set.lock().unwrap().row_menu(c);
-    assert!(menu.iter().any(|m| m.id == "pin" && !m.checked && m.plugin_id == "dev.haunt.tabs"), "{menu:?}");
+    assert!(menu.iter().any(|m| m.id == "pin" && !m.checked && m.plugin_id == "dev.haunt.tabs-plus"), "{menu:?}");
     assert!(menu.iter().any(|m| m.id == "color:blue" && m.parent.as_deref() == Some("color-menu")));
-    set.lock().unwrap().invoke_row_item("dev.haunt.tabs", "pin", c).unwrap();
-    set.lock().unwrap().invoke_row_item("dev.haunt.tabs", "color:blue", a).unwrap();
+    set.lock().unwrap().invoke_row_item("dev.haunt.tabs-plus", "pin", c).unwrap();
+    set.lock().unwrap().invoke_row_item("dev.haunt.tabs-plus", "color:blue", a).unwrap();
     set.lock().unwrap().row_moved(a, "idle", Some(b));
     assert_eq!(layout(), [("pinned".to_owned(), names(&["c"])), ("idle".to_owned(), names(&["a", "b"]))]);
     let snap = core.snapshot();

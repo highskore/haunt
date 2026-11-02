@@ -145,7 +145,7 @@ A surface becomes an agent row with its first agent event and stays one until it
 
 ### Arrangement (`core/src/arrange.rs`)
 
-A plugin granted `sidebar` (the first-party one is `dev.haunt.tabs`) can push an arrangement: pinned tabs, named sections, a manual order, a flat list, and colours. The core merges it over its own grouping on every `snapshot()`:
+A plugin granted `sidebar` (the first-party one is `dev.haunt.tabs-plus`) can push an arrangement: pinned tabs, named sections, a manual order, a flat list, and colours. The core merges it over its own grouping on every `snapshot()`:
 
 1. `NEEDS YOU` (`needs-you`) first: every row that needs you, in the core's order, whatever the arrangement says. When a pinned or sectioned row stops needing you, it goes back to its place.
 2. `PINNED` (`pinned`): the pinned rows, in the plugin's order.

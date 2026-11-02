@@ -963,7 +963,7 @@ mod tests {
             st.handle_line(&line(&b, r#""event":"permission_seen","tool_name":"Bash","tool_input":{"command":"ls"}"#), Instant::now());
         });
         let sidebar = Capabilities { sidebar: true, ..Default::default() };
-        let mut st = HostState::new("dev.haunt.tabs", &sidebar, None, None, Some(core.handle()));
+        let mut st = HostState::new("dev.haunt.tabs-plus", &sidebar, None, None, Some(core.handle()));
         let rows = st.rows();
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().any(|r| r.surface == b.surface_id && r.group == wside::StateGroup::NeedsYou));
@@ -983,7 +983,7 @@ mod tests {
         assert_eq!((snap.groups[1].rows[0].color, snap.color_style), (Some(TabColor::Blue), ColorStyle::Tint));
 
         let mut other = HostState::new("dev.x.other", &sidebar, None, None, Some(core.handle()));
-        assert!(other.arrange(arrangement.clone()).unwrap_err().contains("dev.haunt.tabs"), "one arranger at a time");
+        assert!(other.arrange(arrangement.clone()).unwrap_err().contains("dev.haunt.tabs-plus"), "one arranger at a time");
         other.clear();
         assert_eq!(core.snapshot().groups[1].id, "pinned", "only the owner clears");
         let mut no_cap = HostState::new("dev.x.nocap", &Capabilities::default(), None, None, Some(core.handle()));
@@ -993,7 +993,7 @@ mod tests {
         st.arrange(arrangement.clone()).unwrap();
 
         // A reload: the new instance takes over, and dropping the old one leaves the new arrangement.
-        let mut reloaded = HostState::new("dev.haunt.tabs", &sidebar, None, None, Some(core.handle()));
+        let mut reloaded = HostState::new("dev.haunt.tabs-plus", &sidebar, None, None, Some(core.handle()));
         reloaded.arrange(wside::Arrangement { flat: true, ..arrangement.clone() }).unwrap();
         drop(st);
         assert_eq!(core.snapshot().groups[1].id, "pinned", "the reloaded instance's arrangement stays");
@@ -1001,7 +1001,7 @@ mod tests {
         assert_eq!(core.snapshot().groups[1].id, "running", "a disabled instance's arrangement goes with it");
         assert!(reloaded.arrange(arrangement.clone()).is_err(), "and it can't arrange again");
 
-        let mut dropped = HostState::new("dev.haunt.tabs", &sidebar, None, None, Some(core.handle()));
+        let mut dropped = HostState::new("dev.haunt.tabs-plus", &sidebar, None, None, Some(core.handle()));
         dropped.arrange(arrangement).unwrap();
         drop(dropped);
         assert_eq!(core.snapshot().groups[1].id, "running", "a removed or reloaded plugin's arrangement goes");
