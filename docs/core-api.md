@@ -10,7 +10,7 @@ object HauntCore {
   fn start() -> Result<(), CoreError>             // binds sock and ctl, opens decisions.jsonl; a second call is a no-op
   fn register_surface(cwd: string) -> Result<SurfaceEnv, CoreError>   // Invalid past 512 surfaces
   fn unregister_surface(surface_id: string)
-  fn set_surface_info(surface_id: string, title: string, cwd: string, git_branch: Option<string>)
+  fn set_surface_info(surface_id: string, title: string, cwd: string, git_branch: Option<string>)   // git_branch is ignored
   fn select_surface(surface_id: string)           // marks Row.selected
   fn on_osc_notification(surface_id: string, title: string, body: string)
   fn snapshot() -> SidebarSnapshot
@@ -63,7 +63,7 @@ In Swift, the generated `Progress` struct shadows `Foundation.Progress` inside t
    | `HAUNT_HOOK_NONCE` | `env.nonce` (128-bit random, hex) |
    | `HAUNT_SOCK` | `env.socketPath` |
 
-3. On `PWD` and title changes, and whenever the git branch is known, call `setSurfaceInfo`. On tab selection, call `selectSurface`. When a tab closes, call `unregisterSurface`.
+3. On `PWD` and title changes, call `setSurfaceInfo`, from any thread, with `gitBranch: nil`: the core reads the branch itself. On tab selection, call `selectSurface`. When a tab closes, call `unregisterSurface`.
 4. On `GHOSTTY_ACTION_DESKTOP_NOTIFICATION` with title `haunt://cli-agent` or `warp://cli-agent`, call `onOscNotification`. The core ignores other titles, so the UI can pass every notification through and still show the non-agent ones itself.
 5. `changed()` fires on whatever thread made the change. That is often the socket thread. Hop to the main actor, then call `snapshot()`. It is never called while the core holds its lock, so calling back into the core is safe.
 6. Allow/Deny: a row with `pending` has a nonce-verified request. If `pending.suspicious` is set, show the preview with a warning and no Allow/Deny: the request is terminal-only (see Nonce gating below: hidden characters, a tool that may touch more than it shows, or another request possibly still on screen), and `answerPermission` returns `nil` for it. It can clear while the key stays the same, once the request is the only one left. Keep `pending.key` with whatever offers the answer (the button, a notification's `userInfo`) and pass it back: `answerPermission(surfaceId, requestKey, allow)` returns the asking agent's keys for `ghostty_surface_text`: `"1"` (allow) or `"\u{1b}"` (deny) for Claude Code, `"y"` or `"\u{1b}"` for Codex (see [agent-events.md](agent-events.md#agent-ids)). An agent haunt has no keys for gets no `pending` at all. For Claude Code, `1` picks Claude Code's first option, "Yes", wherever the highlight is, where Enter would pick the highlighted one ("Yes, and don't ask again" or "No" if the highlight moved). In a prompt that defaults to No, Claude Code hides the indexes and ignores digits, so `1` does nothing there rather than answering No. It returns them only while that key is still the surface's live request, and consumes the request, so a second call, or a key from a prompt that has since changed, returns `nil`. If it returns `nil`, write nothing.
@@ -110,7 +110,7 @@ Groups, in order: `NEEDS YOU`, `RUNNING`, `IDLE`. Done, failed and shell rows go
 | `name` | last path component of the cwd (`~` for home) | same, of the agent cwd |
 | `meta` | `~cwd · <shell>`, e.g. `~/code/vibes · zsh` (the basename of `$SHELL`) | `branch · task`; the agent cwd stands in for a missing branch |
 
-The agent cwd is the latest verified hook event's `cwd`, falling back to the surface cwd from `setSurfaceInfo`. A Claude launched as the surface's command never changes the shell's `PWD`, so the hook is the only place its cwd shows up. Once there is an agent cwd, the core reads the branch from `.git/HEAD` above it on every verified event and ignores the `git_branch` the UI passed; the API is unchanged.
+The agent cwd is the latest verified hook event's `cwd`, falling back to the surface cwd from `setSurfaceInfo`. A Claude launched as the surface's command never changes the shell's `PWD`, so the hook is the only place its cwd shows up. The core reads every branch itself, from `.git/HEAD` above the cwd: the surface cwd's on each `set_surface_info`, and the agent cwd's on every verified event, so a checkout inside the session shows up. The lookups run outside the state lock and are cached per surface by cwd and HEAD (inode, size, mtime), so an unchanged HEAD costs one `lstat`. `git_branch` is ignored and will be dropped from the API once the app stops passing it.
 | `status_text` | empty | `needs you`, `3/5` (running with progress), empty (running without progress), `done`, `failed`, empty (idle) |
 | `progress` | none | `done/total` of the main agent's tasks, else of its latest TodoWrite |
 | `subagents` | none | while running or needing you: `label` = `Explore · trace hooks`, `meta` = `2/4 · 1m12s` or `14 tools · 48s` |

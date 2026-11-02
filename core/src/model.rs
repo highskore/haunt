@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use crate::allowlist::{self, AllowError, AllowSuggestion};
 use crate::ctl::{self, Ctl};
 use crate::decisions::{Decision, DecisionLog};
+use crate::git::Branches;
 use crate::event::{AgentEvent, parse_osc};
 use crate::ids::{hex, random, uuid_v4};
 use crate::intake::{Delivery, Intake, IntakeError, Limits, Nonces, SOCKET_NAME};
@@ -65,8 +66,9 @@ pub type Listener = Arc<dyn Fn() + Send + Sync>;
 struct Surface {
     id: String,
     cwd: String,
+    /// Branch at `cwd`.
     branch: Option<String>,
-    /// Branch at `session.cwd`, looked up here because the UI only knows the surface cwd.
+    /// Branch at `session.cwd`.
     agent_branch: Option<String>,
     session: Session,
 }
@@ -102,14 +104,13 @@ impl State {
         Some(r)
     }
 
-    /// One intake delivery; the intake already checked the nonce and the rate limit.
-    pub(crate) fn deliver(&mut self, d: &Delivery, now: Instant) -> bool {
+    /// One intake delivery; the intake already checked the nonce and the rate limit. `agent_branch`
+    /// is the branch at the agent cwd after it, looked up before the lock (`Branches::agent`).
+    fn deliver(&mut self, d: &Delivery, agent_branch: Option<Option<String>>, now: Instant) -> bool {
         let Some(event) = &d.event else { return false };
         self.with_surface(&d.surface_id, |s| {
             let mut changed = s.session.apply(event, d.verified, now);
-            // Every verified event re-reads HEAD, so a checkout inside the session shows up.
-            if d.verified && let Some(cwd) = &s.session.cwd {
-                let b = crate::git::branch(cwd);
+            if let Some(b) = agent_branch {
                 changed |= b != s.agent_branch;
                 s.agent_branch = b;
             }
@@ -126,7 +127,10 @@ impl State {
     #[cfg(test)]
     pub(crate) fn handle_line(&mut self, line: &str, now: Instant) -> bool {
         let d = self.decode(line);
-        self.deliver(&d, now)
+        let cwd = d.event.as_ref().and_then(|e| e.cwd.clone()).filter(|c| c.starts_with('/'));
+        let known = self.surfaces.iter().find(|s| s.id == d.surface_id).and_then(|s| s.session.cwd.clone());
+        let branch = d.verified.then(|| cwd.or(known)).flatten().map(|c| crate::git::branch(&c));
+        self.deliver(&d, branch, now)
     }
 
     fn apply_unverified(&mut self, id: &str, event: &AgentEvent, now: Instant) -> bool {
@@ -163,7 +167,17 @@ struct Servers {
 pub struct Core {
     dir: PathBuf,
     state: Arc<Mutex<State>>,
+    branches: Arc<Branches>,
     servers: Mutex<Option<Servers>>,
+}
+
+/// The branch lookup goes first, outside the state lock: it reads files a hook-chosen cwd points at.
+fn deliver(state: &Mutex<State>, branches: &Branches, d: &Delivery) -> bool {
+    let branch = match &d.event {
+        Some(e) if d.verified => branches.agent(&d.surface_id, e.cwd.as_deref()),
+        _ => None,
+    };
+    update_state(state, |st, now| st.deliver(d, branch, now))
 }
 
 /// Runs `f` on the state and fires the listener, outside the lock, if it reports a change.
@@ -184,7 +198,7 @@ const DEFAULT_LIMIT: u64 = 50;
 const MAX_LIMIT: u64 = 1000;
 
 /// One ctl request: `dump`, `event` (a hook line, nonce still required) or `decisions`.
-fn ctl_request(state: &Mutex<State>, line: &str) -> String {
+fn ctl_request(state: &Mutex<State>, branches: &Branches, line: &str) -> String {
     let Ok(req) = serde_json::from_str::<Value>(line) else { return ctl::error("invalid json") };
     match req.get("cmd").and_then(Value::as_str) {
         Some("dump") => {
@@ -206,12 +220,9 @@ fn ctl_request(state: &Mutex<State>, line: &str) -> String {
                 Some(v @ Value::Object(_)) => v.to_string(),
                 _ => return ctl::error("event needs a line"),
             };
-            let mut verified = false;
-            let changed = update_state(state, |st, now| {
-                let d = st.decode(&hook_line);
-                verified = d.verified;
-                st.deliver(&d, now)
-            });
+            let d = lock(state).decode(&hook_line);
+            let changed = deliver(state, branches, &d);
+            let verified = d.verified;
             json!({ "ok": true, "verified": verified, "changed": changed }).to_string()
         }
         Some("decisions") => {
@@ -229,7 +240,7 @@ impl Core {
     pub fn new(config_dir: impl Into<PathBuf>) -> Self {
         let shell = std::env::var("SHELL").ok().and_then(|s| s.rsplit('/').next().map(str::to_owned)).filter(|s| !s.is_empty());
         let state = State { home: std::env::var("HOME").ok(), shell, ..State::default() };
-        Self { dir: config_dir.into(), state: Arc::new(Mutex::new(state)), servers: Mutex::new(None) }
+        Self { dir: config_dir.into(), state: Arc::new(Mutex::new(state)), branches: Arc::default(), servers: Mutex::new(None) }
     }
 
     pub fn socket_path(&self) -> PathBuf {
@@ -243,9 +254,9 @@ impl Core {
         if servers.is_some() {
             return Ok(());
         }
-        let state = self.state.clone();
+        let (state, branches) = (self.state.clone(), self.branches.clone());
         let sink = Arc::new(move |d: Delivery| {
-            update_state(&state, |st, now| st.deliver(&d, now));
+            deliver(&state, &branches, &d);
         });
         // Binding the intake first secures the dir the log and ctl live in.
         let nonces = lock(&self.state).nonces.clone();
@@ -257,8 +268,8 @@ impl Core {
                 Some(_) => CoreError::Io { reason },
             }
         })?;
-        let state = self.state.clone();
-        let ctl = Ctl::bind(&self.dir, Arc::new(move |line: &str| ctl_request(&state, line))).map_err(CoreError::from)?;
+        let (state, branches) = (self.state.clone(), self.branches.clone());
+        let ctl = Ctl::bind(&self.dir, Arc::new(move |line: &str| ctl_request(&state, &branches, line))).map_err(CoreError::from)?;
         *servers = Some(Servers { intake, _ctl: ctl });
         Ok(())
     }
@@ -297,6 +308,7 @@ impl Core {
 
     pub fn unregister_surface(&self, surface_id: &str) {
         self.with_intake(|i| i.forget_surface(surface_id));
+        self.branches.forget(surface_id);
         self.update(|st, _| {
             write(&st.nonces).remove(surface_id);
             let before = st.surfaces.len();
@@ -309,15 +321,28 @@ impl Core {
         });
     }
 
-    /// `title` is accepted for the contract; rows are named after the cwd.
-    pub fn set_surface_info(&self, surface_id: &str, _title: &str, cwd: &str, git_branch: Option<String>) {
+    /// `title` is accepted for the contract; rows are named after the cwd. The core reads the
+    /// branch at `cwd` itself, outside its lock, so `_git_branch` is ignored (to be dropped from the API).
+    pub fn set_surface_info(&self, surface_id: &str, _title: &str, cwd: &str, _git_branch: Option<String>) {
+        if !lock(&self.state).surfaces.iter().any(|s| s.id == surface_id) {
+            return;
+        }
+        let branch = self.branches.shell(surface_id, cwd);
+        let mut gone = false;
         self.update(|st, _| {
-            let Some(s) = st.surface(surface_id) else { return false };
-            let changed = s.cwd != cwd || s.branch != git_branch;
-            s.cwd = cwd.to_owned();
-            s.branch = git_branch;
+            let Some(s) = st.surface(surface_id) else {
+                gone = true;
+                return false;
+            };
+            let changed = s.cwd != cwd || s.branch != branch;
+            cwd.clone_into(&mut s.cwd);
+            s.branch = branch;
             changed
         });
+        // Unregistered meanwhile: drop the cache entry the lookup made.
+        if gone {
+            self.branches.forget(surface_id);
+        }
     }
 
     pub fn select_surface(&self, surface_id: &str) {
@@ -828,6 +853,18 @@ mod tests {
     }
 
     #[test]
+    fn the_core_reads_the_shell_branch_itself() {
+        let repo = TempDir::created("shell-branch");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/dev\n").unwrap();
+        let c = core();
+        let env = c.register_surface("/").unwrap();
+        c.set_surface_info(&env.surface_id, "zsh", repo.to_str().unwrap(), Some("stale".into()));
+        let s = c.with_state(|st| st.surface(&env.surface_id).map(|s| s.branch.clone()));
+        assert_eq!(s, Some(Some("dev".into())));
+    }
+
+    #[test]
     fn listener_fires_on_changes_only() {
         let c = core();
         let n = Arc::new(AtomicUsize::new(0));
@@ -839,7 +876,7 @@ mod tests {
         c.select_surface(&env.surface_id);
         c.select_surface(&env.surface_id);
         c.set_surface_info(&env.surface_id, "zsh", "/a", None);
-        c.set_surface_info(&env.surface_id, "zsh", "/a", Some("main".into()));
+        c.set_surface_info(&env.surface_id, "zsh", "/b", Some("ignored".into()));
         assert_eq!(n.load(Ordering::SeqCst), 3);
         assert!(c.snapshot().groups[0].rows[0].selected);
         c.unregister_surface(&env.surface_id);
