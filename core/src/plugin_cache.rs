@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
+use crate::ids::hex;
+
 type HmacSha256 = Hmac<Sha256>;
 
 const KEY_FILE: &str = "hmac.key";
@@ -156,10 +158,6 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), CacheError> 
         let _ = fs::remove_file(&tmp);
     }
     Ok(res?)
-}
-
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]

@@ -1,8 +1,6 @@
 //! `Core`: surfaces, their agent sessions, the socket intake and the sidebar snapshot.
 
 use std::collections::HashSet;
-use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
@@ -13,7 +11,8 @@ use crate::allowlist::{self, AllowError, AllowSuggestion};
 use crate::ctl::{self, Ctl};
 use crate::decisions::{Decision, DecisionLog};
 use crate::event::{AgentEvent, parse_osc};
-use crate::intake::{Delivery, Intake, IntakeError, Limits, SOCKET_NAME};
+use crate::ids::{hex, random, uuid_v4};
+use crate::intake::{Delivery, Intake, IntakeError, Limits, Nonces, SOCKET_NAME};
 use crate::layout::{self, SidebarSnapshot, SurfaceView};
 use crate::session::{Outcome, Session};
 
@@ -64,7 +63,6 @@ pub type Listener = Arc<dyn Fn() + Send + Sync>;
 
 struct Surface {
     id: String,
-    nonce: String,
     cwd: String,
     branch: Option<String>,
     /// Branch at `session.cwd`, looked up here because the UI only knows the surface cwd.
@@ -75,6 +73,8 @@ struct Surface {
 #[derive(Default)]
 pub(crate) struct State {
     surfaces: Vec<Surface>,
+    /// Surface id to nonce, shared with the intake: the one place a nonce is kept.
+    nonces: Nonces,
     selected: Option<String>,
     home: Option<String>,
     /// Basename of the login shell surfaces run, for shell rows.
@@ -109,8 +109,7 @@ impl State {
 
     /// A hook line checked against the registered nonces, as the intake does.
     fn decode(&self, line: &str) -> Delivery {
-        let nonces = self.surfaces.iter().map(|s| (s.id.clone(), s.nonce.clone())).collect();
-        crate::intake::decode(line, &nonces)
+        crate::intake::decode(line, &self.nonces.read().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// A socket line as the intake would deliver it, minus the socket and the rate limit.
@@ -155,25 +154,6 @@ impl State {
             .collect();
         layout::snapshot(&views, self.home.as_deref(), self.shell.as_deref(), now)
     }
-}
-
-pub(crate) fn random_bytes() -> [u8; 16] {
-    let mut b = [0; 16];
-    // Without a random nonce the hook channel has no authentication at all, so failing here is fatal.
-    File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).expect("read /dev/urandom");
-    b
-}
-
-pub(crate) fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
-
-fn uuid() -> String {
-    let mut b = random_bytes();
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    let h = hex(&b);
-    format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
 }
 
 struct Servers {
@@ -269,7 +249,8 @@ impl Core {
             update_state(&state, |st, now| st.deliver(&d, now));
         });
         // Binding the intake first secures the dir the log and ctl live in.
-        let intake = Intake::bind(&self.dir, Limits::default(), sink).map_err(CoreError::from)?;
+        let nonces = lock(&self.state).nonces.clone();
+        let intake = Intake::bind(&self.dir, Limits::default(), nonces, sink).map_err(CoreError::from)?;
         lock(&self.state).decisions.open(&self.dir).map_err(|e| {
             let reason = format!("decision log: {e}");
             match e.raw_os_error() {
@@ -279,9 +260,6 @@ impl Core {
         })?;
         let state = self.state.clone();
         let ctl = Ctl::bind(&self.dir, Arc::new(move |line: &str| ctl_request(&state, line))).map_err(CoreError::from)?;
-        for s in &lock(&self.state).surfaces {
-            intake.register_surface(&s.id, &s.nonce);
-        }
         *servers = Some(Servers { intake, _ctl: ctl });
         Ok(())
     }
@@ -299,28 +277,29 @@ impl Core {
     /// `Invalid` once `MAX_SURFACES` are registered: an env the core doesn't know would never verify.
     pub fn register_surface(&self, cwd: &str) -> Result<SurfaceEnv, CoreError> {
         let env = SurfaceEnv {
-            surface_id: uuid(),
-            nonce: hex(&random_bytes()),
+            surface_id: uuid_v4(),
+            nonce: hex(&random::<16>()),
             socket_path: self.socket_path().to_string_lossy().into_owned(),
         };
         let added = self.update(|st, now| {
             if st.surfaces.len() >= MAX_SURFACES {
                 return false;
             }
-            let (id, nonce, cwd) = (env.surface_id.clone(), env.nonce.clone(), cwd.to_owned());
-            st.surfaces.push(Surface { id, nonce, cwd, branch: None, agent_branch: None, session: Session::new(now) });
+            let (id, cwd) = (env.surface_id.clone(), cwd.to_owned());
+            st.surfaces.push(Surface { id, cwd, branch: None, agent_branch: None, session: Session::new(now) });
+            st.nonces.write().unwrap_or_else(|e| e.into_inner()).insert(env.surface_id.clone(), env.nonce.clone());
             true
         });
         if !added {
             return Err(CoreError::Invalid { reason: format!("at most {MAX_SURFACES} surfaces") });
         }
-        self.with_intake(|i| i.register_surface(&env.surface_id, &env.nonce));
         Ok(env)
     }
 
     pub fn unregister_surface(&self, surface_id: &str) {
-        self.with_intake(|i| i.unregister_surface(surface_id));
+        self.with_intake(|i| i.forget_surface(surface_id));
         self.update(|st, _| {
+            st.nonces.write().unwrap_or_else(|e| e.into_inner()).remove(surface_id);
             let before = st.surfaces.len();
             if let Some(s) = st.surface(surface_id) {
                 s.session.close();

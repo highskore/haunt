@@ -204,7 +204,7 @@ fn is_symlink_at(dir: &OwnedFd, name: &CStr) -> bool {
 
 /// Writes a temp file next to the settings and renames it over them; rename never follows a link.
 fn write_replace(dir: &OwnedFd, content: &str, mode: u32) -> Result<(), AllowError> {
-    let tmp = CString::new(format!(".settings.local.json.haunt-{}-{}", std::process::id(), crate::model::hex(&crate::model::random_bytes()[..4])))
+    let tmp = CString::new(format!(".settings.local.json.haunt-{}-{}", std::process::id(), crate::ids::hex(&crate::ids::random::<4>())))
         .expect("no NUL");
     let fd = open_at(Some(dir), &tmp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW)?;
     let mut f = File::from(fd);

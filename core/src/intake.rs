@@ -10,7 +10,7 @@ use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt}
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::event::{AgentEvent, parse_body};
@@ -73,6 +73,8 @@ pub enum IntakeError {
 }
 
 pub type Sink = Arc<dyn Fn(Delivery) + Send + Sync>;
+/// Surface id to nonce. The core owns it; the intake reads it to verify lines.
+pub type Nonces = Arc<RwLock<HashMap<String, String>>>;
 
 struct Bucket {
     tokens: f64,
@@ -81,7 +83,7 @@ struct Bucket {
 }
 
 struct Shared {
-    nonces: Mutex<HashMap<String, String>>,
+    nonces: Nonces,
     /// Per (surface, verified): a flood of unverified lines can't use up the verified budget.
     buckets: Mutex<HashMap<(String, bool), Bucket>>,
     limits: Limits,
@@ -97,10 +99,10 @@ pub struct Intake {
 
 impl Intake {
     /// Binds `<dir>/sock` (0600) in a 0700 dir we own, and serves it on a background thread.
-    pub fn bind(dir: &Path, limits: Limits, sink: Sink) -> Result<Self, IntakeError> {
+    pub fn bind(dir: &Path, limits: Limits, nonces: Nonces, sink: Sink) -> Result<Self, IntakeError> {
         let (listener, path) = bind_private(dir, SOCKET_NAME)?;
         let shared = Arc::new(Shared {
-            nonces: Mutex::new(HashMap::new()),
+            nonces,
             buckets: Mutex::new(HashMap::new()),
             limits,
             sink,
@@ -116,13 +118,16 @@ impl Intake {
         &self.path
     }
 
-    pub fn register_surface(&self, surface_id: &str, nonce: &str) {
-        self.shared.nonces.lock().unwrap().insert(surface_id.to_owned(), nonce.to_owned());
-    }
-
-    pub fn unregister_surface(&self, surface_id: &str) {
-        self.shared.nonces.lock().unwrap().remove(surface_id);
+    /// Drops the surface's rate-limit state; its nonce leaves `Nonces` with it.
+    pub fn forget_surface(&self, surface_id: &str) {
         self.shared.buckets.lock().unwrap().retain(|(id, _), _| id != surface_id);
+    }
+}
+
+#[cfg(test)]
+impl Intake {
+    pub(crate) fn register_surface(&self, surface_id: &str, nonce: &str) {
+        self.shared.nonces.write().unwrap().insert(surface_id.to_owned(), nonce.to_owned());
     }
 }
 
@@ -304,10 +309,12 @@ fn handle_line(line: &[u8], s: &Shared) {
     };
     let surface_id = surface_of(text);
     // Unknown ids get no bucket, so random ids cannot grow the map.
-    if !s.nonces.lock().unwrap().contains_key(&surface_id) {
+    let nonces = s.nonces.read().unwrap();
+    if !nonces.contains_key(&surface_id) {
         return;
     }
-    let mut d = decode(text, &s.nonces.lock().unwrap());
+    let mut d = decode(text, &nonces);
+    drop(nonces);
     let Some(dropped_before) = take_token(s, &surface_id, d.verified) else { return };
     d.dropped_before = dropped_before;
     (s.sink)(d);
@@ -373,7 +380,7 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         let (tx, rx) = mpsc::channel();
         let tx = Mutex::new(tx);
-        let intake = Intake::bind(&d, limits, Arc::new(move |x| tx.lock().unwrap().send(x).unwrap())).unwrap();
+        let intake = Intake::bind(&d, limits, Nonces::default(), Arc::new(move |x| tx.lock().unwrap().send(x).unwrap())).unwrap();
         (intake, rx, d)
     }
 
@@ -423,7 +430,7 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir(&d).unwrap();
         fs::set_permissions(&d, fs::Permissions::from_mode(0o755)).unwrap();
-        let intake = Intake::bind(&d, Limits::default(), Arc::new(|_| {})).unwrap();
+        let intake = Intake::bind(&d, Limits::default(), Nonces::default(), Arc::new(|_| {})).unwrap();
         assert_eq!(fs::metadata(&d).unwrap().mode() & 0o777, 0o700);
         assert_eq!(fs::symlink_metadata(intake.path()).unwrap().mode() & 0o777, 0o600);
         drop(intake);
@@ -521,7 +528,7 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         fs::write(d.join(SOCKET_NAME), b"").unwrap();
-        assert!(matches!(Intake::bind(&d, Limits::default(), Arc::new(|_| {})), Err(IntakeError::NotASocket(_))));
+        assert!(matches!(Intake::bind(&d, Limits::default(), Nonces::default(), Arc::new(|_| {})), Err(IntakeError::NotASocket(_))));
         fs::remove_dir_all(d).unwrap();
     }
 
@@ -530,7 +537,7 @@ mod tests {
         let d = dir("uid");
         let _ = fs::remove_dir_all(&d);
         assert!(matches!(secure_dir(&d, uid() + 1), Err(IntakeError::UnsafeDir(..))));
-        let intake = Intake::bind(&d, Limits::default(), Arc::new(|_| {})).unwrap();
+        let intake = Intake::bind(&d, Limits::default(), Nonces::default(), Arc::new(|_| {})).unwrap();
         assert!(matches!(check_socket(intake.path(), uid() + 1), Err(IntakeError::UnsafeSocket(..))));
         assert!(matches!(remove_stale(intake.path(), uid() + 1), Err(IntakeError::UnsafeSocket(..))));
         drop(intake);
@@ -545,7 +552,7 @@ mod tests {
         let _ = fs::remove_file(&link);
         fs::create_dir(&real).unwrap();
         std::os::unix::fs::symlink(&real, &link).unwrap();
-        assert!(matches!(Intake::bind(&link, Limits::default(), Arc::new(|_| {})), Err(IntakeError::UnsafeDir(..))));
+        assert!(matches!(Intake::bind(&link, Limits::default(), Nonces::default(), Arc::new(|_| {})), Err(IntakeError::UnsafeDir(..))));
         fs::remove_file(&link).unwrap();
         fs::remove_dir_all(real).unwrap();
     }
@@ -563,8 +570,8 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         secure_dir(&d, uid()).unwrap();
         drop(UnixListener::bind(d.join(SOCKET_NAME)).unwrap());
-        let intake = Intake::bind(&d, Limits::default(), Arc::new(|_| {})).expect("stale socket replaced");
-        assert!(matches!(Intake::bind(&d, Limits::default(), Arc::new(|_| {})), Err(IntakeError::InUse(_))));
+        let intake = Intake::bind(&d, Limits::default(), Nonces::default(), Arc::new(|_| {})).expect("stale socket replaced");
+        assert!(matches!(Intake::bind(&d, Limits::default(), Nonces::default(), Arc::new(|_| {})), Err(IntakeError::InUse(_))));
         drop(intake);
         fs::remove_dir_all(d).unwrap();
     }

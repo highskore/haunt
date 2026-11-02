@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::event::AgentEvent;
-use crate::plugin_cache::{CwasmCache, check_dir, hex, write_atomic};
+use crate::ids::hex;
+use crate::plugin_cache::{CwasmCache, check_dir, write_atomic};
 use crate::plugin_manifest::{ALWAYS, Capabilities, MANIFEST, Manifest, valid_id};
 use crate::plugins::{Decoration, HostRequest, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost};
 

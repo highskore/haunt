@@ -5,6 +5,7 @@ pub mod ctl;
 pub mod decisions;
 pub mod event;
 pub mod git;
+mod ids;
 pub mod intake;
 pub mod layout;
 pub mod model;
