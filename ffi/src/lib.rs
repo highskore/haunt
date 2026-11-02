@@ -114,7 +114,7 @@ impl From<haunt_core::plugins::PluginError> for HostError {
 }
 
 #[cfg(feature = "plugins")]
-pub use haunt_core::plugins::{HostRequest, NotifyAction, PaletteItem};
+pub use haunt_core::plugins::{HostRequest, Mark, NotifyAction, PaletteItem};
 #[cfg(feature = "plugins")]
 pub use haunt_core::ptygate::PtyWrite;
 
@@ -131,19 +131,22 @@ impl HauntCore {
 #[cfg(feature = "plugins")]
 #[derive(uniffi::Object)]
 pub struct HauntPlugins {
-    set: Mutex<haunt_core::plugin_store::PluginSet>,
+    set: std::sync::Arc<Mutex<haunt_core::plugin_store::PluginSet>>,
 }
 
 #[cfg(feature = "plugins")]
 #[uniffi::export]
 impl HauntPlugins {
     /// Plugins that fail verification (hash mismatch, link error) are skipped and listed in `load_errors`.
+    /// `core` backs the `decisions` and `allowlist` imports, and its events reach the plugins from now on.
     #[uniffi::constructor]
-    pub fn load(haunt_dir: String) -> Result<std::sync::Arc<Self>, HostError> {
+    pub fn load(haunt_dir: String, core: std::sync::Arc<HauntCore>) -> Result<std::sync::Arc<Self>, HostError> {
         let fail = |e: haunt_core::plugin_store::StoreError| HostError::Failed { reason: e.to_string() };
         let host = haunt_core::plugins::PluginHost::new()?;
-        let set = haunt_core::plugin_store::Store::open(haunt_dir.as_ref()).map_err(fail)?.load_all(&host).map_err(fail)?;
-        Ok(std::sync::Arc::new(Self { set: Mutex::new(set) }))
+        let set = haunt_core::plugin_store::Store::open(haunt_dir.as_ref()).map_err(fail)?.load_all(&host, Some(&core.core.handle())).map_err(fail)?;
+        let set = std::sync::Arc::new(Mutex::new(set));
+        haunt_core::plugin_store::attach(&core.core, &set);
+        Ok(std::sync::Arc::new(Self { set }))
     }
 
     pub fn load_errors(&self) -> Vec<String> {

@@ -3,11 +3,13 @@
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::event::AgentEvent;
+use crate::model::CoreHandle;
 use crate::plugin_cache::{CwasmCache, check_dir, hex, write_atomic};
 use crate::plugin_manifest::{ALWAYS, Capabilities, MANIFEST, Manifest, valid_id};
 use crate::plugins::{Decoration, HostRequest, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost};
@@ -333,8 +335,9 @@ impl Store {
         Ok((manifest, wasm))
     }
 
-    /// Loads every pinned plugin with exactly the capabilities the user granted.
-    pub fn load_all(&self, host: &PluginHost) -> Result<PluginSet, StoreError> {
+    /// Loads every pinned plugin with exactly the capabilities the user granted; `core` backs the
+    /// `decisions` and `allowlist` imports.
+    pub fn load_all(&self, host: &PluginHost, core: Option<&CoreHandle>) -> Result<PluginSet, StoreError> {
         let mut set = PluginSet { plugins: Vec::new(), errors: Vec::new() };
         for e in self.read_lock()?.plugins {
             let loaded = self.verify(&e).and_then(|(manifest, wasm)| {
@@ -346,6 +349,7 @@ impl Store {
                     kv_path: Some(data.join("kv.json")),
                     settings_json: default_settings(&manifest),
                     haunt_dir: Some(self.home.clone()),
+                    core: core.cloned(),
                 };
                 Ok(host.load_bytes(&wasm, &self.cache_dir(), &spec)?.0)
             });
@@ -427,6 +431,17 @@ impl PluginSet {
     }
 }
 
+/// Sends the core's events to `set`'s plugins for as long as `set` lives. Row decorations are
+/// dropped until the snapshot has a place for them.
+pub fn attach(core: &crate::Core, set: &Arc<Mutex<PluginSet>>) {
+    let weak = Arc::downgrade(set);
+    core.set_event_tap(Some(Arc::new(move |event, verified| {
+        if let Some(set) = weak.upgrade() {
+            set.lock().unwrap_or_else(|e| e.into_inner()).on_event(event, verified);
+        }
+    })));
+}
+
 /// `$HAUNT_HOME`, else `~/.haunt`.
 pub fn default_home() -> PathBuf {
     if let Some(h) = std::env::var_os("HAUNT_HOME") {
@@ -451,7 +466,7 @@ mod tests {
         fs::create_dir_all(&s).unwrap();
         fs::write(
             s.join(MANIFEST),
-            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.1\"\nentry = \"p.wasm\"\n[capabilities]\n{caps}\n"),
+            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.2\"\nentry = \"p.wasm\"\n[capabilities]\n{caps}\n"),
         )
         .unwrap();
         fs::write(s.join("p.wasm"), "(component)").unwrap();

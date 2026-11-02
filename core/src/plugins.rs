@@ -1,4 +1,4 @@
-//! wasmtime host for `haunt:plugin@0.1` components (plan sections 3.3 and 3.8).
+//! wasmtime host for `haunt:plugin@0.2` components (plan sections 3.3 and 3.8).
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -13,14 +13,18 @@ use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxView, Was
 use crate::event::{AgentEvent, EventKind};
 use crate::plugin_cache::{CacheError, CwasmCache, cache_name};
 use crate::plugin_fs::FsScope;
+use crate::model::CoreHandle;
 use crate::plugin_manifest::{Capabilities, KV_CAP};
+use crate::session::Outcome;
 
 mod bindings {
     wasmtime::component::bindgen!({ path: "../wit/haunt-plugin.wit", world: "plugin" });
 }
 
 use bindings::Plugin;
-use bindings::haunt::plugin::{kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, types as wit};
+use bindings::haunt::plugin::{
+    allowlist as wallow, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, types as wit,
+};
 
 pub const MEMORY_CAP: usize = 64 << 20;
 const TICK: Duration = Duration::from_millis(10);
@@ -31,6 +35,7 @@ const MAX_PALETTE: usize = 64;
 const MAX_OUTBOX: usize = 256;
 const MAX_LOGS: usize = 1000;
 const MAX_STR: usize = 4096;
+const MAX_DECISIONS: u32 = 1000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decoration {
@@ -57,6 +62,20 @@ pub struct PaletteItem {
     pub subtitle: Option<String>,
     pub default_key: Option<String>,
     pub is_mode: bool,
+    /// Unix ms for the time column.
+    pub at_ms: Option<u64>,
+    pub mark: Option<Mark>,
+    /// Enter jumps to this tab, if it is open, instead of invoking the item.
+    pub surface_id: Option<String>,
+}
+
+/// The decision-log markers: open square for your answers, filled for a plugin's, round for one that lapsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
+pub enum Mark {
+    Open,
+    Filled,
+    Round,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,6 +123,8 @@ pub struct LoadSpec {
     pub settings_json: String,
     /// The haunt dir (`~/.haunt`) the plugin's `${cwd}` may never point into.
     pub haunt_dir: Option<PathBuf>,
+    /// What `decisions` and `allowlist` read and propose to; without it they see nothing.
+    pub core: Option<CoreHandle>,
 }
 
 struct Kv {
@@ -160,10 +181,11 @@ pub struct HostState {
     outbox: Vec<HostRequest>,
     fs: FsScope,
     pty_times: VecDeque<Instant>,
+    core: Option<CoreHandle>,
 }
 
 impl HostState {
-    fn new(id: &str, caps: &Capabilities, kv_path: Option<PathBuf>, haunt_dir: Option<&Path>) -> Self {
+    fn new(id: &str, caps: &Capabilities, kv_path: Option<PathBuf>, haunt_dir: Option<&Path>, core: Option<CoreHandle>) -> Self {
         Self {
             id: id.to_owned(),
             logs: Vec::new(),
@@ -175,6 +197,7 @@ impl HostState {
             outbox: Vec::new(),
             fs: FsScope::new(&caps.fs_read, &caps.fs_write, haunt_dir),
             pty_times: VecDeque::new(),
+            core,
         }
     }
 
@@ -211,7 +234,17 @@ impl HostState {
             return;
         }
         let (id, title, default_key) = (clip(id), clip(title), default_key.map(clip));
-        self.palette.push(PaletteItem { plugin_id: self.id.clone(), id, title, subtitle: None, default_key, is_mode });
+        self.palette.push(PaletteItem {
+            plugin_id: self.id.clone(),
+            id,
+            title,
+            subtitle: None,
+            default_key,
+            is_mode,
+            at_ms: None,
+            mark: None,
+            surface_id: None,
+        });
     }
 }
 
@@ -288,6 +321,46 @@ impl wpty::Host for HostState {
         let surface = clip(surface);
         self.push_log(format!("info pty.answer surface={surface} allow={allow} request={request_id}"));
         self.request(HostRequest::PtyAnswer { plugin_id: self.id.clone(), surface, allow, request_id })
+    }
+}
+
+impl wdec::Host for HostState {
+    fn query(&mut self, text: String, limit: u32) -> Vec<wdec::Decision> {
+        let Some(core) = &self.core else { return Vec::new() };
+        core.decisions(&text, limit.min(MAX_DECISIONS))
+            .into_iter()
+            .map(|d| wdec::Decision {
+                at_ms: d.at_ms,
+                surface_id: d.surface_id,
+                tool: d.tool,
+                preview: d.preview,
+                cwd: d.cwd,
+                outcome: match d.outcome {
+                    Outcome::AllowedInHaunt => wdec::Outcome::AllowedInHaunt,
+                    Outcome::DeniedInHaunt => wdec::Outcome::DeniedInHaunt,
+                    Outcome::AllowedByPlugin { plugin_id } => wdec::Outcome::AllowedByPlugin(plugin_id),
+                    Outcome::DeniedByPlugin { plugin_id } => wdec::Outcome::DeniedByPlugin(plugin_id),
+                    Outcome::AnsweredInTerminal => wdec::Outcome::AnsweredInTerminal,
+                    Outcome::Superseded => wdec::Outcome::Superseded,
+                },
+                agent: d.agent.id().to_owned(),
+            })
+            .collect()
+    }
+}
+
+impl wallow::Host for HostState {
+    fn approvals(&mut self, min_count: u32) -> Vec<wallow::Approval> {
+        let Some(core) = &self.core else { return Vec::new() };
+        core.approvals(min_count)
+            .into_iter()
+            .map(|a| wallow::Approval { project: a.project, command: a.command, count: a.count, last_at_ms: a.last_at_ms })
+            .collect()
+    }
+
+    fn propose(&mut self, project: String, command: String) -> Result<(), String> {
+        let core = self.core.as_ref().ok_or("no haunt core attached")?;
+        core.propose_allow_rule(&self.id, &project, &command).map_err(|e| e.to_string())
     }
 }
 
@@ -467,6 +540,13 @@ impl LoadedPlugin {
                 subtitle: i.subtitle.map(clip),
                 default_key: None,
                 is_mode: false,
+                at_ms: i.at_ms,
+                mark: i.mark.map(|m| match m {
+                    wit::Mark::Open => Mark::Open,
+                    wit::Mark::Filled => Mark::Filled,
+                    wit::Mark::Round => Mark::Round,
+                }),
+                surface_id: i.surface.map(clip),
             })
             .collect())
     }
@@ -528,8 +608,14 @@ impl PluginHost {
         if caps.pty_write {
             wpty::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
+        if caps.decisions_read {
+            wdec::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if caps.allowlist_suggest {
+            wallow::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
         if caps.fs_read_granted() || caps.fs_write_granted() {
-            let mut fs = l.instance("haunt:plugin/fs@0.1.0")?;
+            let mut fs = l.instance("haunt:plugin/fs@0.2.0")?;
             if caps.fs_read_granted() {
                 fs.func_wrap("read", |s: StoreContextMut<'_, HostState>, (path,): (String,)| Ok((s.data().fs.read(&path),)))?;
                 fs.func_wrap("list", |s: StoreContextMut<'_, HostState>, (path,): (String,)| Ok((s.data().fs.list(&path),)))?;
@@ -552,7 +638,7 @@ impl PluginHost {
     /// Instantiates a compiled component with `spec`'s grants and runs its `init`.
     pub fn instantiate(&self, component: &Component, spec: &LoadSpec) -> Result<LoadedPlugin, PluginError> {
         let linker = self.linker(&spec.caps)?;
-        let mut store = Store::new(&self.engine, HostState::new(&spec.id, &spec.caps, spec.kv_path.clone(), spec.haunt_dir.as_deref()));
+        let mut store = Store::new(&self.engine, HostState::new(&spec.id, &spec.caps, spec.kv_path.clone(), spec.haunt_dir.as_deref(), spec.core.clone()));
         store.limiter(|s| &mut s.limits);
         // Instantiation runs the component's start functions, which get the same budget as a call.
         store.set_epoch_deadline(CALL_TICKS);
@@ -615,7 +701,7 @@ mod tests {
     }
 
     const FS_WRITE_IMPORT: &str = r#"(component
-        (import "haunt:plugin/fs@0.1.0" (instance
+        (import "haunt:plugin/fs@0.2.0" (instance
             (export "write" (func (param "path" string) (param "data" (list u8)) (result (result (error string))))))))"#;
 
     #[test]
@@ -638,7 +724,7 @@ mod tests {
         let host = PluginHost::new().unwrap();
         let pty = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/pty@0.1.0" (instance
+            r#"(component (import "haunt:plugin/pty@0.2.0" (instance
                 (export "answer" (func (param "surface" string) (param "allow" bool) (param "request-id" u64) (result (result (error string))))))))"#,
         )
         .unwrap();
@@ -647,7 +733,7 @@ mod tests {
 
         let text = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/pty@0.1.0" (instance
+            r#"(component (import "haunt:plugin/pty@0.2.0" (instance
                 (export "text" (func (param "surface" string) (param "text" string) (result (result (error string))))))))"#,
         )
         .unwrap();
@@ -656,7 +742,7 @@ mod tests {
 
         let notify = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/notify@0.1.0" (instance
+            r#"(component (import "haunt:plugin/notify@0.2.0" (instance
                 (type $r (record (field "id" string) (field "title" string)))
                 (export "action" (type $a (eq $r)))
                 (export "notify" (func (param "title" string) (param "body" string) (param "actions" (list $a))
@@ -667,8 +753,73 @@ mod tests {
         host.check_links(&notify, &Capabilities { notifications: true, ..Default::default() }).unwrap();
     }
 
+    const DECISIONS_IMPORT: &str = r#"(component (import "haunt:plugin/decisions@0.2.0" (instance
+        (type $o (variant (case "allowed-in-haunt") (case "denied-in-haunt") (case "allowed-by-plugin" string)
+            (case "denied-by-plugin" string) (case "answered-in-terminal") (case "superseded")))
+        (export "outcome" (type $oe (eq $o)))
+        (type $d (record (field "at-ms" u64) (field "surface-id" string) (field "tool" string) (field "preview" string)
+            (field "cwd" (option string)) (field "outcome" $oe) (field "agent" string)))
+        (export "decision" (type $de (eq $d)))
+        (export "query" (func (param "text" string) (param "limit" u32) (result (list $de)))))))"#;
+
+    const PROPOSE_IMPORT: &str = r#"(component (import "haunt:plugin/allowlist@0.2.0" (instance
+        (export "propose" (func (param "project" string) (param "command" string) (result (result (error string))))))))"#;
+
+    #[test]
+    fn decisions_and_allowlist_imports_need_their_capability() {
+        let host = PluginHost::new().unwrap();
+        let decisions = Component::new(&host.engine, DECISIONS_IMPORT).unwrap();
+        let propose = Component::new(&host.engine, PROPOSE_IMPORT).unwrap();
+        let all_else = Capabilities {
+            notifications: true,
+            pty_write: true,
+            fs_read: vec!["${cwd}/x".into()],
+            fs_write: vec!["${cwd}/x".into()],
+            ..Default::default()
+        };
+        let e = host.check_links(&decisions, &all_else).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/decisions"), "{e}");
+        let e = host.check_links(&propose, &Capabilities { decisions_read: true, ..all_else.clone() }).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/allowlist"), "{e}");
+        host.check_links(&decisions, &Capabilities { decisions_read: true, ..Default::default() }).unwrap();
+        host.check_links(&propose, &Capabilities { allowlist_suggest: true, ..Default::default() }).unwrap();
+    }
+
+    #[test]
+    fn no_import_writes_decisions_or_settings() {
+        let host = PluginHost::new().unwrap();
+        let both = Capabilities { decisions_read: true, allowlist_suggest: true, ..Default::default() };
+        for (iface, func) in [("decisions", "record"), ("decisions", "write"), ("allowlist", "add-rule"), ("allowlist", "accept"), ("allowlist", "write")] {
+            let c = Component::new(
+                &host.engine,
+                format!(r#"(component (import "haunt:plugin/{iface}@0.2.0" (instance (export "{func}" (func (param "x" string))))))"#),
+            )
+            .unwrap();
+            let e = host.check_links(&c, &both).unwrap_err().0;
+            assert!(e.contains(func), "{iface}.{func}: {e}");
+        }
+    }
+
+    #[test]
+    fn a_proposal_through_the_import_is_only_pending() {
+        use wallow::Host as _;
+        let project = tempdir("propose");
+        std::fs::create_dir_all(&project).unwrap();
+        let project = project.canonicalize().unwrap();
+        let core = crate::Core::new(tempdir("propose-core"));
+        let mut st = HostState::new("dev.haunt.allowlist", &Capabilities::default(), None, None, Some(core.handle()));
+        let p = project.to_str().unwrap().to_owned();
+        assert!(st.propose(p.clone(), "cargo test".into()).unwrap_err().contains("never approved"));
+        assert!(st.approvals(1).is_empty());
+        assert!(core.allow_suggestions().is_empty());
+        assert!(!project.join(".claude").exists());
+        let mut detached = HostState::new("x", &Capabilities::default(), None, None, None);
+        assert!(detached.propose(p, "cargo test".into()).is_err());
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
     fn raw_store(host: &PluginHost) -> Store<HostState> {
-        let mut store = Store::new(&host.engine, HostState::new("t", &Capabilities::default(), None, None));
+        let mut store = Store::new(&host.engine, HostState::new("t", &Capabilities::default(), None, None, None));
         store.limiter(|s| &mut s.limits);
         store
     }

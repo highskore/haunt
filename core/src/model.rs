@@ -1,6 +1,6 @@
 //! `Core`: surfaces, their agent sessions, the socket intake and the sidebar snapshot.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use serde_json::{Value, json};
 
-use crate::allowlist::{self, AllowError, AllowSuggestion};
+use crate::allowlist::{self, AllowError, AllowSuggestion, Approval};
 use crate::ctl::{self, Ctl};
 use crate::decisions::{Decision, DecisionLog};
 use crate::event::{AgentEvent, parse_osc};
@@ -18,6 +18,7 @@ use crate::layout::{self, SidebarSnapshot, SurfaceView};
 use crate::session::{Outcome, Session};
 
 const MAX_SURFACES: usize = 512;
+const MAX_PROPOSALS: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Error))]
@@ -61,6 +62,8 @@ pub struct SurfaceEnv {
 }
 
 pub type Listener = Arc<dyn Fn() + Send + Sync>;
+/// Sees every event for a registered surface, with whether it was verified; called outside the lock.
+pub type EventTap = Arc<dyn Fn(&AgentEvent, bool) + Send + Sync>;
 
 struct Surface {
     id: String,
@@ -83,11 +86,18 @@ pub(crate) struct State {
     decisions: DecisionLog,
     /// (project, command) suggestions the user accepted or dismissed.
     allow_done: HashSet<(String, String)>,
+    /// Rules plugins proposed, newest first, as (plugin id, project, command).
+    allow_proposals: Vec<(String, String, String)>,
+    event_tap: Option<EventTap>,
 }
 
 impl State {
     fn surface(&mut self, id: &str) -> Option<&mut Surface> {
         self.surfaces.iter_mut().find(|s| s.id == id)
+    }
+
+    fn tap_for(&self, surface_id: &str) -> Option<EventTap> {
+        self.event_tap.clone().filter(|_| self.surfaces.iter().any(|s| s.id == surface_id))
     }
 
     /// One intake delivery; the intake already checked the nonce and the rate limit.
@@ -136,9 +146,51 @@ impl State {
         }
     }
 
+    /// Proposals that still pass every check, most recently approved first. Each is re-checked here
+    /// and again on accept, so a proposal never outlives its approvals or its project's safety.
     fn suggestions(&self) -> Vec<AllowSuggestion> {
-        let done = |p: &str, c: &str| self.allow_done.contains(&(p.to_owned(), c.to_owned()));
-        allowlist::suggestions(self.decisions.iter(), |p| allowlist::check_project(p).is_ok(), done)
+        if self.allow_proposals.is_empty() {
+            return Vec::new();
+        }
+        let approvals = allowlist::approvals(self.decisions.iter(), 1);
+        let counted: HashMap<(&str, &str), (usize, u32)> =
+            approvals.iter().enumerate().map(|(rank, a)| ((a.project.as_str(), a.command.as_str()), (rank, a.count))).collect();
+        let mut out: Vec<(usize, AllowSuggestion)> = self
+            .allow_proposals
+            .iter()
+            .filter(|(_, p, c)| !self.allow_done.contains(&(p.clone(), c.clone())))
+            .filter_map(|(plugin_id, project, command)| {
+                let &(rank, count) = counted.get(&(project.as_str(), command.as_str()))?;
+                let rule = allowlist::rule_for(command)?;
+                allowlist::check_project(project).ok()?;
+                let s = AllowSuggestion { project: project.clone(), command: command.clone(), rule, approvals: count, plugin_id: plugin_id.clone() };
+                Some((rank, s))
+            })
+            .collect();
+        out.sort_by_key(|(rank, _)| *rank);
+        out.into_iter().map(|(_, s)| s).collect()
+    }
+
+    /// Records a plugin's proposal; true if it is new. Nothing is written until the user accepts it.
+    fn propose(&mut self, plugin_id: &str, project: &str, command: &str) -> Result<bool, CoreError> {
+        let invalid = |reason: &str| Err(CoreError::Invalid { reason: reason.into() });
+        if allowlist::rule_for(command).is_none() {
+            return invalid("not a command an exact rule can allow");
+        }
+        if !allowlist::approvals(self.decisions.iter(), 1).iter().any(|a| a.project == project && a.command == command) {
+            return invalid("the user never approved this command in this project in haunt");
+        }
+        allowlist::check_project(project)?;
+        let key = (project.to_owned(), command.to_owned());
+        if self.allow_done.contains(&key) {
+            return invalid("the user already accepted or dismissed this rule");
+        }
+        if self.allow_proposals.iter().any(|(_, p, c)| *p == key.0 && *c == key.1) {
+            return Ok(false);
+        }
+        self.allow_proposals.insert(0, (plugin_id.to_owned(), key.0, key.1));
+        self.allow_proposals.truncate(MAX_PROPOSALS);
+        Ok(true)
     }
 
     pub(crate) fn snapshot(&self, now: Instant) -> SidebarSnapshot {
@@ -204,6 +256,19 @@ fn update_state(state: &Mutex<State>, f: impl FnOnce(&mut State, Instant) -> boo
     changed
 }
 
+/// One intake delivery, then its event to the tap outside the lock (plugins call back into the core).
+fn deliver(state: &Mutex<State>, d: &Delivery) -> bool {
+    let mut tap = None;
+    let changed = update_state(state, |st, now| {
+        tap = st.tap_for(&d.surface_id);
+        st.deliver(d, now)
+    });
+    if let (Some(tap), Some(event)) = (tap, &d.event) {
+        tap(event, d.verified);
+    }
+    changed
+}
+
 const DEFAULT_LIMIT: u64 = 50;
 const MAX_LIMIT: u64 = 1000;
 
@@ -229,13 +294,9 @@ fn ctl_request(state: &Mutex<State>, line: &str) -> String {
                 Some(v @ Value::Object(_)) => v.to_string(),
                 _ => return ctl::error("event needs a line"),
             };
-            let mut verified = false;
-            let changed = update_state(state, |st, now| {
-                let d = st.decode(&hook_line);
-                verified = d.verified;
-                st.deliver(&d, now)
-            });
-            json!({ "ok": true, "verified": verified, "changed": changed }).to_string()
+            let d = lock(state).decode(&hook_line);
+            let changed = deliver(state, &d);
+            json!({ "ok": true, "verified": d.verified, "changed": changed }).to_string()
         }
         Some("decisions") => {
             let query = req.get("query").and_then(Value::as_str).unwrap_or("");
@@ -266,7 +327,7 @@ impl Core {
         }
         let state = self.state.clone();
         let sink = Arc::new(move |d: Delivery| {
-            update_state(&state, |st, now| st.deliver(&d, now));
+            deliver(&state, &d);
         });
         // Binding the intake first secures the dir the log and ctl live in.
         let intake = Intake::bind(&self.dir, Limits::default(), sink).map_err(CoreError::from)?;
@@ -358,7 +419,14 @@ impl Core {
     /// The OSC 777 fallback: anything in the pty can print these, so they are status-only.
     pub fn on_osc_notification(&self, surface_id: &str, title: &str, body: &str) {
         let Ok(event) = parse_osc(title, body) else { return };
-        self.update(|st, now| st.apply_unverified(surface_id, &event, now));
+        let mut tap = None;
+        self.update(|st, now| {
+            tap = st.tap_for(surface_id);
+            st.apply_unverified(surface_id, &event, now)
+        });
+        if let Some(tap) = tap {
+            tap(&event, false);
+        }
     }
 
     pub fn snapshot(&self) -> SidebarSnapshot {
@@ -425,10 +493,55 @@ impl Core {
     }
 
     pub fn dismiss_allow_suggestion(&self, project: &str, command: &str) {
-        lock(&self.state).allow_done.insert((project.to_owned(), command.to_owned()));
+        self.update(|st, _| st.allow_done.insert((project.to_owned(), command.to_owned())));
     }
 
-    #[cfg(test)]
+    /// Replaces the event tap; plugins get their events through it.
+    pub fn set_event_tap(&self, tap: Option<EventTap>) {
+        lock(&self.state).event_tap = tap;
+    }
+
+    /// What plugin imports may reach: reading decisions and approvals, and proposing a rule.
+    pub fn handle(&self) -> CoreHandle {
+        CoreHandle { state: self.state.clone() }
+    }
+}
+
+/// The core as plugins see it. Plugin calls hold the plugin lock and then take the core's, so the
+/// core never calls a plugin while holding its own.
+#[derive(Clone)]
+pub struct CoreHandle {
+    state: Arc<Mutex<State>>,
+}
+
+impl std::fmt::Debug for CoreHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CoreHandle")
+    }
+}
+
+impl CoreHandle {
+    pub fn decisions(&self, query: &str, limit: u32) -> Vec<Decision> {
+        lock(&self.state).decisions.query(query, limit as usize)
+    }
+
+    pub fn approvals(&self, min_count: u32) -> Vec<Approval> {
+        allowlist::approvals(lock(&self.state).decisions.iter(), min_count)
+    }
+
+    /// Adds a pending suggestion for the UI; the rule is written only by `accept_allow_suggestion`.
+    pub fn propose_allow_rule(&self, plugin_id: &str, project: &str, command: &str) -> Result<(), CoreError> {
+        let mut res = Ok(false);
+        update_state(&self.state, |st, _| {
+            res = st.propose(plugin_id, project, command);
+            *res.as_ref().unwrap_or(&false)
+        });
+        res.map(|_| ())
+    }
+}
+
+#[cfg(test)]
+impl Core {
     pub(crate) fn with_state<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
         f(&mut lock(&self.state))
     }
@@ -581,6 +694,9 @@ mod tests {
                 c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &ran), Instant::now()));
             }
             assert_eq!(c.decisions("", 10).len(), 3);
+            assert!(c.handle().approvals(1).is_empty(), "{cmd}");
+            let raw: String = serde_json::from_str(&format!("\"{cmd}\"")).unwrap();
+            assert!(c.handle().propose_allow_rule("p", &project, &raw).is_err(), "{cmd}");
             assert!(c.allow_suggestions().is_empty(), "{cmd}");
         }
         std::fs::remove_dir_all(&project).unwrap();
@@ -601,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn three_verified_approvals_suggest_an_exact_rule() {
+    fn only_verified_haunt_approvals_are_counted() {
         let project = canonical_dir("allow");
         let c = core();
         let env = c.register_surface(&project).unwrap();
@@ -612,27 +728,117 @@ mod tests {
             send(None, &perm);
             send(None, ran);
         }
-        assert!(c.allow_suggestions().is_empty(), "unverified approvals never count");
+        assert!(c.handle().approvals(1).is_empty(), "unverified approvals never count");
         send(Some(&env.nonce), &perm);
         answer(&c, &env.surface_id, true).unwrap();
         for _ in 0..3 {
             send(Some(&env.nonce), &perm);
             send(Some(&env.nonce), ran);
         }
-        assert!(c.allow_suggestions().is_empty(), "answers in the terminal never count");
+        let counts = |min| c.handle().approvals(min).into_iter().map(|a| (a.command, a.count)).collect::<Vec<_>>();
+        assert_eq!(counts(1), [("cargo test".to_owned(), 1)], "answers in the terminal never count");
         for _ in 0..2 {
             send(Some(&env.nonce), &perm);
             answer(&c, &env.surface_id, true).unwrap();
         }
+        assert_eq!(counts(3), [("cargo test".to_owned(), 3)]);
+        assert!(c.allow_suggestions().is_empty(), "the core never suggests on its own");
+        std::fs::remove_dir_all(&project).unwrap();
+    }
+
+    /// One haunt approval of `command` in a fresh canonical project.
+    fn approved(tag: &str, command: &str) -> (Core, String) {
+        let project = canonical_dir(tag);
+        let c = core();
+        let env = c.register_surface(&project).unwrap();
+        let perm = format!(r#""event":"permission_seen","cwd":"{project}","tool_name":"Bash","tool_input":{{"command":"{command}"}}"#);
+        c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), &perm), Instant::now()));
+        answer(&c, &env.surface_id, true).unwrap();
+        (c, project)
+    }
+
+    #[test]
+    fn a_proposal_writes_nothing_until_accepted() {
+        let (c, project) = approved("allow-propose", "cargo test");
+        let fired = Arc::new(AtomicUsize::new(0));
+        let f = fired.clone();
+        c.set_listener(Arc::new(move || {
+            f.fetch_add(1, Ordering::SeqCst);
+        }));
+        let h = c.handle();
+        h.propose_allow_rule("dev.haunt.allowlist", &project, "cargo test").unwrap();
+        h.propose_allow_rule("dev.haunt.allowlist", &project, "cargo test").unwrap();
+        assert_eq!(fired.load(Ordering::SeqCst), 1, "a repeat proposal changes nothing");
+        assert!(!std::path::Path::new(&project).join(".claude").exists(), "proposing never touches the project");
         let s = c.allow_suggestions();
-        assert_eq!((s.len(), s[0].rule.as_str(), s[0].approvals), (1, "Bash(cargo test)", 3));
+        assert_eq!(s.len(), 1);
+        assert_eq!((s[0].rule.as_str(), s[0].approvals, s[0].plugin_id.as_str()), ("Bash(cargo test)", 1, "dev.haunt.allowlist"));
 
         assert!(matches!(c.accept_allow_suggestion(&project, "cargo build"), Err(CoreError::Invalid { .. })));
         c.accept_allow_suggestion(&project, "cargo test").unwrap();
         let written = std::fs::read_to_string(format!("{project}/.claude/settings.local.json")).unwrap();
         assert!(written.contains("\"Bash(cargo test)\""), "{written}");
         assert!(c.allow_suggestions().is_empty(), "accepted once, never again");
+        assert!(h.propose_allow_rule("dev.haunt.allowlist", &project, "cargo test").is_err(), "nor proposed again");
         std::fs::remove_dir_all(&project).unwrap();
+    }
+
+    #[test]
+    fn proposals_must_rest_on_an_exact_haunt_approval() {
+        let (c, project) = approved("allow-floor", "cargo test");
+        let h = c.handle();
+        for (p, cmd) in [
+            (project.as_str(), "cargo build"),
+            (project.as_str(), "cargo *"),
+            ("/tmp", "cargo test"),
+            (&format!("{project}/"), "cargo test"),
+        ] {
+            assert!(h.propose_allow_rule("p", p, cmd).is_err(), "{p} {cmd}");
+        }
+        assert!(c.allow_suggestions().is_empty());
+        c.dismiss_allow_suggestion(&project, "cargo test");
+        assert!(h.propose_allow_rule("p", &project, "cargo test").is_err(), "dismissed");
+        std::fs::remove_dir_all(&project).unwrap();
+    }
+
+    #[test]
+    fn accepting_rechecks_the_project_and_never_follows_a_symlink() {
+        let (c, project) = approved("allow-recheck", "cargo test");
+        c.handle().propose_allow_rule("p", &project, "cargo test").unwrap();
+        let outside = canonical_dir("allow-recheck-out");
+        std::os::unix::fs::symlink(&outside, format!("{project}/.claude")).unwrap();
+        assert!(matches!(c.accept_allow_suggestion(&project, "cargo test"), Err(CoreError::Insecure { .. })));
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "nothing written through the link");
+
+        std::fs::remove_file(format!("{project}/.claude")).unwrap();
+        let moved = format!("{project}-moved");
+        std::fs::rename(&project, &moved).unwrap();
+        std::os::unix::fs::symlink(&outside, &project).unwrap();
+        assert!(c.allow_suggestions().is_empty(), "a project that became a symlink is no longer offered");
+        assert!(matches!(c.accept_allow_suggestion(&project, "cargo test"), Err(CoreError::Invalid { .. })));
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        std::fs::remove_file(&project).unwrap();
+        std::fs::remove_dir_all(&moved).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[test]
+    fn the_event_tap_sees_events_for_registered_surfaces_only() {
+        let c = core();
+        let env = c.register_surface("/w").unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s = seen.clone();
+        c.set_event_tap(Some(Arc::new(move |e: &AgentEvent, verified| s.lock().unwrap().push((e.kind.name().to_owned(), verified)))));
+        let st = c.state.clone();
+        let d = lock(&st).decode(&line(&env, Some(&env.nonce), r#""event":"stop""#));
+        deliver(&st, &d);
+        let d = lock(&st).decode(&line(&env, None, r#""event":"stop""#));
+        deliver(&st, &d);
+        let stranger = SurfaceEnv { surface_id: "nope".into(), ..env.clone() };
+        let d = lock(&st).decode(&line(&stranger, None, r#""event":"stop""#));
+        deliver(&st, &d);
+        c.on_osc_notification(&env.surface_id, "haunt://cli-agent", r#"{"v":1,"event":"stop"}"#);
+        assert_eq!(*seen.lock().unwrap(), [("stop".to_owned(), true), ("stop".to_owned(), false), ("stop".to_owned(), false)]);
     }
 
     #[test]
@@ -750,6 +956,8 @@ mod tests {
             send(ran);
         }
         assert_eq!(c.decisions("", 10).len(), 6);
+        assert!(c.handle().approvals(1).is_empty());
+        assert!(c.handle().propose_allow_rule("p", &project, "cargo test").is_err());
         assert!(c.allow_suggestions().is_empty());
         std::fs::remove_dir_all(&project).unwrap();
     }

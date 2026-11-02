@@ -18,7 +18,7 @@ object HauntCore {
   fn answer_permission(surface_id: string, request_key: u64, allow: bool) -> Option<bytes>
   fn on_user_input(surface_id: string)           // every keyDown routed to that surface
   fn decisions(query: string, limit: u32) -> sequence<Decision>     // newest first
-  fn allow_suggestions() -> sequence<AllowSuggestion>
+  fn allow_suggestions() -> sequence<AllowSuggestion>              // plugin proposals that pass every check
   fn accept_allow_suggestion(project: string, command: string) -> Result<(), CoreError>
   fn dismiss_allow_suggestion(project: string, command: string)
 }
@@ -43,7 +43,7 @@ record Subrow { label: string, meta: string }
 record Decision { at_ms: u64, surface_id: string, tool: string, preview: string, command: Option<string>, cwd: Option<string>, outcome: Outcome, agent: Agent }
 enum   Agent { Claude, Codex, Other { id: string } }   // "claude", "codex" or the id in decisions.jsonl; absent is Claude
 enum   Outcome { AllowedInHaunt, DeniedInHaunt, AllowedByPlugin { plugin_id: string }, DeniedByPlugin { plugin_id: string }, AnsweredInTerminal, Superseded }
-record AllowSuggestion { project: string, command: string, rule: string, approvals: u32 }
+record AllowSuggestion { project: string, command: string, rule: string, approvals: u32, plugin_id: string }
 ```
 
 `select_surface` is an addition to the contract as first agreed, because `Row.selected` needs a source. `SidebarGroup` was renamed from `Group` because a Swift `struct Group` would shadow SwiftUI's `Group`.
@@ -88,17 +88,21 @@ Every verified permission request is recorded once, when it ends, with its outco
 
 Requests only exist for verified events, so unverified events never add an entry; they can only end a verified request, which is then logged as `Superseded`. Entries live in memory (the last 10,000) and in `<config_dir>/decisions.jsonl`, one JSON object per line, appended. `start` opens it with `O_NOFOLLOW`, refuses a symlink or a file of another uid, keeps it 0600, and loads the existing lines. Loading is strict: a line with an unknown field or outcome, an empty surface id or tool, or a `command` that isn't a Bash command whose `preview` shows exactly that command is skipped. Before `start` the log is memory-only.
 
-`decisions(query, limit)` is for the ⌘K `log` mode: newest first, `query` is a case-insensitive substring of tool, preview, cwd, outcome (`allowed_in_haunt`, …) or surface id; empty matches all.
+`decisions(query, limit)` returns them newest first; `query` is a case-insensitive substring of tool, preview, cwd, outcome (`allowed_in_haunt`, …) or surface id, and empty matches all. The ⌘K `log` mode is not built in: it is the first-party plugin `dev.haunt.decision-log` (`~/code/haunt-plugins/haunt-decision-log`), which reads the same records through the `decisions` import (see Plugins).
 
 ## Allowlist suggestions
 
-Nothing is allowed by default; the core only suggests, and only for Claude Code, the one agent that reads `.claude/settings.local.json`: decisions of any other agent never count. After 3 approvals in haunt (`AllowedInHaunt`; `AllowedByPlugin` and `AnsweredInTerminal` never count, see the nonce limit below) of the same Bash command with the same hook cwd, `allow_suggestions()` lists it with the exact rule `Bash(<command>)`, most recently approved first.
+Nothing is allowed by default. The core keeps the safety primitives: it counts approvals, holds the proposals and is the only thing that writes a rule. When to offer a rule is a plugin's call: the first-party `dev.haunt.allowlist` (`~/code/haunt-plugins/haunt-allowlist`) proposes one after 3 identical approvals. The core never suggests anything on its own.
 
+A plugin with `allowlist_suggest` reads the counts (`allowlist.approvals(min-count)`) and calls `allowlist.propose(project, command)`. That only records a pending suggestion and fires `changed()`; it writes no file. `allow_suggestions()` lists the proposals that still pass every check, with the exact rule `Bash(<command>)`, the current count and the proposing `plugin_id`, most recently approved first. Every proposal is checked when it is made, whenever suggestions are listed, and again on accept:
+
+- It needs at least one counted approval of exactly that command in exactly that project. Only Claude Code approvals count, because Claude Code is the one agent that reads `.claude/settings.local.json`, and only clicks in haunt (`AllowedInHaunt`). `AllowedByPlugin` and `AnsweredInTerminal` never count; see the nonce limit below. A plugin can't propose a command you never approved.
 - Counting uses `Decision.command`, the command exactly as the hook sent it (`ToolCall.raw_command`), not the shown `preview`. An approval counts only if the two are equal, so a command with invisible characters, tabs or newlines (which the preview shows as markers) never counts, and a rule can't allow a variant of what was approved. Log lines without `command` (written before it existed) don't count.
-- Wildcards are never suggested: a command containing `*`, `(` or `)`, anything outside printable ASCII, leading or trailing spaces, or over 1024 bytes gets no suggestion.
-- The project (the hook cwd) must be absolute with no `.` or `..` components, equal byte for byte to its canonical path (so no symlink anywhere in it, and no trailing or doubled slash), and a directory owned by the current uid. This is checked when suggesting and again when accepting (`Invalid` or `Insecure` if it fails).
+- Wildcards are never suggested: a command containing `*`, `(` or `)`, anything outside printable ASCII, leading or trailing spaces, or over 1024 bytes can't be proposed.
+- The project (the hook cwd) must be absolute with no `.` or `..` components, equal byte for byte to its canonical path (so no symlink anywhere in it, and no trailing or doubled slash), and a directory owned by the current uid (`Invalid` or `Insecure` if it fails).
+- A rule the user accepted or dismissed in this run can't be proposed again. At most 256 proposals are kept.
 
-`accept_allow_suggestion(project, command)` only accepts a current suggestion (`Invalid` otherwise) and adds the rule to `<project>/.claude/settings.local.json` under `permissions.allow`, keeping every other key and their order (the file is re-indented). A file that isn't a JSON object, or a non-object `permissions` or non-array `allow`, is an `Invalid` error and is never overwritten. It refuses (`Insecure`) a symlinked `.claude` or settings file and never follows one: the directory is opened with `O_NOFOLLOW`, and the new content goes to a temp file (`O_EXCL | O_NOFOLLOW`) in it that is renamed over the old one. The file keeps its mode, or gets 0600 if new. Accepted and dismissed suggestions are not offered again in this run; that memory isn't persisted yet, so a dismissed one comes back after a restart.
+`accept_allow_suggestion(project, command)` only accepts a current suggestion (`Invalid` otherwise) and adds the rule to `<project>/.claude/settings.local.json` under `permissions.allow`, keeping every other key and their order (the file is re-indented). A file that isn't a JSON object, or a non-object `permissions` or non-array `allow`, is an `Invalid` error and is never overwritten. It refuses (`Insecure`) a symlinked `.claude` or settings file and never follows one: the directory is opened with `O_NOFOLLOW`, and the new content goes to a temp file (`O_EXCL | O_NOFOLLOW`) in it that is renamed over the old one. The file keeps its mode, or gets 0600 if new. Accepted and dismissed suggestions are not offered again in this run. Neither that memory nor the proposals are persisted yet, so after a restart the plugin proposes again, and a dismissed rule comes back.
 
 ## Snapshot format (mockup layout 06, grouped flat)
 
@@ -158,15 +162,28 @@ Installed with `haunt plugin install <path>` (cli/), which shows the capabilitie
 
 | call | what |
 |---|---|
-| `HauntPlugins.load(hauntDir:)` | loads every pinned plugin from `<hauntDir>/plugins` with only its granted imports; runs `init` |
+| `HauntPlugins.load(hauntDir:core:)` | loads every pinned plugin from `<hauntDir>/plugins` with only its granted imports; runs `init`. `core` (the `HauntCore`) backs the `decisions` and `allowlist` imports, and from then on every event for a registered surface reaches the plugins whose `events` grant covers it, verified or not. Call it after `core.start()` so the decision log is loaded. |
 | `loadErrors()` | plugins skipped, with the reason (hash mismatch, link error, trap) |
 | `paletteItems(mode: nil, query:)` | registered commands and modes (`isMode`), title-filtered by `query` |
-| `paletteItems(mode: "word", query:)` | the items that mode's plugin returns for `query` |
+| `paletteItems(mode: "word", query:)` | the items that mode's plugin returns for `query`, each with optional `atMs` (time column), `mark` (`open`, `filled`, `round`) and `surfaceId` (Enter jumps to that tab, if it is open, instead of invoking the item) |
 | `invokePaletteItem(pluginId:itemId:)` | calls the plugin's `on-action(itemId, "")` |
 | `takeRequests()` | `HostRequest.notify` / `.ptyAnswer` queued by plugins |
 | `HauntCore.gatePluginRequest(request:)` | the only way to turn a `.ptyAnswer` into bytes (`core/src/ptygate.rs`); returns `PtyWrite { surfaceId, bytes }` or `nil` |
 
 Each call runs under a 50 ms CPU budget and 64 MB of memory; a trap or timeout disables that plugin until the next load.
+
+Events reach plugins on the thread that delivered them (usually the socket thread), after the core has released its lock. A plugin call holds the plugins' lock and may then take the core's, through `decisions` or `allowlist`; the core never calls a plugin while holding its own. A `propose` fires `changed()` from inside a plugin call, so the listener must hop to the main actor and not call `HauntPlugins` synchronously. Row decorations from `on-event` are dropped for now: the snapshot has no field for them yet.
+
+**API version**: `haunt:plugin@0.2.0`; manifests say `api = "0.2"`. A 0.1 plugin no longer installs or loads; rebuild it against the 0.2 WIT. 0.2 added:
+
+- the `decisions` and `allowlist` imports (below)
+- `at-ms`, `mark` and `surface` on `palette-item`, plus the `mark` enum
+
+**decisions** (`decisions_read`): `query(text, limit)` returns the same records as `HauntCore.decisions`, at most 1000, without the raw `command` (the preview shows it with nothing hidden). It is read only: nothing a plugin can call adds, changes or removes a decision.
+
+**allowlist** (`allowlist_suggest`): `approvals(min-count)` returns the counted approvals, at least `min-count` of them, per project and exact command, newest first. `propose(project, command)` adds a pending suggestion; it errors if the proposal fails a check (see Allowlist suggestions). No import writes a settings file, and none can accept a suggestion. Only `HauntCore.acceptAllowSuggestion` does, after the user accepts it in the UI.
+
+An ungranted import is absent: a component that imports it fails to link at install and at load.
 
 **fs grants**: `${cwd}` in an `fs_read`/`fs_write` glob expands only to cwds of verified events. A cwd that is `$HOME`, an ancestor of it, inside the haunt dir or containing it is ignored, and if `$HOME` can't be resolved `${cwd}` expands to nothing. No path inside the haunt dir is ever readable, writable or listable, whatever the globs say.
 

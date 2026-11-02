@@ -1,5 +1,6 @@
 // haunt plugin API, plan section 3.3. Gated imports are linked only when the capability is granted.
-package haunt:plugin@0.1.0;
+// 0.2: `decisions` and `allowlist` imports; palette items carry a time, a mark and a surface.
+package haunt:plugin@0.2.0;
 
 interface types {
   record agent-event {
@@ -18,10 +19,18 @@ interface types {
     meta-suffix: option<string>,
   }
 
+  // Open square: your answer; filled: a plugin's; round: one that lapsed.
+  enum mark { open, filled, round }
+
   record palette-item {
     id: string,
     title: string,
     subtitle: option<string>,
+    // Unix ms, shown as a time column.
+    at-ms: option<u64>,
+    mark: option<mark>,
+    // Enter jumps to this surface's tab instead of calling `on-action`.
+    surface: option<string>,
   }
 
   enum log-level { debug, info, warn, error }
@@ -68,6 +77,47 @@ interface fs {
   %list: func(path: string) -> result<list<string>, string>;
 }
 
+// Capability `decisions_read`. Verified permission decisions, newest first; read only.
+interface decisions {
+  variant outcome {
+    allowed-in-haunt,
+    denied-in-haunt,
+    allowed-by-plugin(string),
+    denied-by-plugin(string),
+    answered-in-terminal,
+    superseded,
+  }
+
+  record decision {
+    at-ms: u64,
+    surface-id: string,
+    tool: string,
+    preview: string,
+    cwd: option<string>,
+    outcome: outcome,
+    // "claude", "codex" or another agent id.
+    agent: string,
+  }
+
+  // `text` is a case-insensitive substring of tool, preview, cwd, outcome or surface id; at most 1000.
+  query: func(text: string, limit: u32) -> list<decision>;
+}
+
+// Capability `allowlist_suggest`. haunt writes a rule only when the user accepts the proposal in its UI.
+interface allowlist {
+  // Claude Code Bash approvals clicked in haunt, per project and exact command, newest first.
+  record approval {
+    project: string,
+    command: string,
+    count: u32,
+    last-at-ms: u64,
+  }
+
+  approvals: func(min-count: u32) -> list<approval>;
+  // Offers `Bash(<command>)` for `project` as a pending suggestion; needs at least one approval.
+  propose: func(project: string, command: string) -> result<_, string>;
+}
+
 world plugin {
   use types.{agent-event, decoration, palette-item};
   import log;
@@ -76,6 +126,8 @@ world plugin {
   import notify;
   import pty;
   import fs;
+  import decisions;
+  import allowlist;
 
   export init: func(settings: string);
   export on-settings-changed: func(settings: string);

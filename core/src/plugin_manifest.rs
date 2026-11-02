@@ -6,7 +6,7 @@ use crate::event::EventKind;
 
 pub const MANIFEST: &str = "haunt-plugin.toml";
 /// The `haunt:plugin` minor this host implements.
-pub const API: (u64, u64) = (0, 1);
+pub const API: (u64, u64) = (0, 2);
 pub const KV_CAP: usize = 10 << 20;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -43,6 +43,8 @@ pub struct Capabilities {
     pub events: Vec<String>,
     pub pty_write: bool,
     pub notifications: bool,
+    pub decisions_read: bool,
+    pub allowlist_suggest: bool,
     pub fs_read: Vec<String>,
     pub fs_write: Vec<String>,
     pub net: Vec<String>,
@@ -148,6 +150,12 @@ impl Capabilities {
         if self.notifications {
             out.push(("can show notifications with action buttons".into(), false));
         }
+        if self.decisions_read {
+            out.push(("can read your permission decision log: commands, file paths and folders, which can contain secrets".into(), false));
+        }
+        if self.allowlist_suggest {
+            out.push(("can read how often you approved commands, and suggest allow rules (nothing is written until you accept)".into(), false));
+        }
         if self.pty_write {
             out.push(("can answer permission prompts in your terminal (Allow or Deny, nothing else)".into(), true));
         }
@@ -166,6 +174,8 @@ impl Capabilities {
             events: self.events.iter().filter(|e| !old.events.contains(e)).cloned().collect(),
             pty_write: self.pty_write && !old.pty_write,
             notifications: self.notifications && !old.notifications,
+            decisions_read: self.decisions_read && !old.decisions_read,
+            allowlist_suggest: self.allowlist_suggest && !old.allowlist_suggest,
             fs_read: self.fs_read.iter().filter(|g| !old.fs_read.contains(g)).cloned().collect(),
             fs_write: self.fs_write.iter().filter(|g| !old.fs_write.contains(g)).cloned().collect(),
             ..Default::default()
@@ -230,7 +240,7 @@ mod tests {
 
     fn manifest(caps: &str) -> String {
         format!(
-            "[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.1\"\nentry = \"plugin.wasm\"\n\n[capabilities]\n{caps}\n"
+            "[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.2\"\nentry = \"plugin.wasm\"\n\n[capabilities]\n{caps}\n"
         )
     }
 
@@ -266,10 +276,10 @@ mod tests {
         let m = manifest("");
         assert!(Manifest::parse(&m.replace("dev.haunt.t", "../evil")).is_err());
         assert!(Manifest::parse(&m.replace("dev.haunt.t", "Dev.Haunt")).is_err());
-        assert!(Manifest::parse(&m.replace("api = \"0.1\"", "api = \"1.0\"")).is_err());
+        assert!(Manifest::parse(&m.replace("api = \"0.2\"", "api = \"1.0\"")).is_err());
         assert!(Manifest::parse(&m.replace("plugin.wasm", "../x.wasm")).is_err());
         assert!(Manifest::parse(&m.replace("plugin.wasm", "/tmp/x.wasm")).is_err());
-        assert!(Manifest::parse(&m.replace("api = \"0.1\"", "api = \"0.1.3\"")).is_ok());
+        assert!(Manifest::parse(&m.replace("api = \"0.2\"", "api = \"0.2.3\"")).is_ok());
     }
 
     #[test]

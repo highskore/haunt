@@ -34,6 +34,8 @@ Every plugin can add palette commands and modes, keep up to 10 MB of its own dat
 | `pty_write = true` | `pty.answer`: Allow or Deny for the surface's pending permission request, nothing else. No event carries the request key yet, so this can't be used today. |
 | `fs_read = ["glob", ...]` | `fs.read` and `fs.list` on matching paths |
 | `fs_write = ["glob", ...]` | `fs.write` on matching paths |
+| `decisions_read = true` | `decisions.query`: the verified permission decisions, newest first. Read only. |
+| `allowlist_suggest = true` | `allowlist.approvals` (how often each exact Bash command was approved in haunt, per project) and `allowlist.propose`, which only offers a rule; Haunt writes it when the user accepts. |
 
 An fs glob is absolute or starts with `${cwd}/` (the agent's folder, from verified events only, never `$HOME` or the haunt dir). It may use `*` within a path segment, but not `**`, `.` or `..`. Nothing inside the haunt dir is ever reachable.
 
@@ -41,7 +43,7 @@ An fs glob is absolute or starts with `${cwd}/` (the agent's folder, from verifi
 
 ## Updating the WIT pin
 
-`wit/haunt-plugin.wit` is a copy of Haunt's `wit/haunt-plugin.wit`, pinned at `haunt:plugin@0.1.0` (the `package` line). The manifest's `api = "0.1"` must match the major.minor Haunt supports. To move to a newer API:
+`wit/haunt-plugin.wit` is a copy of Haunt's `wit/haunt-plugin.wit`, pinned at `haunt:plugin@0.2.0` (the `package` line). The manifest's `api = "0.2"` must match the major.minor Haunt supports. To move to a newer API:
 
 1. Copy `wit/haunt-plugin.wit` from the Haunt version you target over `wit/haunt-plugin.wit`.
 2. Set `api` in `haunt-plugin.toml` to the new major.minor.
