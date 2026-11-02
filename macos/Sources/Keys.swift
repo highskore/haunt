@@ -128,7 +128,7 @@ struct KeyMap: Equatable {
         case selectTab4 = "select_tab_4", selectTab5 = "select_tab_5", selectTab6 = "select_tab_6"
         case selectTab7 = "select_tab_7", selectTab8 = "select_tab_8", selectTab9 = "select_tab_9"
         case nextTab = "next_tab"
-        case previousTab = "previous_tab"
+        case previousTab = "prev_tab"
         case renameTab = "rename_tab"
         case palette
         case toggleSidebar = "toggle_sidebar"
