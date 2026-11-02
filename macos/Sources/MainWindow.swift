@@ -366,7 +366,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         alert.messageText = preview.lines == 1 ? "Paste 1 line?" : "Paste \(preview.lines) lines?"
         var notes: [String] = []
         if preview.hasPasteEnd {
-            notes.append("It contains a bracketed paste end (^[[201~): the text after it would run as typed commands.")
+            notes.append("It contains a bracketed paste end (^[[201~), which tries to run the text after it as typed commands. Ghostty pastes its escape as a space, so it won't.")
         }
         if preview.hasControls { notes.append("Control characters are shown as ^[ and \\u{…}.") }
         alert.informativeText = notes.joined(separator: "\n")
