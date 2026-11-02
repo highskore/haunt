@@ -182,7 +182,8 @@ impl Session {
         let mut changed = !self.is_agent;
         self.is_agent = true;
         changed |= self.progress.apply(e, now);
-        let before = (self.status, self.permission.clone(), self.prompt.clone(), self.unresolved.len());
+        // A replaced request always has a new generation, so the generation stands for the request.
+        let before = self.fingerprint();
         let main = e.agent_id.is_none();
         if verified
             && let Some(c) = e.cwd.as_ref().filter(|c| c.starts_with('/'))
@@ -198,7 +199,9 @@ impl Session {
 
         match &e.kind {
             EventKind::PromptSubmit { query } => {
-                self.prompt = query.as_deref().map(one_line);
+                let prompt = query.as_deref().map(one_line);
+                changed |= prompt != self.prompt;
+                self.prompt = prompt;
                 self.progress.new_turn();
                 self.turn_started = Some(now);
                 self.turn_finished = None;
@@ -261,7 +264,11 @@ impl Session {
             },
             _ => {}
         }
-        changed || before != (self.status, self.permission.clone(), self.prompt.clone(), self.unresolved.len())
+        changed || before != self.fingerprint()
+    }
+
+    fn fingerprint(&self) -> (Status, Option<u64>, usize) {
+        (self.status, self.permission.as_ref().map(|p| p.generation), self.unresolved.len())
     }
 
     /// A verified call other than the pending one, on the thread that asked: the prompt is gone. Only

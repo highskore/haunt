@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::event::{AgentEvent, parse_body};
+use crate::event::{AgentEvent, parse_line};
 use crate::sync::{lock, read};
 
 pub const SOCKET_NAME: &str = "sock";
@@ -86,7 +86,7 @@ struct Bucket {
 struct Shared {
     nonces: Nonces,
     /// Per (surface, verified): a flood of unverified lines can't use up the verified budget.
-    buckets: Mutex<HashMap<(String, bool), Bucket>>,
+    buckets: Mutex<HashMap<String, [Bucket; 2]>>,
     limits: Limits,
     sink: Sink,
     conns: AtomicUsize,
@@ -121,7 +121,7 @@ impl Intake {
 
     /// Drops the surface's rate-limit state; its nonce leaves `Nonces` with it.
     pub fn forget_surface(&self, surface_id: &str) {
-        lock(&self.shared.buckets).retain(|(id, _), _| id != surface_id);
+        lock(&self.shared.buckets).remove(surface_id);
     }
 }
 
@@ -308,49 +308,37 @@ fn handle_line(line: &[u8], s: &Shared) {
     let Ok(text) = std::str::from_utf8(line) else {
         return (s.sink)(reject(String::new(), line.len(), "not utf-8".into()));
     };
-    let surface_id = surface_of(text);
     // Unknown ids get no bucket, so random ids cannot grow the map.
-    let nonces = read(&s.nonces);
-    if !nonces.contains_key(&surface_id) {
-        return;
-    }
-    let mut d = decode(text, &nonces);
-    drop(nonces);
-    let Some(dropped_before) = take_token(s, &surface_id, d.verified) else { return };
+    let Some(mut d) = decode(text, &s.nonces) else { return };
+    let Some(dropped_before) = take_token(s, &d.surface_id, d.verified) else { return };
     d.dropped_before = dropped_before;
     (s.sink)(d);
 }
 
-fn surface_of(text: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(text)
-        .ok()
-        .and_then(|v| v.get("surface_id").and_then(|x| x.as_str()).map(str::to_owned))
-        .filter(|id| !id.is_empty() && id.len() <= 64)
-        .unwrap_or_default()
-}
-
-/// Parses one line and checks its nonce against `nonces` (surface id to nonce).
-pub(crate) fn decode(text: &str, nonces: &HashMap<String, String>) -> Delivery {
-    let surface_id = surface_of(text);
-    match parse_body(text) {
-        Ok(event) => {
-            let verified = match (&event.nonce, nonces.get(&surface_id)) {
-                (Some(got), Some(want)) => !surface_id.is_empty() && ct_eq(got.as_bytes(), want.as_bytes()),
-                _ => false,
-            };
-            Delivery { surface_id, verified, bytes: text.len() as u64, event: Some(event), error: None, dropped_before: 0 }
-        }
+/// Parses one line and checks its nonce; None when its surface isn't registered.
+pub(crate) fn decode(text: &str, nonces: &Nonces) -> Option<Delivery> {
+    let (surface_id, event) = parse_line(text);
+    let verified = {
+        let nonces = read(nonces);
+        let want = nonces.get(&surface_id)?;
+        let got = event.as_ref().ok().and_then(|e| e.nonce.as_deref());
+        got.is_some_and(|got| ct_eq(got.as_bytes(), want.as_bytes()))
+    };
+    Some(match event {
+        Ok(event) => Delivery { surface_id, verified, bytes: text.len() as u64, event: Some(event), error: None, dropped_before: 0 },
         Err(e) => reject(surface_id, text.len(), e.to_string()),
-    }
+    })
 }
 
 /// Token bucket per surface and verified-ness; None means drop. Returns the drop count to report on success.
 fn take_token(s: &Shared, surface_id: &str, verified: bool) -> Option<u32> {
     let now = Instant::now();
     let mut buckets = lock(&s.buckets);
-    let b = buckets
-        .entry((surface_id.to_owned(), verified))
-        .or_insert(Bucket { tokens: s.limits.burst, at: now, dropped: 0 });
+    if !buckets.contains_key(surface_id) {
+        let fresh = || Bucket { tokens: s.limits.burst, at: now, dropped: 0 };
+        buckets.insert(surface_id.to_owned(), [fresh(), fresh()]);
+    }
+    let b = &mut buckets.get_mut(surface_id).expect("inserted above")[verified as usize];
     b.tokens = (b.tokens + now.duration_since(b.at).as_secs_f64() * s.limits.per_sec).min(s.limits.burst);
     b.at = now;
     if b.tokens < 1.0 {

@@ -118,15 +118,10 @@ impl State {
         }) == Some(true)
     }
 
-    /// A hook line checked against the registered nonces, as the intake does.
-    fn decode(&self, line: &str) -> Delivery {
-        crate::intake::decode(line, &crate::sync::read(&self.nonces))
-    }
-
     /// A socket line as the intake would deliver it, minus the socket and the rate limit.
     #[cfg(test)]
     pub(crate) fn handle_line(&mut self, line: &str, now: Instant) -> bool {
-        let d = self.decode(line);
+        let Some(d) = crate::intake::decode(line, &self.nonces) else { return false };
         let cwd = d.event.as_ref().and_then(|e| e.cwd.clone()).filter(|c| c.starts_with('/'));
         let known = self.surfaces.iter().find(|s| s.id == d.surface_id).and_then(|s| s.session.cwd.clone());
         let branch = d.verified.then(|| cwd.or(known)).flatten().map(|c| crate::git::branch(&c));
@@ -220,9 +215,10 @@ fn ctl_request(state: &Mutex<State>, branches: &Branches, line: &str) -> String 
                 Some(v @ Value::Object(_)) => v.to_string(),
                 _ => return ctl::error("event needs a line"),
             };
-            let d = lock(state).decode(&hook_line);
-            let changed = deliver(state, branches, &d);
-            let verified = d.verified;
+            let nonces = lock(state).nonces.clone();
+            let d = crate::intake::decode(&hook_line, &nonces);
+            let changed = d.as_ref().is_some_and(|d| deliver(state, branches, d));
+            let verified = d.is_some_and(|d| d.verified);
             json!({ "ok": true, "verified": verified, "changed": changed }).to_string()
         }
         Some("decisions") => {

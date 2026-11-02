@@ -1,6 +1,6 @@
 //! v1 hook events: OSC 777 `notify;<title>;<body>` bodies and socket lines share one JSON envelope.
 
-use serde_json::Value;
+use crate::wire::{self, Scalar, Str, Wire};
 
 pub const TITLES: [&str; 2] = ["haunt://cli-agent", "warp://cli-agent"];
 
@@ -145,14 +145,22 @@ pub fn parse_osc(title: &str, body: &str) -> Result<AgentEvent, ParseError> {
 
 /// Parses one v1 event body, from OSC 777 or a socket line.
 pub fn parse_body(body: &str) -> Result<AgentEvent, ParseError> {
-    if body.chars().any(char::is_control) {
-        return Err(ParseError::ControlCharacter);
-    }
-    parse_value(&parse_json(body)?)
+    parse_line(body).1
 }
 
-fn parse_json(body: &str) -> Result<Value, ParseError> {
-    serde_json::from_str(body).map_err(|e| ParseError::InvalidJson { reason: e.to_string() })
+/// One parse for both: the line's `surface_id` as sent (empty unless 1 to 64 bytes), and its event.
+pub(crate) fn parse_line(body: &str) -> (String, Result<AgentEvent, ParseError>) {
+    let w = wire::parse(body);
+    let surface = match &w {
+        Ok(w) => w.surface_id.text().filter(|id| !id.is_empty() && id.len() <= 64).unwrap_or_default().to_owned(),
+        Err(_) => String::new(),
+    };
+    let event = if body.chars().any(char::is_control) {
+        Err(ParseError::ControlCharacter)
+    } else {
+        w.map_err(|e| ParseError::InvalidJson { reason: e.to_string() }).and_then(|w| event_of(&w))
+    };
+    (surface, event)
 }
 
 fn missing(field: &str) -> ParseError {
@@ -197,74 +205,80 @@ pub fn is_format(c: char) -> bool {
         | 0xE0001 | 0xE0020..=0xE007F)
 }
 
-fn str_field(v: &Value, k: &str) -> Option<String> {
-    v.get(k).and_then(Value::as_str).map(clean)
+fn s(f: &Str) -> Option<String> {
+    f.text().map(clean)
 }
 
-fn parse_value(v: &Value) -> Result<AgentEvent, ParseError> {
-    let version = v.get("v").and_then(Value::as_i64).unwrap_or(0);
+fn req(f: &Str, k: &str) -> Result<String, ParseError> {
+    s(f).ok_or_else(|| missing(k))
+}
+
+fn event_of(w: &Wire) -> Result<AgentEvent, ParseError> {
+    let version = w.v.as_i64().unwrap_or(0);
     if version != 1 {
         return Err(ParseError::UnsupportedVersion { version });
     }
-    let s = |k: &str| str_field(v, k);
-    let n = |k: &str| v.get(k).and_then(Value::as_u64);
-    let req = |k: &str| s(k).ok_or_else(|| missing(k));
-    let input = |k: &str| v.get("tool_input").and_then(|i| str_field(i, k));
-    let raw = |k: &str| v.get("tool_input").and_then(|i| i.get(k)).and_then(Value::as_str).map(str::to_owned);
+    let n = Scalar::as_u64;
+    let raw = |f: &Str| f.text().map(str::to_owned);
     let tool = || -> Result<ToolCall, ParseError> {
+        let i = &w.tool_input;
         Ok(ToolCall {
-            tool_name: req("tool_name")?,
-            tool_use_id: s("tool_use_id"),
-            command: input("command"),
-            raw_command: raw("command"),
-            url: input("url"),
-            file_path: input("file_path"),
-            raw_file_path: raw("file_path"),
+            tool_name: req(&w.tool_name, "tool_name")?,
+            tool_use_id: s(&w.tool_use_id),
+            command: s(&i.command),
+            raw_command: raw(&i.command),
+            url: s(&i.url),
+            file_path: s(&i.file_path),
+            raw_file_path: raw(&i.file_path),
         })
     };
 
-    let event = req("event")?;
+    let event = req(&w.event, "event")?;
     let kind = match event.as_str() {
-        "session_start" => EventKind::SessionStart { plugin_version: s("plugin_version") },
-        "prompt_submit" => EventKind::PromptSubmit { query: s("query") },
-        "task_created" => EventKind::TaskCreated { task_id: req("task_id")?, subject: s("task_subject") },
-        "task_updated" => EventKind::TaskUpdated { task_id: req("task_id")?, status: req("task_status")? },
-        "subagent_spawn" => EventKind::SubagentSpawn { description: s("description") },
+        "session_start" => EventKind::SessionStart { plugin_version: s(&w.plugin_version) },
+        "prompt_submit" => EventKind::PromptSubmit { query: s(&w.query) },
+        "task_created" => EventKind::TaskCreated { task_id: req(&w.task_id, "task_id")?, subject: s(&w.task_subject) },
+        "task_updated" => {
+            EventKind::TaskUpdated { task_id: req(&w.task_id, "task_id")?, status: req(&w.task_status, "task_status")? }
+        }
+        "subagent_spawn" => EventKind::SubagentSpawn { description: s(&w.description) },
         "subagent_start" => EventKind::SubagentStart,
         "subagent_stop" => EventKind::SubagentStop,
         "subagent_result" => EventKind::SubagentResult {
-            description: s("description"),
-            tool_count: n("tool_count"),
-            duration_ms: n("duration_ms"),
+            description: s(&w.description),
+            tool_count: n(w.tool_count),
+            duration_ms: n(w.duration_ms),
         },
-        "subagent_tool" => EventKind::SubagentTool { tool_name: req("tool_name")? },
+        "subagent_tool" => EventKind::SubagentTool { tool_name: req(&w.tool_name, "tool_name")? },
         "tool_start" => EventKind::ToolStart { tool: tool()? },
         "tool_done" => EventKind::ToolDone { tool: tool()? },
         "tool_failed" => EventKind::ToolFailed { tool: tool()? },
         "tool_ran" => EventKind::ToolRan { tool: tool()? },
         "permission_seen" => EventKind::PermissionSeen { tool: tool()? },
-        "notification" => EventKind::Notification { notification_type: s("notification_type"), message: s("message") },
-        "plan_exit" => EventKind::PlanExit { summary: s("summary") },
-        "question_answered" => EventKind::QuestionAnswered { summary: s("summary") },
-        "todos_written" => EventKind::TodosWritten { count: n("tool_count"), done: n("todos_done") },
-        "file_edited" => EventKind::FileEdited { tool_name: s("tool_name"), file_path: input("file_path") },
+        "notification" => {
+            EventKind::Notification { notification_type: s(&w.notification_type), message: s(&w.message) }
+        }
+        "plan_exit" => EventKind::PlanExit { summary: s(&w.summary) },
+        "question_answered" => EventKind::QuestionAnswered { summary: s(&w.summary) },
+        "todos_written" => EventKind::TodosWritten { count: n(w.tool_count), done: n(w.todos_done) },
+        "file_edited" => EventKind::FileEdited { tool_name: s(&w.tool_name), file_path: s(&w.tool_input.file_path) },
         "stop" => EventKind::Stop,
         _ => EventKind::Unknown { event },
     };
     // Checked raw: `clean` could turn a disallowed id into an allowed one.
-    let agent = match v.get("agent") {
-        None => "claude".to_owned(),
-        Some(Value::String(a)) if valid_agent_id(a) => a.clone(),
-        Some(_) => return Err(ParseError::InvalidAgent),
+    let agent = match &w.agent {
+        Str::Absent => "claude".to_owned(),
+        Str::Text(a) if valid_agent_id(a) => a.clone().into_owned(),
+        _ => return Err(ParseError::InvalidAgent),
     };
     Ok(AgentEvent {
         agent,
-        session_id: s("session_id"),
-        cwd: s("cwd"),
-        agent_id: s("agent_id"),
-        agent_type: s("agent_type"),
-        nonce: s("nonce"),
-        truncated: v.get("truncated").and_then(Value::as_bool).unwrap_or(false),
+        session_id: s(&w.session_id),
+        cwd: s(&w.cwd),
+        agent_id: s(&w.agent_id),
+        agent_type: s(&w.agent_type),
+        nonce: s(&w.nonce),
+        truncated: w.truncated.as_bool().unwrap_or(false),
         kind,
     })
 }

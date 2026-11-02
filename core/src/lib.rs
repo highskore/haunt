@@ -4,6 +4,7 @@ pub mod allowlist;
 pub mod ctl;
 pub mod decisions;
 pub mod event;
+mod wire;
 pub mod git;
 mod ids;
 #[cfg(test)]
