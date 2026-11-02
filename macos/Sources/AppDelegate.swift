@@ -89,10 +89,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         c.window?.center()
         c.showWindow(nil)
         if let startError { c.showStartError(startError) }
-        // HAUNT_INACTIVE=1 lets the fidelity script capture the unfocused window state.
+        // A real launch leaves focus to the launcher. Fixtures are for the fidelity script, which captures
+        // them focused, or unfocused with HAUNT_INACTIVE=1.
         if ProcessInfo.processInfo.environment["HAUNT_INACTIVE"] == "1" {
             NSApp.deactivate()
-        } else {
+        } else if fixture != nil {
             NSApp.activate(ignoringOtherApps: true)
         }
 
