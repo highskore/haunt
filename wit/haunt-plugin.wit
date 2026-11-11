@@ -1,0 +1,233 @@
+// haunt plugin API, plan section 3.3. Gated imports are linked only when the capability is granted.
+// 0.2: `decisions` and `allowlist` imports; palette items carry a time, a mark and a surface.
+// 0.3: `verified` on agent-event; `sidebar` import; `row-menu` and `on-row-moved` exports.
+// 0.4: `theme` and `typing` imports; `on-theme-changed` export.
+package haunt:plugin@0.4.0;
+
+interface types {
+  record agent-event {
+    kind: string,
+    session-id: option<string>,
+    agent-id: option<string>,
+    cwd: option<string>,
+    summary: option<string>,
+    // Came over the socket with the surface's nonce. Unverified events (OSC, wrong or no nonce) can be
+    // forged by anything in the terminal; plugins holding pty_write, allowlist_suggest or
+    // decisions_read never get them.
+    verified: bool,
+  }
+
+  enum style { meta, needs, dot, hollow-dot, kbd, mono }
+
+  record decoration {
+    badge: option<string>,
+    style: style,
+    meta-suffix: option<string>,
+  }
+
+  // Open square: your answer; filled: a plugin's; round: one that lapsed.
+  enum mark { open, filled, round }
+
+  record palette-item {
+    id: string,
+    title: string,
+    subtitle: option<string>,
+    // Unix ms, shown as a time column.
+    at-ms: option<u64>,
+    mark: option<mark>,
+    // Enter jumps to this surface's tab instead of calling `on-action`.
+    surface: option<string>,
+  }
+
+  enum log-level { debug, info, warn, error }
+
+  // A row context-menu entry. An entry whose `parent` is another entry's id sits in its submenu
+  // (one level). Choosing one calls `on-action(id, <surface>)`.
+  record menu-item {
+    id: string,
+    title: string,
+    checked: bool,
+    parent: option<string>,
+  }
+}
+
+// Always linked.
+interface log {
+  use types.{log-level};
+  log: func(level: log-level, msg: string);
+}
+
+// Always linked. Per-plugin state, 10 MB in total.
+interface kv {
+  get: func(key: string) -> option<string>;
+  set: func(key: string, value: string) -> result<_, string>;
+  delete: func(key: string);
+}
+
+// Always linked.
+interface palette {
+  mode: func(word: string, title: string);
+  command: func(id: string, title: string, default-key: option<string>);
+}
+
+// Always linked. The app's colour tokens, read only; `on-theme-changed` follows a switch.
+interface theme {
+  record token {
+    // Dotted and lowercase, like "color.hairline".
+    name: string,
+    // "#rrggbb" or "#rrggbbaa".
+    value: string,
+  }
+
+  // "default" is black and white.
+  name: func() -> string;
+  tokens: func() -> list<token>;
+}
+
+// Capability `notifications`. Replies arrive at `on-action`.
+interface notify {
+  record action {
+    id: string,
+    title: string,
+  }
+  notify: func(title: string, body: string, actions: list<action>, binding: option<string>) -> result<_, string>;
+}
+
+// Capability `pty_write`. `request-id` is the key of the surface's pending permission request.
+// haunt writes Allow or Deny only while that request is still live; there is no free-form text.
+interface pty {
+  answer: func(surface: string, allow: bool, request-id: u64) -> result<_, string>;
+}
+
+// Capability `pty_type`. Types `text` into the current tab, then presses Return if `enter`. Only while
+// handling a palette command or key the user just ran, and only into the tab focused then. haunt
+// refuses it while that tab has a prompt up, and refuses text with control or invisible characters
+// (a tab is fine).
+interface typing {
+  type-text: func(text: string, enter: bool) -> result<_, string>;
+}
+
+// `read` and `list` need `fs_read`, `write` needs `fs_write`; paths must match the declared globs.
+interface fs {
+  read: func(path: string) -> result<list<u8>, string>;
+  write: func(path: string, data: list<u8>) -> result<_, string>;
+  %list: func(path: string) -> result<list<string>, string>;
+}
+
+// Capability `decisions_read`. Verified permission decisions, newest first; read only.
+interface decisions {
+  variant outcome {
+    allowed-in-haunt,
+    denied-in-haunt,
+    allowed-by-plugin(string),
+    denied-by-plugin(string),
+    answered-in-terminal,
+    superseded,
+  }
+
+  record decision {
+    at-ms: u64,
+    surface-id: string,
+    tool: string,
+    preview: string,
+    cwd: option<string>,
+    outcome: outcome,
+    // "claude", "codex" or another agent id.
+    agent: string,
+  }
+
+  // `text` is a case-insensitive substring of tool, preview, cwd, outcome or surface id; at most 1000.
+  query: func(text: string, limit: u32) -> list<decision>;
+}
+
+// Capability `allowlist_suggest`. haunt writes a rule only when the user accepts the proposal in its UI.
+interface allowlist {
+  // Claude Code Bash approvals clicked in haunt, per project and exact command, newest first.
+  record approval {
+    project: string,
+    command: string,
+    count: u32,
+    last-at-ms: u64,
+  }
+
+  approvals: func(min-count: u32) -> list<approval>;
+  // Offers `Bash(<command>)` for `project` as a pending suggestion; needs at least one approval.
+  propose: func(project: string, command: string) -> result<_, string>;
+}
+
+// Capability `sidebar`. Arranges the core's rows: order, pins, named sections and colours.
+// The core keeps NEEDS YOU first and complete, and shows every row exactly once.
+interface sidebar {
+  enum state-group { needs-you, running, idle }
+
+  record row-info {
+    surface: string,
+    name: string,
+    // "shell", "claude" or "codex".
+    kind: string,
+    group: state-group,
+    selected: bool,
+  }
+
+  // Rows in the core's own order, before any arrangement.
+  rows: func() -> list<row-info>;
+
+  // Muted colours; the app picks the shades.
+  enum tab-color { red, orange, yellow, green, blue, purple, gray }
+  enum color-style { dot, tint }
+  enum placement { before-state, after-state }
+
+  record section {
+    // Lowercase letters, digits and '-'; the group id in the snapshot is `section:<id>`.
+    id: string,
+    // 1 to 32 ASCII letters, digits, spaces and basic punctuation; may not spell a core group.
+    title: string,
+    surfaces: list<string>,
+  }
+
+  record arrangement {
+    // Shown as PINNED right after NEEDS YOU, in this order.
+    pinned: list<string>,
+    sections: list<section>,
+    // Where sections sit relative to RUNNING and IDLE.
+    placement: placement,
+    // Rank of rows left in the state groups; unlisted rows follow in the core's order.
+    order: list<string>,
+    // One TABS group instead of RUNNING and IDLE.
+    flat: bool,
+    colors: list<tuple<string, tab-color>>,
+    color-style: color-style,
+  }
+
+  // The first plugin to arrange owns the sidebar until it calls `clear`.
+  arrange: func(arrangement: arrangement) -> result<_, string>;
+  clear: func();
+}
+
+world plugin {
+  use types.{agent-event, decoration, palette-item, menu-item};
+  import log;
+  import kv;
+  import palette;
+  import theme;
+  import notify;
+  import pty;
+  import typing;
+  import fs;
+  import decisions;
+  import allowlist;
+  import sidebar;
+
+  export init: func(settings: string);
+  export on-settings-changed: func(settings: string);
+  export on-event: func(event: agent-event) -> option<decoration>;
+  export palette-items: func(mode: string, query: string) -> list<palette-item>;
+  export on-action: func(action-id: string, payload: string);
+  // Entries for a row's context menu.
+  export row-menu: func(surface: string) -> list<menu-item>;
+  // The user dragged `surface` into snapshot group `group`, above `before` (none: at the end).
+  // Only plugins granted `sidebar` get it.
+  export on-row-moved: func(surface: string, group: string, before: option<string>);
+  // The app switched theme; read the new one with `theme`.
+  export on-theme-changed: func();
+}

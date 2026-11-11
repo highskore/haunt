@@ -1,0 +1,472 @@
+import AppKit
+import os
+
+/// ~/.haunt/config.toml: `font`, `font_size`, `[keys]`, `[notifications]` and a raw `[ghostty]` table, turned into a Ghostty config file.
+final class HauntConfig {
+    static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "dev.haunt.Haunt", category: "config")
+
+    let dir: URL
+    var tomlURL: URL { dir.appendingPathComponent("config.toml") }
+    var ghosttyURL: URL { dir.appendingPathComponent("ghostty.generated.conf") }
+    private(set) var keys = KeyMap.defaults
+    private(set) var notifications = NotificationSettings()
+    /// The loaded plugins' commands that come with a key, as "<plugin id>/<item id>": default key; set before `reload`.
+    var pluginKeyDefaults: [String: String] = [:]
+    private(set) var agentsView = AgentsViewStyle.narrowList
+    private(set) var titlebarButtons = TitlebarButton.defaults
+    /// Haunt's own middle-click paste; `[ghostty] middle-click-action = ignore` turns it off.
+    private(set) var middleClickPaste = true
+
+    private var source: DispatchSourceFileSystemObject?
+    private var fileSource: DispatchSourceFileSystemObject?
+    private var onChange: ((_ ghostty: Bool, _ keys: Bool, _ layout: Bool, _ notifications: Bool, _ text: Bool) -> Void)?
+    /// config.toml as last read (empty for fixtures), whose `[plugins."<id>"]` tables the plugin host reads.
+    private(set) var text = ""
+    /// Seeded from disk, so a launch with an unchanged config doesn't rewrite the file.
+    private var lastWritten: String?
+    /// config.toml's identity at the last read; events that leave it unchanged (state.json, our own
+    /// generated Ghostty file) skip the reload.
+    private var lastSeen: FileStamp?
+    private var lastKeyProblems: [String] = []
+    private var lastLayoutProblems: [String] = []
+    private var lastNotificationProblems: [String] = []
+
+    /// HAUNT_CONFIG_DIR, else HAUNT_HOME, else ~/.haunt: the same order as `haunt setup`.
+    init(dir: URL? = nil) {
+        let e = ProcessInfo.processInfo.environment
+        let env = (e["HAUNT_CONFIG_DIR"] ?? e["HAUNT_HOME"]).map { URL(fileURLWithPath: $0) }
+        self.dir = dir ?? env ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".haunt")
+        lastWritten = try? String(contentsOf: ghosttyURL, encoding: .utf8)
+    }
+
+    /// Re-reads config.toml into `keys`, `[layout]`, `[notifications]` and `text` and rewrites the Ghostty file;
+    /// says which changed.
+    /// `text` is whether the file changed at all: the plugin host works out whether its `[plugins]` did.
+    @discardableResult
+    func reload(useUserConfig: Bool = true) -> (ghostty: Bool, keys: Bool, layout: Bool, notifications: Bool, text: Bool) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        lastSeen = FileStamp(tomlURL)
+        let text = useUserConfig ? (try? String(contentsOf: tomlURL, encoding: .utf8)) ?? "" : ""
+        let textChanged = text != self.text
+        self.text = text
+        usingUserConfig = useUserConfig
+        let r = apply()
+        return (r.ghostty, r.keys, r.layout, r.notifications, textChanged)
+    }
+
+    /// Rebuilds `keys` and the Ghostty file from `text` as last read, without reading config.toml again:
+    /// for plugin commands that came or went.
+    @discardableResult
+    func rebuildKeys() -> (ghostty: Bool, keys: Bool) {
+        let r = apply()
+        return (r.ghostty, r.keys)
+    }
+
+    private var usingUserConfig = true
+
+    private func apply() -> (ghostty: Bool, keys: Bool, layout: Bool, notifications: Bool) {
+        let toml = TOML.parse(text)
+        var problems: [String] = []
+        let newKeys = KeyMap(table: toml["keys"] ?? [:], order: TOML.keyOrder(text, table: "keys"), pluginDefaults: pluginKeyDefaults) {
+            problems.append($0)
+        }
+        problems += Self.refusedGhostty(toml["ghostty"] ?? [:]).map { "[ghostty] \($0.key) = \($0.value): not allowed, ignored" }
+        // One save can fire several events; each problem is logged once per edit.
+        if problems != lastKeyProblems {
+            for p in problems { Self.logger.error("\(p, privacy: .public)") }
+            lastKeyProblems = problems
+        }
+        middleClickPaste = Self.middleClickPaste(toml["ghostty"] ?? [:])
+        let keysChanged = newKeys != keys
+        keys = newKeys
+        var notifyProblems: [String] = []
+        let newNotifications = NotificationSettings(table: toml["notifications"] ?? [:]) { notifyProblems.append($0) }
+        if notifyProblems != lastNotificationProblems {
+            for p in notifyProblems { Self.logger.error("\(p, privacy: .public)") }
+            lastNotificationProblems = notifyProblems
+        }
+        let notificationsChanged = newNotifications != notifications
+        notifications = newNotifications
+        var layoutProblems: [String] = []
+        agentsView = AgentsViewStyle.parse(toml["layout"]?["agents_view"]) { layoutProblems.append($0) }
+        let buttons = TitlebarButton.parse(toml["layout"]?["titlebar_buttons"]) { layoutProblems.append($0) }
+        let layoutChanged = buttons != titlebarButtons
+        titlebarButtons = buttons
+        if layoutProblems != lastLayoutProblems {
+            for p in layoutProblems { Self.logger.warning("\(p, privacy: .public)") }
+            lastLayoutProblems = layoutProblems
+        }
+        let generated = Self.ghosttyConfig(toml, defaultSize: usingUserConfig ? Self.defaultFontSize : Tok.Size.paneFont, keys: keys)
+        guard generated != lastWritten else { return (false, keysChanged, layoutChanged, notificationsChanged) }
+        try? generated.write(to: ghosttyURL, atomically: true, encoding: .utf8)
+        lastWritten = generated
+        return (true, keysChanged, layoutChanged, notificationsChanged)
+    }
+
+    /// The user's Warp size; fixtures keep the mockup's `Tok.Size.paneFont` so fidelity still compares.
+    static let defaultFontSize: CGFloat = 11
+
+    static func ghosttyConfig(_ toml: [String: [String: TOML.Value]], defaultSize: CGFloat, keys: KeyMap) -> String {
+        let top = toml[""] ?? [:]
+        func line(_ k: String) -> String? { top[k]?.strings.first.flatMap { $0.contains(where: \.isNewline) ? nil : $0 } }
+        let font = line("font") ?? Tok.Font.monoFamily
+        let size = line("font_size") ?? Self.num(defaultSize)
+        let cellAdjust = num((Tok.Size.paneLine / naturalLineHeight - 1) * 100)
+        var lines: [String] = ["# Generated by haunt from ~/.haunt/config.toml. Edits here are overwritten."]
+        lines.append("font-family = \(font)")
+        lines += Tok.Font.monoFallback.map { "font-family = \($0)" }
+        lines += [
+            "font-size = \(size)",
+            // Ghostty's cell is the font's natural line height; the mockup's pane uses 1.65.
+            "adjust-cell-height = \(cellAdjust)%",
+            "background = \(Tok.Color.windowBg.hex)",
+            "foreground = \(Tok.Color.textTerminal.hex)",
+            "window-padding-x = \(num(Tok.Size.panePad[1]))",
+            "window-padding-y = \(num(Tok.Size.panePad[0]))",
+            "window-padding-balance = false",
+            "window-padding-color = background",
+            "window-colorspace = srgb",
+            "confirm-close-surface = true",
+            "resize-overlay = never",
+            // Haunt pastes on middle click itself, the text it checked (HauntSurfaceView).
+            "middle-click-action = ignore",
+        ]
+        // haunt owns tabs and windows, and its shortcuts must reach the menu instead of Ghostty.
+        var unbind: [String] = (["t", "w", "n", "d", "shift+d"] + (1...9).flatMap { ["digit_\($0)", "\($0)"] }).map { "super+" + $0 }
+        // Ghostty's own paste bindings would write to the pty past Haunt's paste checks, whatever [keys] says.
+        unbind += ["cmd+v", "cmd+shift+v"].flatMap { Shortcut.parse($0)!.ghosttyTriggers } + ["paste"]
+        for a in KeyMap.Action.allCases { unbind += keys[a]?.ghosttyTriggers ?? [] }
+        for (_, s) in keys.plugin.sorted(by: { $0.key < $1.key }) { unbind += s.ghosttyTriggers }
+        var seen = Set<String>()
+        lines += unbind.filter { seen.insert($0).inserted }.map { "keybind = \($0)=unbind" }
+        let refused = Set(refusedGhostty(toml["ghostty"] ?? [:]).map { "\($0.key) = \($0.value)" })
+        let raw = (toml["ghostty"] ?? [:]).sorted { $0.key < $1.key }
+            .flatMap { k, v in v.strings.map { "\(k) = \($0)" } }.filter { !refused.contains($0) }
+        return (lines + raw).joined(separator: "\n") + "\n"
+    }
+
+    /// Passthrough values Haunt can't allow: a paste libghostty starts itself (a click, a keybind) writes to
+    /// the pty past Haunt's paste checks, another config file is never checked, and a line break would
+    /// smuggle in a line of its own.
+    static func refusedGhostty(_ table: [String: TOML.Value]) -> [(key: String, value: String)] {
+        table.sorted { $0.key < $1.key }.flatMap { k, v in v.strings.filter { refused(k, $0) }.map { (k, $0) } }
+    }
+
+    /// False when the table sets `middle-click-action = ignore`; Haunt's paste values for it are refused.
+    static func middleClickPaste(_ table: [String: TOML.Value]) -> Bool {
+        !(table["middle-click-action"]?.strings ?? []).contains { !$0.contains(where: \.isNewline) && ghosttyValue($0) == "ignore" }
+    }
+
+    /// A value as Ghostty reads it (cli/args.zig): spaces and tabs trimmed and one pair of double quotes
+    /// dropped; then trimmed again and lowercased, to compare loosely.
+    private static func ghosttyValue(_ raw: String) -> String {
+        let ws = CharacterSet(charactersIn: " \t")
+        var value = raw.trimmingCharacters(in: ws)
+        if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") { value = String(value.dropFirst().dropLast()) }
+        return value.trimmingCharacters(in: ws).lowercased()
+    }
+
+    private static func refused(_ key: String, _ raw: String) -> Bool {
+        if raw.contains(where: \.isNewline) { return true }
+        // A key Ghostty reads must already be bare; it trims the key the same way.
+        guard key.range(of: "^[a-z0-9-]+$", options: .regularExpression) != nil else { return true }
+        let value = ghosttyValue(raw)
+        switch key {
+        case "right-click-action": return ["paste", "copy-or-paste"].contains(value)
+        // Ghostty's is always ignore; the paste is Haunt's, and ignore turns it off (middleClickPaste).
+        case "middle-click-action": return value != "ignore"
+        case "keybind": return ["paste_from_clipboard", "paste_from_selection"].contains { value.lowercased().contains($0) }
+        case "config-file", "config-default-files": return true
+        default: return false
+        }
+    }
+
+    /// Berkeley Mono Variable's (ascent + descent + lineGap) / unitsPerEm from hhea: (956 + 244 + 0) / 1000.
+    static let naturalLineHeight: CGFloat = 1.2
+
+    private static func num(_ v: CGFloat) -> String {
+        v.rounded() == v ? String(Int(v)) : String(format: "%g", Double(v))
+    }
+
+    /// UI state kept across launches in `<dir>/state.json`, beside the config it belongs to.
+    struct State: Codable {
+        var sidebarHidden = false
+        var agentsView = false
+        /// Written by `haunt setup`; nil until it has run, which is when the first-launch picker shows.
+        var agents: [String]?
+
+        enum CodingKeys: String, CodingKey {
+            case sidebarHidden = "sidebar_hidden"
+            case agentsView = "agents_view"
+            case agents
+        }
+
+        init() {}
+
+        // Every key is optional: `haunt setup` may write the file before the app ever has.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            sidebarHidden = try c.decodeIfPresent(Bool.self, forKey: .sidebarHidden) ?? false
+            agentsView = try c.decodeIfPresent(Bool.self, forKey: .agentsView) ?? false
+            agents = try c.decodeIfPresent([String].self, forKey: .agents)
+        }
+    }
+
+    var stateURL: URL { dir.appendingPathComponent("state.json") }
+
+    func loadState() -> State {
+        (try? Data(contentsOf: stateURL)).flatMap { try? JSONDecoder().decode(State.self, from: $0) } ?? State()
+    }
+
+    func saveState(_ state: State) {
+        guard let data = try? JSONEncoder().encode(state) else { return }
+        try? data.write(to: stateURL, options: .atomic)
+    }
+
+    /// state.json as read at launch, with the app's own changes since.
+    private(set) lazy var state = loadState()
+    private var stateDirty = false
+
+    /// Changes the app's keys in memory; they are written a second later or at quit, whichever comes first.
+    func updateState(_ change: (inout State) -> Void) {
+        change(&state)
+        guard !stateDirty else { return }
+        stateDirty = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.flushState() }
+    }
+
+    /// Merges into the file rather than overwriting it, so `agents` from a `haunt setup` run meanwhile survives.
+    func flushState() {
+        guard stateDirty else { return }
+        stateDirty = false
+        var file = loadState()
+        file.sidebarHidden = state.sidebarHidden
+        file.agentsView = state.agentsView
+        state.agents = file.agents
+        saveState(file)
+    }
+
+    /// Calls `onChange` on the main queue after config.toml changes. The directory catches atomic saves,
+    /// which replace the file; the file itself catches editors that write in place.
+    func watch(_ onChange: @escaping (_ ghostty: Bool, _ keys: Bool, _ layout: Bool, _ notifications: Bool, _ text: Bool) -> Void) {
+        self.onChange = onChange
+        source = Self.observe(dir.path, [.write, .rename, .delete]) { [weak self] in self?.changed() }
+        watchFile()
+    }
+
+    private func changed() {
+        guard FileStamp(tomlURL) != lastSeen else { return }
+        watchFile()
+        let r = reload()
+        if r.ghostty || r.keys || r.layout || r.notifications || r.text {
+            onChange?(r.ghostty, r.keys, r.layout, r.notifications, r.text)
+        }
+    }
+
+    /// Re-armed on every event, since an atomic save leaves the old watch on a deleted file.
+    private func watchFile() {
+        fileSource?.cancel()
+        fileSource = Self.observe(tomlURL.path, [.write, .extend, .rename, .delete]) { [weak self] in self?.changed() }
+    }
+
+    private static func observe(_ path: String, _ mask: DispatchSource.FileSystemEvent,
+                                _ handler: @escaping () -> Void) -> DispatchSourceFileSystemObject? {
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else { return nil }
+        let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: mask, queue: .main)
+        src.setEventHandler(handler: handler)
+        src.setCancelHandler { close(fd) }
+        src.resume()
+        return src
+    }
+}
+
+/// `[notifications]`: every switch defaults to on; a value that isn't `true` or `false` is logged and ignored.
+struct NotificationSettings: Equatable {
+    var enabled = true
+    var onPermission = true
+    var onDone = true
+    var menuBar = true
+
+    static let keys: [String: WritableKeyPath<NotificationSettings, Bool>] = [
+        "enabled": \.enabled, "on_permission": \.onPermission, "on_done": \.onDone, "menu_bar": \.menuBar,
+    ]
+
+    init() {}
+
+    init(table: [String: TOML.Value], problem: (String) -> Void) {
+        for (k, v) in table.sorted(by: { $0.key < $1.key }) {
+            guard let path = Self.keys[k] else {
+                problem("[notifications] \(k): unknown setting")
+                continue
+            }
+            guard case let .scalar(s) = v, s == "true" || s == "false" else {
+                problem("[notifications] \(k): expected true or false")
+                continue
+            }
+            self[keyPath: path] = s == "true"
+        }
+    }
+}
+
+/// A file's inode, modification time and size; nil when it doesn't exist.
+struct FileStamp: Equatable {
+    let inode: UInt64, mtimeSec: Int, mtimeNsec: Int, size: Int64
+
+    init?(_ url: URL) {
+        var st = stat()
+        guard stat(url.path, &st) == 0 else { return nil }
+        inode = UInt64(st.st_ino)
+        mtimeSec = st.st_mtimespec.tv_sec
+        mtimeNsec = st.st_mtimespec.tv_nsec
+        size = Int64(st.st_size)
+    }
+}
+
+/// `[layout] agents_view`: the view ⌘⇧A toggles. Views 02–09 arrive later as plugins.
+enum AgentsViewStyle: String {
+    case narrowList = "narrow-list"
+
+    /// Unknown values fall back to the narrow list through `log`.
+    static func parse(_ value: TOML.Value?, log: (String) -> Void) -> AgentsViewStyle {
+        guard let value else { return .narrowList }
+        if case let .scalar(s) = value, let style = AgentsViewStyle(rawValue: s) { return style }
+        log("[layout] agents_view = \(value.strings.joined(separator: ",")): unknown view, using \"narrow-list\"")
+        return .narrowList
+    }
+}
+
+/// `[layout] titlebar_buttons`: the title bar's icons, drawn left to right in this order.
+enum TitlebarButton: String, CaseIterable {
+    case search
+    case newTab = "new_tab"
+    case settings
+    case sidebar
+
+    static let defaults: [TitlebarButton] = [.search, .newTab, .sidebar]
+
+    /// The `[keys]` action the button runs, for its tooltip.
+    var action: KeyMap.Action {
+        switch self {
+        case .search: return .palette
+        case .newTab: return .newTab
+        case .settings: return .settings
+        case .sidebar: return .toggleSidebar
+        }
+    }
+
+    /// Unknown and repeated names are skipped through `log`; an empty list leaves the bar bare.
+    static func parse(_ value: TOML.Value?, log: (String) -> Void) -> [TitlebarButton] {
+        guard let value else { return defaults }
+        var out: [TitlebarButton] = []
+        for name in value.strings {
+            guard let b = TitlebarButton(rawValue: name) else {
+                log("[layout] titlebar_buttons: unknown button \"\(name)\", ignored (search, new_tab, settings, sidebar)")
+                continue
+            }
+            if out.contains(b) { log("[layout] titlebar_buttons: \"\(name)\" listed twice, ignored"); continue }
+            out.append(b)
+        }
+        return out
+    }
+}
+
+/// The TOML subset haunt's config needs: tables, strings, numbers, booleans, and arrays of those.
+enum TOML {
+    enum Value: Equatable {
+        case scalar(String)
+        case array([String])
+
+        var strings: [String] {
+            switch self {
+            case let .scalar(s): return [s]
+            case let .array(a): return a
+            }
+        }
+    }
+
+    static func parse(_ text: String) -> [String: [String: Value]] {
+        var out: [String: [String: Value]] = [:]
+        entries(text) { table, key, value in out[table, default: [:]][key] = parseValue(value) }
+        return out
+    }
+
+    /// The keys of `table` in the order they are written.
+    static func keyOrder(_ text: String, table name: String) -> [String] {
+        var keys: [String] = []
+        entries(text) { table, key, _ in if table == name { keys.append(key) } }
+        return keys
+    }
+
+    private static func entries(_ text: String, _ body: (String, String, String) -> Void) {
+        var table = ""
+        // By Character, "\r\n" is one newline, which splitting on "\n" alone would never find.
+        for raw in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            let line = stripComment(String(raw)).trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            if line.hasPrefix("[") && line.hasSuffix("]") {
+                table = String(line.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+                continue
+            }
+            guard let eq = line.firstIndex(of: "=") else { continue }
+            let key = unquote(line[..<eq].trimmingCharacters(in: .whitespaces))
+            body(table, key, line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces))
+        }
+    }
+
+    private static func parseValue(_ v: String) -> Value {
+        guard v.hasPrefix("["), v.hasSuffix("]") else { return .scalar(unquote(v)) }
+        let inner = v.dropFirst().dropLast()
+        return .array(splitTopLevel(String(inner)).map { unquote($0.trimmingCharacters(in: .whitespaces)) }.filter { !$0.isEmpty })
+    }
+
+    private static func splitTopLevel(_ s: String) -> [String] {
+        var parts: [String] = [], cur = "", quote: Character?
+        for c in s {
+            if let q = quote {
+                if c == q { quote = nil }
+            } else if c == "\"" || c == "'" {
+                quote = c
+            } else if c == "," {
+                parts.append(cur)
+                cur = ""
+                continue
+            }
+            cur.append(c)
+        }
+        parts.append(cur)
+        return parts
+    }
+
+    private static func stripComment(_ s: String) -> String {
+        var quote: Character?
+        for (i, c) in s.enumerated() {
+            if let q = quote {
+                if c == q { quote = nil }
+            } else if c == "\"" || c == "'" {
+                quote = c
+            } else if c == "#" {
+                return String(s.prefix(i))
+            }
+        }
+        return s
+    }
+
+    private static func unquote(_ s: String) -> String {
+        if s.count >= 2, s.hasPrefix("'"), s.hasSuffix("'") { return String(s.dropFirst().dropLast()) }
+        guard s.count >= 2, s.hasPrefix("\""), s.hasSuffix("\"") else { return s }
+        return String(s.dropFirst().dropLast())
+            .replacingOccurrences(of: "\\\"", with: "\"")
+            .replacingOccurrences(of: "\\t", with: "\t")
+            .replacingOccurrences(of: "\\n", with: "\n")
+            .replacingOccurrences(of: "\\\\", with: "\\")
+    }
+}
+
+extension NSColor {
+    var hex: String {
+        let c = usingColorSpace(.sRGB)!
+        return String(format: "#%02x%02x%02x", Int((c.redComponent * 255).rounded()),
+                      Int((c.greenComponent * 255).rounded()), Int((c.blueComponent * 255).rounded()))
+    }
+}

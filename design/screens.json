@@ -1,0 +1,3159 @@
+{
+ "_": "Anchor specs per screen. at/from are [x, y] CSS px exprs on the element's rect: left|right|cx|top|bottom|cy[+-n] or n%. $vars are filled per screen.",
+ "groups": {
+  "chrome": {
+   "anchors": [
+    {
+     "name": "titlebar.bg",
+     "sel": ".title",
+     "at": [
+      "40%",
+      "top+6"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "titlebar.hairline",
+     "sel": ".title",
+     "at": [
+      "40%",
+      "bottom-0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "lights.0",
+     "sel": ".lights i",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.lights"
+    },
+    {
+     "name": "lights.2",
+     "sel": ".lights i:nth-child(3)",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.lights"
+    }
+   ],
+   "edges": [
+    {
+     "name": "titlebar.bottom",
+     "sel": ".title",
+     "from": [
+      "40%",
+      "bottom-5"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "lights.left",
+     "sel": ".title",
+     "from": [
+      "left+2",
+      "cy"
+     ],
+     "dir": "right",
+     "expect_sel": ".lights i",
+     "expect": "left"
+    },
+    {
+     "name": "lights.0.right",
+     "sel": ".lights i",
+     "from": [
+      "cx",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "right"
+    },
+    {
+     "name": "lights.2.left",
+     "sel": ".lights i:nth-child(3)",
+     "from": [
+      "left-3",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    }
+   ]
+  },
+  "sidebar": {
+   "anchors": [
+    {
+     "name": "sidebar.bg",
+     "sel": ".side",
+     "at": [
+      "right-20",
+      "bottom-20"
+     ],
+     "token": "color.sidebar.bg"
+    },
+    {
+     "name": "sidebar.hairline",
+     "sel": ".side",
+     "at": [
+      "right-0.5",
+      "bottom-20"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "pane.bg",
+     "sel": ".pane",
+     "at": [
+      "right-20",
+      "bottom-20"
+     ],
+     "token": "color.window.bg"
+    }
+   ],
+   "edges": [
+    {
+     "name": "sidebar.right",
+     "sel": ".side",
+     "from": [
+      "right-20",
+      "bottom-20"
+     ],
+     "dir": "right",
+     "expect": "right-1"
+    }
+   ]
+  },
+  "pane": {
+   "anchors": [
+    {
+     "name": "pane.prompt.text",
+     "sel": ".pane .hi",
+     "text": true,
+     "token": "color.text.hi"
+    },
+    {
+     "name": "pane.ok.text",
+     "sel": ".pane .ok",
+     "text": true,
+     "token": "color.text.ok"
+    },
+    {
+     "name": "pane.dim.text",
+     "sel": ".pane > .dim",
+     "text": true,
+     "token": "color.text.meta"
+    }
+   ]
+  },
+  "row-sel": {
+   "anchors": [
+    {
+     "name": "row.sel.bg",
+     "sel": ".tab.sel",
+     "at": [
+      "left+4",
+      "top+4"
+     ],
+     "token": "color.row.selected"
+    },
+    {
+     "name": "row.sel.name.text",
+     "sel": ".tab.sel .name",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "row.sel.meta.text",
+     "sel": ".tab.sel .meta",
+     "text": true,
+     "token": "color.text.meta"
+    }
+   ],
+   "edges": [
+    {
+     "name": "row.sel.top",
+     "sel": ".tab.sel",
+     "from": [
+      "left+4",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "row.sel.bottom",
+     "sel": ".tab.sel",
+     "from": [
+      "left+4",
+      "bottom-3"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    }
+   ]
+  },
+  "bar": {
+   "anchors": [
+    {
+     "name": "bar.fill",
+     "sel": "$bar b",
+     "at": [
+      "left+2",
+      "cy"
+     ],
+     "token": "color.bar.fill"
+    },
+    {
+     "name": "bar.track",
+     "sel": "$bar",
+     "at": [
+      "right-2",
+      "cy"
+     ],
+     "token": "color.bar.track"
+    }
+   ],
+   "edges": [
+    {
+     "name": "bar.top",
+     "sel": "$bar",
+     "from": [
+      "right-2",
+      "top-2"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "bar.bottom",
+     "sel": "$bar",
+     "from": [
+      "right-2",
+      "cy"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    },
+    {
+     "name": "bar.fill.end",
+     "sel": "$bar b",
+     "from": [
+      "left+2",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "right"
+    }
+   ]
+  },
+  "subs": {
+   "anchors": [
+    {
+     "name": "sub.text",
+     "sel": ".tab.sel .sub span",
+     "text": true,
+     "token": "color.text.sub"
+    }
+   ]
+  },
+  "shell-row": {
+   "anchors": [
+    {
+     "name": "icon.bg",
+     "sel": ".ic:not(.claude)",
+     "at": [
+      "left+3",
+      "top+3"
+     ],
+     "token": "color.icon.bg"
+    },
+    {
+     "name": "icon.glyph",
+     "sel": ".ic:not(.claude)",
+     "text": true,
+     "token": "color.icon.fg"
+    }
+   ],
+   "edges": [
+    {
+     "name": "icon.left",
+     "sel": ".ic:not(.claude)",
+     "from": [
+      "left-6",
+      "top+3"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "icon.right",
+     "sel": ".ic:not(.claude)",
+     "from": [
+      "left+3",
+      "top+3"
+     ],
+     "dir": "right",
+     "expect": "right"
+    },
+    {
+     "name": "icon.top",
+     "sel": ".ic:not(.claude)",
+     "from": [
+      "left+3",
+      "top-4"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "claude": {
+   "anchors": [
+    {
+     "name": "claude.icon",
+     "sel": "path[fill='#D97757']",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.claude"
+    }
+   ]
+  },
+  "label": {
+   "anchors": [
+    {
+     "name": "label.text",
+     "sel": ".label",
+     "text": true,
+     "token": "color.text.label"
+    }
+   ]
+  },
+  "needs": {
+   "anchors": [
+    {
+     "name": "needs.text",
+     "sel": "$needs",
+     "text": true,
+     "token": "color.needs"
+    }
+   ]
+  },
+  "kbd": {
+   "anchors": [
+    {
+     "name": "kbd.border",
+     "sel": ".kbd",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "kbd.text",
+     "sel": ".kbd",
+     "text": true,
+     "token": "color.text.sub"
+    }
+   ],
+   "edges": [
+    {
+     "name": "kbd.top",
+     "sel": ".kbd",
+     "from": [
+      "cx",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "foot": {
+   "anchors": [
+    {
+     "name": "foot.hairline",
+     "sel": ".foot",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "foot.text",
+     "sel": ".foot span",
+     "text": true,
+     "token": "color.text.label"
+    }
+   ],
+   "edges": [
+    {
+     "name": "foot.top",
+     "sel": ".foot",
+     "from": [
+      "40%",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "card": {
+   "anchors": [
+    {
+     "name": "card.bg",
+     "sel": "$card",
+     "at": [
+      "right-4",
+      "bottom-4"
+     ],
+     "token": "color.card.bg"
+    },
+    {
+     "name": "card.border",
+     "sel": "$card",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.card.border"
+    },
+    {
+     "name": "card.name.text",
+     "sel": "$card .name",
+     "text": true,
+     "token": "color.text.primary"
+    }
+   ],
+   "edges": [
+    {
+     "name": "card.left",
+     "sel": "$card",
+     "from": [
+      "left-6",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "card.top",
+     "sel": "$card",
+     "from": [
+      "cx",
+      "top-6"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "card-meta": {
+   "anchors": [
+    {
+     "name": "card.meta.text",
+     "sel": "$card .meta",
+     "text": true,
+     "token": "color.text.meta"
+    }
+   ]
+  },
+  "review-diff": {
+   "anchors": [
+    {
+     "name": "fh.bg",
+     "sel": ".fh",
+     "at": [
+      "60%",
+      "top+4"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "fh.hairline",
+     "sel": ".fh",
+     "at": [
+      "60%",
+      "bottom-0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "fh.dir.text",
+     "sel": ".fh .path span",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "fh.name.text",
+     "sel": ".fh .path",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "fh.stat.text",
+     "sel": ".fh .st",
+     "text": true,
+     "token": "color.text.sub"
+    },
+    {
+     "name": "fh.sq.add",
+     "sel": ".fh .sq i",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.diff.sq.add"
+    },
+    {
+     "name": "fh.sq.del",
+     "sel": ".fh .sq i:nth-child(5)",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.review.mark.off"
+    },
+    {
+     "name": "hunk.bg",
+     "sel": ".hh",
+     "at": [
+      "right-10",
+      "cy"
+     ],
+     "token": "color.diff.hunk.bg"
+    },
+    {
+     "name": "hunk.rule",
+     "sel": ".hh",
+     "at": [
+      "right-10",
+      "top+0.5"
+     ],
+     "token": "color.diff.rule"
+    },
+    {
+     "name": "hunk.text",
+     "sel": ".hh",
+     "text": true,
+     "token": "color.diff.add.num"
+    },
+    {
+     "name": "add.bg",
+     "sel": ".dl.add:not(.sel)",
+     "at": [
+      "right-6",
+      "cy"
+     ],
+     "token": "color.diff.add.bg"
+    },
+    {
+     "name": "del.bg",
+     "sel": ".dl.del",
+     "at": [
+      "right-6",
+      "cy"
+     ],
+     "token": "color.diff.del.bg"
+    },
+    {
+     "name": "add.text",
+     "sel": ".dl.add .c",
+     "text": true,
+     "token": "color.diff.add.ink"
+    },
+    {
+     "name": "add.mark",
+     "sel": ".dl.add .m",
+     "text": true,
+     "token": "color.diff.add.mark"
+    },
+    {
+     "name": "add.num",
+     "sel": ".dl.add .n:nth-child(2)",
+     "text": true,
+     "token": "color.diff.add.num"
+    },
+    {
+     "name": "del.text",
+     "sel": ".dl.del .c",
+     "text": true,
+     "token": "color.diff.del.ink"
+    },
+    {
+     "name": "ctx.text",
+     "sel": ".dl:not(.add):not(.del) .c",
+     "text": true,
+     "token": "color.diff.text"
+    },
+    {
+     "name": "ctx.num",
+     "sel": ".dl:not(.add):not(.del) .n",
+     "text": true,
+     "token": "color.diff.num"
+    }
+   ],
+   "edges": [
+    {
+     "name": "fh.bottom",
+     "sel": ".fh",
+     "from": [
+      "60%",
+      "top+4"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "add.top",
+     "sel": ".dl.add",
+     "from": [
+      "right-6",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "add.bottom",
+     "sel": ".dl.add + .dl:not(.add)",
+     "from": [
+      "right-6",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "review-side": {
+   "anchors": [
+    {
+     "name": "sidebar.bg",
+     "sel": ".side",
+     "at": [
+      "right-20",
+      "bottom-20"
+     ],
+     "token": "color.sidebar.bg"
+    },
+    {
+     "name": "sidebar.hairline",
+     "sel": ".side",
+     "at": [
+      "right-0.5",
+      "bottom-20"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "row.sel.bg",
+     "sel": ".tab.sel",
+     "at": [
+      "right-4",
+      "bottom-4"
+     ],
+     "token": "color.row.selected"
+    },
+    {
+     "name": "row.name.text",
+     "sel": ".tab.sel .name",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "row.meta.text",
+     "sel": ".tab.sel .meta",
+     "text": true,
+     "token": "color.text.meta"
+    },
+    {
+     "name": "row.review.text",
+     "sel": ".tab.sel .right",
+     "text": true,
+     "token": "color.needs"
+    },
+    {
+     "name": "claude.mark",
+     "sel": ".tab.sel .ic svg",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.claude"
+    }
+   ],
+   "edges": [
+    {
+     "name": "sidebar.right",
+     "sel": ".side",
+     "from": [
+      "right-20",
+      "bottom-20"
+     ],
+     "dir": "right",
+     "expect": "right-1"
+    }
+   ]
+  }
+ },
+ "screens": {
+  "ui-03-icon-only": {
+   "file": "ui",
+   "index": 3,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "bar": ".tab.sel .bar"
+   },
+   "groups": [
+    "chrome",
+    "sidebar",
+    "pane",
+    "row-sel",
+    "bar",
+    "subs",
+    "shell-row",
+    "claude"
+   ],
+   "anchors": [
+    {
+     "name": "titlebar.icons.text",
+     "sel": ".title .muted",
+     "text": true,
+     "token": "color.text.label"
+    }
+   ]
+  },
+  "ui-06-grouped-flat": {
+   "file": "ui",
+   "index": 6,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "bar": ".tab.sel .bar",
+    "needs": ".tab .right span"
+   },
+   "groups": [
+    "chrome",
+    "sidebar",
+    "pane",
+    "row-sel",
+    "bar",
+    "subs",
+    "shell-row",
+    "claude",
+    "label",
+    "needs",
+    "kbd"
+   ]
+  },
+  "ui-07-rail": {
+   "file": "ui",
+   "index": 7,
+   "crop": ".win",
+   "fill": true,
+   "groups": [
+    "chrome",
+    "sidebar",
+    "pane",
+    "claude",
+    "kbd"
+   ],
+   "anchors": [
+    {
+     "name": "rail.sel.bg",
+     "sel": ".side > div:first-child",
+     "at": [
+      "left+1",
+      "cy"
+     ],
+     "token": "color.row.selected"
+    },
+    {
+     "name": "rail.ring.fill",
+     "sel": ".side > div:first-child",
+     "at": [
+      "cx+15",
+      "cy"
+     ],
+     "token": "color.bar.fill"
+    },
+    {
+     "name": "rail.ring.track",
+     "sel": ".side > div:first-child",
+     "at": [
+      "cx-15",
+      "cy"
+     ],
+     "token": "color.bar.track"
+    },
+    {
+     "name": "rail.needs.dot",
+     "sel": ".side .dot",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.dot"
+    },
+    {
+     "name": "rail.shell.glyph",
+     "sel": ".side span[style*='var(--mono)']",
+     "text": true,
+     "token": "color.text.sub"
+    }
+   ],
+   "edges": [
+    {
+     "name": "rail.cell.top",
+     "sel": ".side > div:first-child",
+     "from": [
+      "cx",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "rail.cell.bottom",
+     "sel": ".side > div:first-child",
+     "from": [
+      "left+9",
+      "bottom-2.5"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    },
+    {
+     "name": "rail.ring.inner",
+     "sel": ".side > div:nth-child(3) svg",
+     "from": [
+      "cx+10",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "cx+14"
+    }
+   ]
+  },
+  "ui-08-breadcrumb": {
+   "file": "ui",
+   "index": 8,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "bar": ".tab.sel .bar"
+   },
+   "groups": [
+    "chrome",
+    "sidebar",
+    "pane",
+    "row-sel",
+    "bar",
+    "subs",
+    "shell-row",
+    "claude"
+   ],
+   "anchors": [
+    {
+     "name": "crumb.current.text",
+     "sel": ".title span[style*='color:#e8e8e8']",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "crumb.sep.text",
+     "sel": ".title .muted",
+     "text": true,
+     "token": "color.text.label"
+    }
+   ]
+  },
+  "ui-10-zen": {
+   "file": "ui",
+   "index": 10,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "bar": ".win > div:first-child"
+   },
+   "groups": [
+    "pane"
+   ],
+   "anchors": [
+    {
+     "name": "zen.fill",
+     "sel": ".win > div:first-child b",
+     "at": [
+      "left+16",
+      "cy"
+     ],
+     "token": "color.bar.fill"
+    },
+    {
+     "name": "zen.track",
+     "sel": ".win > div:first-child",
+     "at": [
+      "right-16",
+      "cy"
+     ],
+     "token": "color.zen.track"
+    },
+    {
+     "name": "titlebar.bg",
+     "sel": ".title",
+     "at": [
+      "40%",
+      "top+6"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "titlebar.no.hairline",
+     "sel": ".title",
+     "at": [
+      "40%",
+      "bottom-0.5"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "lights.0",
+     "sel": ".lights i",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.lights"
+    },
+    {
+     "name": "titlebar.hint.text",
+     "sel": ".title .muted",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "pane.bg",
+     "sel": ".pane",
+     "at": [
+      "right-20",
+      "bottom-20"
+     ],
+     "token": "color.window.bg"
+    }
+   ],
+   "edges": [
+    {
+     "name": "zen.bar.bottom",
+     "sel": ".win > div:first-child",
+     "from": [
+      "right-16",
+      "cy"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    },
+    {
+     "name": "zen.fill.end",
+     "sel": ".win > div:first-child b",
+     "from": [
+      "left+16",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "right"
+    },
+    {
+     "name": "lights.left",
+     "sel": ".title",
+     "from": [
+      "left+2",
+      "cy"
+     ],
+     "dir": "right",
+     "expect_sel": ".lights i",
+     "expect": "left"
+    },
+    {
+     "name": "lights.top",
+     "sel": ".lights i",
+     "from": [
+      "cx",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "av-01-narrow-list": {
+   "file": "av",
+   "index": 1,
+   "crop": ".float",
+   "vars": {
+    "bar": ".tab.sel .bar",
+    "needs": ".needs"
+   },
+   "groups": [
+    "chrome",
+    "label",
+    "row-sel",
+    "bar",
+    "subs",
+    "claude",
+    "needs",
+    "kbd",
+    "foot"
+   ],
+   "anchors": [
+    {
+     "name": "panel.bg",
+     "sel": ".label",
+     "at": [
+      "right-4",
+      "cy"
+     ],
+     "token": "color.window.bg"
+    }
+   ]
+  },
+  "av-02-dashboard": {
+   "file": "av",
+   "index": 2,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "card": ".card:nth-child(2)",
+    "bar": ".card:nth-child(1) .bar",
+    "needs": ".card .needs"
+   },
+   "groups": [
+    "chrome",
+    "kbd",
+    "card",
+    "card-meta",
+    "bar",
+    "claude",
+    "needs"
+   ],
+   "anchors": [
+    {
+     "name": "title.text",
+     "sel": ".title > span[style]",
+     "text": true,
+     "token": "color.text.sub"
+    }
+   ]
+  },
+  "av-03-floating": {
+   "file": "av",
+   "index": 3,
+   "crop": ".float",
+   "vars": {
+    "bar": ".tab .bar",
+    "needs": ".needs"
+   },
+   "groups": [
+    "label",
+    "bar",
+    "claude",
+    "needs",
+    "kbd",
+    "foot"
+   ],
+   "anchors": [
+    {
+     "name": "header.bg",
+     "sel": ".float > div:first-child",
+     "at": [
+      "40%",
+      "top+4"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "header.hairline",
+     "sel": ".float > div:first-child",
+     "at": [
+      "40%",
+      "bottom-0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "row.name.text",
+     "sel": ".tab .name",
+     "text": true,
+     "token": "color.text.primary"
+    }
+   ],
+   "edges": [
+    {
+     "name": "header.bottom",
+     "sel": ".float > div:first-child",
+     "from": [
+      "40%",
+      "bottom-5"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    }
+   ]
+  },
+  "av-04-menubar": {
+   "file": "av",
+   "index": 4,
+   "crop": ".float",
+   "vars": {
+    "bar": ".tab .bar",
+    "needs": ".tab .meta[style]"
+   },
+   "groups": [
+    "label",
+    "bar",
+    "claude",
+    "needs",
+    "kbd"
+   ],
+   "anchors": [
+    {
+     "name": "btn.pri.bg",
+     "sel": ".btn.pri",
+     "at": [
+      "left+3",
+      "cy"
+     ],
+     "token": "color.btn.primary.bg"
+    },
+    {
+     "name": "btn.pri.text",
+     "sel": ".btn.pri",
+     "text": true,
+     "token": "color.btn.primary.fg"
+    },
+    {
+     "name": "btn.border",
+     "sel": ".btn:nth-child(2)",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "btn.text",
+     "sel": ".btn:nth-child(2)",
+     "text": true,
+     "token": "color.btn.fg"
+    },
+    {
+     "name": "divider.hairline",
+     "sel": ".float > div:last-child",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "panel.bg",
+     "sel": ".label",
+     "at": [
+      "right-4",
+      "cy"
+     ],
+     "token": "color.window.bg"
+    }
+   ],
+   "edges": [
+    {
+     "name": "btn.pri.left",
+     "sel": ".btn.pri",
+     "from": [
+      "left-3",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "btn.pri.top",
+     "sel": ".btn.pri",
+     "from": [
+      "left+3",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "btn.pri.bottom",
+     "sel": ".btn.pri",
+     "from": [
+      "left+3",
+      "cy"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    },
+    {
+     "name": "divider.top",
+     "sel": ".float > div:last-child",
+     "from": [
+      "40%",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "av-05-table": {
+   "file": "av",
+   "index": 5,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "bar": ".pbar",
+    "needs": ".needs"
+   },
+   "groups": [
+    "chrome",
+    "kbd",
+    "bar",
+    "claude",
+    "needs",
+    "foot"
+   ],
+   "anchors": [
+    {
+     "name": "th.text",
+     "sel": ".tbl .th",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "rule",
+     "sel": ".tbl > div:nth-child(7)",
+     "at": [
+      "right-4",
+      "bottom-0.5"
+     ],
+     "token": "color.table.rule"
+    },
+    {
+     "name": "mono.text",
+     "sel": ".tbl .mono",
+     "text": true,
+     "token": "color.text.ok"
+    },
+    {
+     "name": "dot",
+     "sel": ".dot:not(.hollow)",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.dot"
+    },
+    {
+     "name": "cell.bg",
+     "sel": ".tbl > div:nth-child(7)",
+     "at": [
+      "right-4",
+      "top+4"
+     ],
+     "token": "color.window.bg"
+    }
+   ],
+   "edges": [
+    {
+     "name": "th.rule",
+     "sel": ".tbl > div:nth-child(1)",
+     "from": [
+      "right-4",
+      "top+4"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "row1.rule",
+     "sel": ".tbl > div:nth-child(7)",
+     "from": [
+      "right-4",
+      "top+4"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "row2.rule",
+     "sel": ".tbl > div:nth-child(13)",
+     "from": [
+      "right-4",
+      "top+4"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    }
+   ]
+  },
+  "av-06-kanban": {
+   "file": "av",
+   "index": 6,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "card": ".card",
+    "bar": ".card .bar",
+    "needs": ".needs"
+   },
+   "groups": [
+    "chrome",
+    "kbd",
+    "card",
+    "card-meta",
+    "bar",
+    "claude",
+    "needs",
+    "foot"
+   ],
+   "anchors": [
+    {
+     "name": "column.label.text",
+     "sel": ".label span",
+     "text": true,
+     "token": "color.text.label"
+    }
+   ]
+  },
+  "av-07-ticker": {
+   "file": "av",
+   "index": 7,
+   "crop": ".desk > div:first-child",
+   "vars": {
+    "bar": ".pbar",
+    "needs": ".needs"
+   },
+   "groups": [
+    "bar",
+    "claude",
+    "needs",
+    "kbd"
+   ],
+   "anchors": [
+    {
+     "name": "strip.bg",
+     "sel": ".grow",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "sep.text",
+     "sel": "span[style='color:#2a2a2a']",
+     "text": true,
+     "token": "color.ticker.sep"
+    },
+    {
+     "name": "name.text",
+     "sel": "span[style='color:#e8e8e8']",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "hidden.text",
+     "sel": ".muted[style]",
+     "text": true,
+     "token": "color.text.label"
+    }
+   ],
+   "width": 1440
+  },
+  "av-08-monitor": {
+   "file": "av",
+   "index": 8,
+   "crop": ".desk",
+   "fill": true,
+   "vars": {
+    "card": ".desk > div:nth-child(2) > .card:nth-child(1)",
+    "bar": ".desk > div:nth-child(2) > .card:nth-child(2) > div:nth-child(2)"
+   },
+   "groups": [
+    "card",
+    "bar",
+    "claude",
+    "label",
+    "kbd"
+   ],
+   "anchors": [
+    {
+     "name": "monitor.bg",
+     "sel": ".desk > div:first-child",
+     "at": [
+      "40%",
+      "cy"
+     ],
+     "token": "color.monitor.bg"
+    },
+    {
+     "name": "tile.task.needs.text",
+     "sel": ".desk > div:nth-child(2) > .card:nth-child(1) > div:nth-child(3)",
+     "text": true,
+     "token": "color.needs"
+    },
+    {
+     "name": "tile.count.text",
+     "sel": ".desk > div:nth-child(2) > .card:nth-child(2) .hd > span:last-child",
+     "text": true,
+     "token": "color.text.ok"
+    }
+   ]
+  },
+  "av-09-focus": {
+   "file": "av",
+   "index": 9,
+   "crop": ".win",
+   "fill": true,
+   "vars": {
+    "bar": ".pbar",
+    "needs": ".needs"
+   },
+   "groups": [
+    "chrome",
+    "kbd",
+    "bar",
+    "claude",
+    "needs",
+    "foot"
+   ],
+   "anchors": [
+    {
+     "name": "line.rule",
+     "sel": ".win > div:nth-child(2) > div:first-child",
+     "at": [
+      "right-4",
+      "bottom-0.5"
+     ],
+     "token": "color.table.rule"
+    },
+    {
+     "name": "expanded.bg",
+     "sel": "div[style*='background:#121212']",
+     "at": [
+      "right-4",
+      "top+4"
+     ],
+     "token": "color.focus.expanded.bg"
+    },
+    {
+     "name": "term.border",
+     "sel": "div[style*='border:1px solid #222']",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.focus.term.border"
+    },
+    {
+     "name": "term.bg",
+     "sel": "div[style*='border:1px solid #222']",
+     "at": [
+      "right-4",
+      "bottom-4"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "term.text",
+     "sel": "div[style*='border:1px solid #222'] .hi",
+     "text": true,
+     "token": "color.text.hi"
+    }
+   ],
+   "edges": [
+    {
+     "name": "expanded.top",
+     "sel": "div[style*='background:#121212']",
+     "from": [
+      "right-4",
+      "top-4"
+     ],
+     "dir": "down",
+     "expect": "top-1"
+    },
+    {
+     "name": "term.left",
+     "sel": "div[style*='border:1px solid #222']",
+     "from": [
+      "left-4",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "term.top",
+     "sel": "div[style*='border:1px solid #222']",
+     "from": [
+      "right-8",
+      "top-4"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "dl-04-palette": {
+   "file": "dl",
+   "index": 4,
+   "crop": ".pal",
+   "anchors": [
+    {
+     "name": "palette.bg",
+     "sel": ".pin",
+     "at": [
+      "40%",
+      "top+4"
+     ],
+     "token": "color.palette.bg"
+    },
+    {
+     "name": "palette.input.rule",
+     "sel": ".pin",
+     "at": [
+      "40%",
+      "bottom-0.5"
+     ],
+     "token": "color.palette.rule"
+    },
+    {
+     "name": "palette.chip.bg",
+     "sel": ".pfx",
+     "at": [
+      "left+1",
+      "top+2"
+     ],
+     "token": "color.palette.ink"
+    },
+    {
+     "name": "palette.chip.text",
+     "sel": ".pfx",
+     "text": true,
+     "token": "color.palette.chip.fg"
+    },
+    {
+     "name": "palette.cursor",
+     "sel": ".cur",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.palette.ink"
+    },
+    {
+     "name": "palette.esc.text",
+     "sel": ".pin .kbd",
+     "text": true,
+     "token": "color.palette.mute"
+    },
+    {
+     "name": "palette.time.text",
+     "sel": ".pl > .e .tm",
+     "text": true,
+     "token": "color.palette.mute"
+    },
+    {
+     "name": "palette.code.text",
+     "sel": ".pl > .e code",
+     "text": true,
+     "token": "color.palette.ink"
+    },
+    {
+     "name": "palette.sub.text",
+     "sel": ".pl > .e .d",
+     "text": true,
+     "token": "color.palette.mute"
+    },
+    {
+     "name": "palette.mark",
+     "sel": ".pl > .e .mk",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.palette.ink"
+    },
+    {
+     "name": "palette.entry.rule",
+     "sel": ".pl > .e",
+     "at": [
+      "40%",
+      "bottom-0.5"
+     ],
+     "token": "color.palette.entry.rule"
+    },
+    {
+     "name": "palette.sel.bg",
+     "sel": ".pl .sel",
+     "at": [
+      "right-4",
+      "cy"
+     ],
+     "token": "color.palette.sel"
+    },
+    {
+     "name": "palette.sel.bar",
+     "sel": ".pl .sel",
+     "at": [
+      "left+1",
+      "cy"
+     ],
+     "token": "color.palette.ink"
+    },
+    {
+     "name": "palette.jump.text",
+     "sel": ".pl > .e .jmp",
+     "text": true,
+     "token": "color.palette.mute"
+    },
+    {
+     "name": "palette.foot.rule",
+     "sel": ".pf",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.palette.rule"
+    },
+    {
+     "name": "palette.foot.text",
+     "sel": ".pf span",
+     "text": true,
+     "token": "color.palette.mute"
+    }
+   ],
+   "edges": [
+    {
+     "name": "palette.input.bottom",
+     "sel": ".pin",
+     "from": [
+      "40%",
+      "bottom-5"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "palette.chip.left",
+     "sel": ".pfx",
+     "from": [
+      "left-3",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "palette.sel.top",
+     "sel": ".pl .sel",
+     "from": [
+      "right-4",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "palette.sel.bottom",
+     "sel": ".pl .sel",
+     "from": [
+      "right-4",
+      "cy"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    },
+    {
+     "name": "palette.sel.bar.right",
+     "sel": ".pl .sel",
+     "from": [
+      "left+0.5",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left+2"
+    },
+    {
+     "name": "palette.foot.top",
+     "sel": ".pf",
+     "from": [
+      "40%",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "rv-01-files": {
+   "file": "rv",
+   "index": 1,
+   "crop": ".win",
+   "width": 1100,
+   "groups": [
+    "chrome",
+    "review-side",
+    "review-diff"
+   ],
+   "anchors": [
+    {
+     "name": "crumb.current.text",
+     "sel": ".crumb b",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "crumb.sep.text",
+     "sel": ".crumb .muted",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "tree.bg",
+     "sel": ".col[style*='width:262px']",
+     "at": [
+      "right-20",
+      "60%"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "tree.hairline",
+     "sel": ".col[style*='width:262px']",
+     "at": [
+      "right-0.5",
+      "60%"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "tree.label.text",
+     "sel": ".col[style*='width:262px'] .label span",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "tree.sel.bg",
+     "sel": ".row.sel",
+     "at": [
+      "left+6",
+      "top+3"
+     ],
+     "token": "color.row.selected"
+    },
+    {
+     "name": "tree.sel.bar",
+     "sel": ".row.sel",
+     "at": [
+      "left+1",
+      "cy"
+     ],
+     "token": "color.text.primary"
+    },
+    {
+     "name": "tree.chk.on",
+     "sel": ".chk.on",
+     "at": [
+      "left+2",
+      "top+3"
+     ],
+     "token": "color.text.primary"
+    },
+    {
+     "name": "tree.chk.off",
+     "sel": ".row.sel .chk",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.review.mark.off"
+    },
+    {
+     "name": "tree.fn.text",
+     "sel": ".row.sel .fn",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "tree.st.text",
+     "sel": ".row.sel .st",
+     "text": true,
+     "token": "color.text.sub"
+    },
+    {
+     "name": "tree.dir.text",
+     "sel": ".row[style*='color:#6f6f6f'] span[style*='mono']",
+     "text": true,
+     "token": "color.text.meta"
+    },
+    {
+     "name": "tree.foot.rule",
+     "sel": "div[style*='padding:10px 14px;border-top']",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "tree.foot.text",
+     "sel": "div[style*='padding:10px 14px;border-top'] div[style*='color:var(--sub)']",
+     "text": true,
+     "token": "color.text.sub"
+    },
+    {
+     "name": "viewed.chk",
+     "sel": ".fh .chk",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.review.mark.off"
+    },
+    {
+     "name": "bar.hairline",
+     "sel": "div[style*='height:46px']",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "bar.text",
+     "sel": "div[style*='height:46px'] > span:first-child",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "btn.pri.bg",
+     "sel": ".btn.pri",
+     "at": [
+      "left+3",
+      "cy"
+     ],
+     "token": "color.btn.primary.bg"
+    },
+    {
+     "name": "btn.pri.text",
+     "sel": ".btn.pri",
+     "text": true,
+     "token": "color.btn.primary.fg"
+    },
+    {
+     "name": "btn.border",
+     "sel": "div[style*='height:46px'] .btn:not(.pri)",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "btn.text",
+     "sel": "div[style*='height:46px'] .btn:not(.pri)",
+     "text": true,
+     "token": "color.btn.fg"
+    }
+   ],
+   "edges": [
+    {
+     "name": "tree.right",
+     "sel": ".col[style*='width:262px']",
+     "from": [
+      "right-20",
+      "60%"
+     ],
+     "dir": "right",
+     "expect": "right-1"
+    },
+    {
+     "name": "tree.sel.top",
+     "sel": ".row.sel",
+     "from": [
+      "left+6",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "tree.foot.top",
+     "sel": "div[style*='padding:10px 14px;border-top']",
+     "from": [
+      "40%",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "btn.pri.left",
+     "sel": ".btn.pri",
+     "from": [
+      "left-3",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "btn.pri.top",
+     "sel": ".btn.pri",
+     "from": [
+      "left+3",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "rv-06-comment": {
+   "file": "rv",
+   "index": 6,
+   "crop": ".win",
+   "width": 1100,
+   "groups": [
+    "chrome",
+    "review-side",
+    "review-diff"
+   ],
+   "anchors": [
+    {
+     "name": "titlebar.icons.text",
+     "sel": ".title .muted",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "sel.outline",
+     "sel": ".dl.sel",
+     "at": [
+      "right-0.5",
+      "cy"
+     ],
+     "token": "color.diff.sel"
+    },
+    {
+     "name": "note.bg",
+     "sel": ".note",
+     "at": [
+      "right-6",
+      "bottom-4"
+     ],
+     "token": "color.review.note.bg"
+    },
+    {
+     "name": "note.border",
+     "sel": ".note",
+     "at": [
+      "60%",
+      "top+0.5"
+     ],
+     "token": "color.review.note.border"
+    },
+    {
+     "name": "note.body.text",
+     "sel": ".note .nb",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "note.line.text",
+     "sel": ".note .nh span:last-child",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "note.avatar",
+     "sel": ".note .av",
+     "at": [
+      "left+3",
+      "cy"
+     ],
+     "token": "color.review.avatar.bg"
+    },
+    {
+     "name": "editor.border",
+     "sel": ".note[style*='#3a3a3a']",
+     "at": [
+      "left+0.5",
+      "60%"
+     ],
+     "token": "color.diff.sel"
+    },
+    {
+     "name": "editor.save.bg",
+     "sel": ".note .btn.pri",
+     "at": [
+      "left+3",
+      "cy"
+     ],
+     "token": "color.btn.primary.bg"
+    },
+    {
+     "name": "panel.bg",
+     "sel": ".col[style*='width:310px']",
+     "at": [
+      "right-6",
+      "60%"
+     ],
+     "token": "color.review.panel.bg"
+    },
+    {
+     "name": "panel.hairline",
+     "sel": ".col[style*='width:310px']",
+     "at": [
+      "left+0.5",
+      "60%"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "panel.title.text",
+     "sel": ".col[style*='width:310px'] > div:first-child > span:nth-child(2)",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "panel.claude",
+     "sel": ".col[style*='width:310px'] svg",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.claude"
+    },
+    {
+     "name": "draft.bg",
+     "sel": "div[style*='margin:0 14px;border:1px solid #262626']",
+     "at": [
+      "right-6",
+      "top+6"
+     ],
+     "token": "color.window.bg"
+    },
+    {
+     "name": "draft.border",
+     "sel": "div[style*='margin:0 14px;border:1px solid #262626']",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.review.note.border"
+    },
+    {
+     "name": "draft.text",
+     "sel": "div[style*='margin:0 14px;border:1px solid #262626'] > div:first-child",
+     "text": true,
+     "token": "color.review.body"
+    },
+    {
+     "name": "draft.ref.text",
+     "sel": "div[style*='margin:0 14px;border:1px solid #262626'] .muted",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "panel.foot.rule",
+     "sel": "div[style*='padding:12px 14px;border-top']",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "send.bg",
+     "sel": "div[style*='padding:12px 14px;border-top'] .btn.pri",
+     "at": [
+      "left+3",
+      "cy"
+     ],
+     "token": "color.btn.primary.bg"
+    },
+    {
+     "name": "send.text",
+     "sel": "div[style*='padding:12px 14px;border-top'] .btn.pri",
+     "text": true,
+     "token": "color.btn.primary.fg"
+    },
+    {
+     "name": "keep.border",
+     "sel": "div[style*='padding:12px 14px;border-top'] .btn:not(.pri)",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    }
+   ],
+   "edges": [
+    {
+     "name": "panel.left",
+     "sel": ".col[style*='width:310px']",
+     "from": [
+      "left-6",
+      "60%"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "draft.left",
+     "sel": "div[style*='margin:0 14px;border:1px solid #262626']",
+     "from": [
+      "left-4",
+      "top+20"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "draft.top",
+     "sel": "div[style*='margin:0 14px;border:1px solid #262626']",
+     "from": [
+      "40%",
+      "top-4"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "panel.foot.top",
+     "sel": "div[style*='padding:12px 14px;border-top']",
+     "from": [
+      "40%",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "send.top",
+     "sel": "div[style*='padding:12px 14px;border-top'] .btn.pri",
+     "from": [
+      "left+3",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "note.left",
+     "sel": ".note",
+     "from": [
+      "left-4",
+      "bottom-10"
+     ],
+     "dir": "right",
+     "expect": "left"
+    }
+   ]
+  },
+  "rv-09-overview": {
+   "file": "rv",
+   "index": 9,
+   "crop": ".win",
+   "width": 1100,
+   "groups": [
+    "chrome",
+    "review-side"
+   ],
+   "anchors": [
+    {
+     "name": "crumb.current.text",
+     "sel": ".crumb b",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "kbd.border",
+     "sel": ".title .kbd",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "kbd.text",
+     "sel": ".title .kbd",
+     "text": true,
+     "token": "color.text.sub"
+    },
+    {
+     "name": "claude.small",
+     "sel": ".col.grow svg",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.claude"
+    },
+    {
+     "name": "meta.text",
+     "sel": ".col.grow > div:first-child > span:last-child",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "title.text",
+     "sel": "div[style*='font-size:19px']",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "branch.text",
+     "sel": "div[style*='font-size:12px;color:var(--sub)'] code",
+     "text": true,
+     "token": "color.text.sub"
+    },
+    {
+     "name": "tab.on.text",
+     "sel": "span[style*='box-shadow:inset 0 -1px 0']",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "tab.underline",
+     "sel": "span[style*='box-shadow:inset 0 -1px 0']",
+     "at": [
+      "cx",
+      "bottom-0.5"
+     ],
+     "token": "color.text.primary"
+    },
+    {
+     "name": "tab.off.text",
+     "sel": "div[style*='gap:18px'] .muted",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "tabs.hairline",
+     "sel": "div[style*='gap:18px']",
+     "at": [
+      "right-4",
+      "bottom-0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "sec.text",
+     "sel": ".col.grow .sec",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "file.rule",
+     "sel": "div[style*='grid-template-columns:1fr auto auto']",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.diff.rule"
+    },
+    {
+     "name": "file.name.text",
+     "sel": "div[style*='grid-template-columns:1fr auto auto'] span",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "file.sq",
+     "sel": ".col.grow .sq i",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.diff.sq.add"
+    },
+    {
+     "name": "side.bg",
+     "sel": ".col[style*='width:270px']",
+     "at": [
+      "right-6",
+      "45%"
+     ],
+     "token": "color.review.panel.bg"
+    },
+    {
+     "name": "side.hairline",
+     "sel": ".col[style*='width:270px']",
+     "at": [
+      "left+0.5",
+      "45%"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "side.sec.text",
+     "sel": ".col[style*='width:270px'] .sec",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "radio.on",
+     "sel": ".col[style*='width:270px'] span[style*='border:4px']",
+     "at": [
+      "left+1",
+      "cy"
+     ],
+     "token": "color.text.primary"
+    },
+    {
+     "name": "radio.off",
+     "sel": ".col[style*='width:270px'] span[style*='border:1px solid #555']",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.review.mark.off"
+    },
+    {
+     "name": "radio.on.text",
+     "sel": ".col[style*='width:270px'] div[style*='display:grid'] > div:first-child",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "input.border",
+     "sel": "div[style*='min-height:70px']",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.review.input.border"
+    },
+    {
+     "name": "input.placeholder",
+     "sel": "div[style*='min-height:70px']",
+     "text": true,
+     "token": "color.text.placeholder"
+    },
+    {
+     "name": "submit.border",
+     "sel": ".col[style*='width:270px'] .btn:not(.pri)",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "merge.bg",
+     "sel": ".col[style*='width:270px'] .btn.pri",
+     "at": [
+      "left+3",
+      "cy"
+     ],
+     "token": "color.btn.primary.bg"
+    },
+    {
+     "name": "merge.text",
+     "sel": ".col[style*='width:270px'] .btn.pri",
+     "text": true,
+     "token": "color.btn.primary.fg"
+    },
+    {
+     "name": "foot.text",
+     "sel": ".col[style*='width:270px'] > div:last-child",
+     "text": true,
+     "token": "color.text.label"
+    }
+   ],
+   "edges": [
+    {
+     "name": "side.left",
+     "sel": ".col[style*='width:270px']",
+     "from": [
+      "left-6",
+      "45%"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "tabs.bottom",
+     "sel": "div[style*='gap:18px']",
+     "from": [
+      "right-4",
+      "top+4"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "file.rule.top",
+     "sel": "div[style*='grid-template-columns:1fr auto auto']",
+     "from": [
+      "40%",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "input.top",
+     "sel": "div[style*='min-height:70px']",
+     "from": [
+      "40%",
+      "top-4"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "submit.top",
+     "sel": ".col[style*='width:270px'] .btn:not(.pri)",
+     "from": [
+      "cx",
+      "top-4"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "merge.top",
+     "sel": ".col[style*='width:270px'] .btn.pri",
+     "from": [
+      "left+3",
+      "top-4"
+     ],
+     "dir": "down",
+     "expect": "top"
+    }
+   ]
+  },
+  "rv-11-inbox": {
+   "file": "rv2",
+   "index": 1,
+   "crop": ".win",
+   "width": 1100,
+   "groups": [
+    "chrome"
+   ],
+   "anchors": [
+    {
+     "name": "crumb.text",
+     "sel": ".crumb",
+     "text": true,
+     "token": "color.text.sub"
+    },
+    {
+     "name": "kbd.border",
+     "sel": ".title .kbd",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "kbd.text",
+     "sel": ".title .kbd",
+     "text": true,
+     "token": "color.text.sub"
+    },
+    {
+     "name": "side.bg",
+     "sel": ".side",
+     "at": [
+      "right-20",
+      "bottom-60"
+     ],
+     "token": "color.sidebar.bg"
+    },
+    {
+     "name": "side.hairline",
+     "sel": ".side",
+     "at": [
+      "right-0.5",
+      "bottom-60"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "label.text",
+     "sel": ".side .label",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "row.sel.bg",
+     "sel": ".tab.sel",
+     "at": [
+      "right-4",
+      "bottom-4"
+     ],
+     "token": "color.row.selected"
+    },
+    {
+     "name": "row.name.text",
+     "sel": ".tab.sel .name",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "row.meta.text",
+     "sel": ".tab.sel .meta",
+     "text": true,
+     "token": "color.text.meta"
+    },
+    {
+     "name": "row.stat.add",
+     "sel": ".tab.sel .stat .p",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "row.stat.del",
+     "sel": ".tab.sel .stat .m",
+     "text": true,
+     "token": "color.text.meta"
+    },
+    {
+     "name": "row.claude",
+     "sel": ".tab.sel .ic svg",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.claude"
+    },
+    {
+     "name": "dot.hollow",
+     "sel": ".dot.hollow",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.text.sub"
+    },
+    {
+     "name": "foot.hairline",
+     "sel": ".side .foot",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "foot.kbd.border",
+     "sel": ".side .foot .kbd",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "hd.hairline",
+     "sel": ".hd",
+     "at": [
+      "40%",
+      "bottom-0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "hd.title.text",
+     "sel": ".hd .t",
+     "text": true,
+     "token": "color.text.primary"
+    },
+    {
+     "name": "hd.claude",
+     "sel": ".hd .dim svg",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.claude"
+    },
+    {
+     "name": "btn.pri.bg",
+     "sel": ".hd .btn.pri",
+     "at": [
+      "left+3",
+      "cy"
+     ],
+     "token": "color.btn.primary.bg"
+    },
+    {
+     "name": "btn.pri.key.border",
+     "sel": ".hd .btn.pri .kbd",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.inbox.btn.key.border"
+    },
+    {
+     "name": "btn.border",
+     "sel": ".hd .btn:not(.pri)",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "btn.key.border",
+     "sel": ".hd .btn:not(.pri) .kbd",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.kbd.border"
+    },
+    {
+     "name": "strip.hairline",
+     "sel": "div[style*='gap:28px']",
+     "at": [
+      "40%",
+      "bottom-0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "strip.label.text",
+     "sel": "div[style*='gap:28px'] .muted",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "strip.prompt.text",
+     "sel": "span[style*='color:#cfcfcf']",
+     "text": true,
+     "token": "color.inbox.prompt"
+    },
+    {
+     "name": "files.hairline",
+     "sel": ".flist",
+     "at": [
+      "right-0.5",
+      "bottom-20"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "files.label.text",
+     "sel": ".flist .label",
+     "text": true,
+     "token": "color.text.label"
+    },
+    {
+     "name": "file.sel.bg",
+     "sel": ".flist .f.sel",
+     "at": [
+      "right-4",
+      "top+3"
+     ],
+     "token": "color.row.selected"
+    },
+    {
+     "name": "file.sel.text",
+     "sel": ".flist .f.sel .nm",
+     "text": true,
+     "token": "color.inbox.file.sel"
+    },
+    {
+     "name": "file.text",
+     "sel": ".flist .f:not(.sel) .nm",
+     "text": true,
+     "token": "color.inbox.file.ink"
+    },
+    {
+     "name": "file.st.text",
+     "sel": ".flist .f.sel .st",
+     "text": true,
+     "token": "color.text.meta"
+    },
+    {
+     "name": "fh.bg",
+     "sel": ".fh",
+     "at": [
+      "65%",
+      "top+3"
+     ],
+     "token": "color.inbox.fh.bg"
+    },
+    {
+     "name": "fh.hairline",
+     "sel": ".fh",
+     "at": [
+      "65%",
+      "bottom-0.5"
+     ],
+     "token": "color.hairline"
+    },
+    {
+     "name": "fh.dir.text",
+     "sel": ".fh .path .dir",
+     "text": true,
+     "token": "color.text.meta"
+    },
+    {
+     "name": "fh.ck",
+     "sel": ".fh .ck",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.inbox.ck.border"
+    },
+    {
+     "name": "fh.blocks.add",
+     "sel": ".fh .blocks i",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.text.primary"
+    },
+    {
+     "name": "fh.blocks.del",
+     "sel": ".fh .blocks i:nth-child(5)",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.inbox.blocks.del"
+    },
+    {
+     "name": "hunk.bg",
+     "sel": ".diff > .r.h",
+     "at": [
+      "right-10",
+      "cy"
+     ],
+     "token": "color.inbox.diff.hunk.bg"
+    },
+    {
+     "name": "hunk.rule",
+     "sel": ".diff > .r.h",
+     "at": [
+      "right-10",
+      "top+0.5"
+     ],
+     "token": "color.inbox.diff.hunk.rule"
+    },
+    {
+     "name": "hunk.text",
+     "sel": ".diff > .r.h > span:last-child",
+     "text": true,
+     "token": "color.inbox.diff.hunk.ink"
+    },
+    {
+     "name": "add.bg",
+     "sel": ".diff > .r.a",
+     "at": [
+      "right-6",
+      "cy"
+     ],
+     "token": "color.inbox.diff.add.bg"
+    },
+    {
+     "name": "add.bar",
+     "sel": ".diff > .r.a",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.inbox.diff.add.bar"
+    },
+    {
+     "name": "add.mark",
+     "sel": ".diff > .r.a .mk",
+     "text": true,
+     "token": "color.inbox.diff.add.mark"
+    },
+    {
+     "name": "add.num",
+     "sel": ".diff > .r.a .ln:nth-child(2)",
+     "text": true,
+     "token": "color.inbox.diff.add.num"
+    },
+    {
+     "name": "del.bar",
+     "sel": ".diff > .r.d",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.inbox.diff.del.bar"
+    },
+    {
+     "name": "del.mark",
+     "sel": ".diff > .r.d .mk",
+     "text": true,
+     "token": "color.inbox.diff.del.mark"
+    },
+    {
+     "name": "kw.text",
+     "sel": ".diff > .r:nth-child(2) .kw",
+     "text": true,
+     "token": "color.inbox.diff.kw"
+    },
+    {
+     "name": "str.text",
+     "sel": ".diff > .r:nth-child(3) .str",
+     "text": true,
+     "token": "color.inbox.diff.str"
+    },
+    {
+     "name": "ctx.text",
+     "sel": ".diff > .r:nth-child(20) > span:last-child",
+     "text": true,
+     "token": "color.inbox.diff.text"
+    },
+    {
+     "name": "ctx.num",
+     "sel": ".diff > .r:nth-child(20) .ln",
+     "text": true,
+     "token": "color.inbox.diff.num"
+    }
+   ],
+   "edges": [
+    {
+     "name": "side.right",
+     "sel": ".side",
+     "from": [
+      "right-20",
+      "bottom-60"
+     ],
+     "dir": "right",
+     "expect": "right-1"
+    },
+    {
+     "name": "row.sel.top",
+     "sel": ".tab.sel",
+     "from": [
+      "right-4",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "foot.top",
+     "sel": ".side .foot",
+     "from": [
+      "40%",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "hd.bottom",
+     "sel": ".hd",
+     "from": [
+      "right-6",
+      "top+4"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "strip.bottom",
+     "sel": "div[style*='gap:28px']",
+     "from": [
+      "right-6",
+      "top+3"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "files.right",
+     "sel": ".flist",
+     "from": [
+      "right-20",
+      "bottom-20"
+     ],
+     "dir": "right",
+     "expect": "right-1"
+    },
+    {
+     "name": "file.sel.top",
+     "sel": ".flist .f.sel",
+     "from": [
+      "right-4",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "fh.bottom",
+     "sel": ".fh",
+     "from": [
+      "right-6",
+      "top+3"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "btn.pri.left",
+     "sel": ".hd .btn.pri",
+     "from": [
+      "left-3",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "btn.pri.top",
+     "sel": ".hd .btn.pri",
+     "from": [
+      "left+6",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "btn.left",
+     "sel": ".hd .btn:not(.pri)",
+     "from": [
+      "left-3",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    }
+   ]
+  },
+  "nt-07-menu": {
+   "file": "nt",
+   "index": 7,
+   "crop": ".mb-drop",
+   "css": ".mb-drop { grid-template-columns: minmax(0, 1fr) } .mb-drop .it { white-space: nowrap }",
+   "anchors": [
+    {
+     "name": "menu.bg",
+     "sel": ".mb-drop .sub",
+     "at": [
+      "right-4",
+      "cy"
+     ],
+     "token": "color.statusmenu.bg"
+    },
+    {
+     "name": "menu.sub.text",
+     "sel": ".mb-drop .sub",
+     "text": true,
+     "token": "color.statusmenu.mute"
+    },
+    {
+     "name": "menu.hl.bg",
+     "sel": ".mb-drop .it.hl",
+     "at": [
+      "cx",
+      "top+2"
+     ],
+     "token": "color.statusmenu.ink"
+    },
+    {
+     "name": "menu.hl.dot",
+     "sel": ".mb-drop .it.hl .dot",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.statusmenu.hl.fg"
+    },
+    {
+     "name": "menu.hl.kbd.border",
+     "sel": ".mb-drop .it.hl .kbd",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.statusmenu.hl.fg"
+    },
+    {
+     "name": "menu.hl.kbd.text",
+     "sel": ".mb-drop .it.hl .kbd",
+     "text": true,
+     "token": "color.statusmenu.hl.fg"
+    },
+    {
+     "name": "menu.item.text",
+     "sel": ".mb-drop .it:nth-child(3)",
+     "text": true,
+     "token": "color.statusmenu.ink"
+    },
+    {
+     "name": "menu.dot",
+     "sel": ".mb-drop .it:nth-child(3) .dot",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.statusmenu.ink"
+    },
+    {
+     "name": "menu.kbd.border",
+     "sel": ".mb-drop .it:nth-child(3) .kbd",
+     "at": [
+      "cx",
+      "top+0.5"
+     ],
+     "token": "color.statusmenu.line"
+    },
+    {
+     "name": "menu.kbd.text",
+     "sel": ".mb-drop .it:nth-child(3) .kbd",
+     "text": true,
+     "token": "color.statusmenu.mute"
+    },
+    {
+     "name": "menu.rule",
+     "sel": ".mb-drop hr",
+     "at": [
+      "40%",
+      "top+0.5"
+     ],
+     "token": "color.statusmenu.border"
+    },
+    {
+     "name": "menu.dot.hollow",
+     "sel": ".mb-drop .dot.h",
+     "at": [
+      "left+0.5",
+      "cy"
+     ],
+     "token": "color.statusmenu.mute"
+    },
+    {
+     "name": "menu.dot.hollow.inside",
+     "sel": ".mb-drop .dot.h",
+     "at": [
+      "cx",
+      "cy"
+     ],
+     "token": "color.statusmenu.bg"
+    },
+    {
+     "name": "menu.pause.text",
+     "sel": ".mb-drop .it:last-child",
+     "text": true,
+     "token": "color.statusmenu.ink"
+    }
+   ],
+   "edges": [
+    {
+     "name": "menu.hl.top",
+     "sel": ".mb-drop .it.hl",
+     "from": [
+      "cx",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "menu.hl.bottom",
+     "sel": ".mb-drop .it.hl",
+     "from": [
+      "cx",
+      "bottom-2"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    },
+    {
+     "name": "menu.hl.left",
+     "sel": ".mb-drop .it.hl",
+     "from": [
+      "left-3",
+      "top+2"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "menu.dot.left",
+     "sel": ".mb-drop .it.hl .dot",
+     "from": [
+      "left-3",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "menu.kbd.top",
+     "sel": ".mb-drop .it:nth-child(3) .kbd",
+     "from": [
+      "cx",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "menu.rule.top",
+     "sel": ".mb-drop hr",
+     "from": [
+      "40%",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "menu.rule2.top",
+     "sel": ".mb-drop hr:nth-of-type(2)",
+     "from": [
+      "40%",
+      "top-3"
+     ],
+     "dir": "down",
+     "expect": "top"
+    },
+    {
+     "name": "menu.hollow.left",
+     "sel": ".mb-drop .it:nth-child(7) .dot",
+     "from": [
+      "left-3",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "left"
+    }
+   ]
+  }
+ }
+}

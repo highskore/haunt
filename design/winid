@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Window id for screencapture -l: winid <owner name> [--all]
+set -euo pipefail
+exec uv run --quiet --no-project --with pyobjc-framework-Quartz "$(dirname "$0")/tools/winid.py" "$@"

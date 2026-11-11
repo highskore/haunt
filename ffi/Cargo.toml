@@ -1,0 +1,20 @@
+[package]
+name = "haunt-ffi"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["staticlib", "lib"]
+name = "haunt_ffi"
+
+[features]
+default = ["plugins"]
+plugins = ["haunt-core/plugins"]
+# Calls only the HAUNT_FIXTURES app uses; scripts/build-core.sh turns it on for that build.
+fixtures = ["plugins"]
+
+[dependencies]
+haunt-core = { path = "../core", default-features = false, features = ["ffi"] }
+uniffi.workspace = true
+thiserror.workspace = true

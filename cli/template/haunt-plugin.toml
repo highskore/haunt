@@ -1,0 +1,14 @@
+[plugin]
+id = "{{id}}"
+name = "{{name}}"
+description = "{{description}}"
+version = "0.1.0"
+api = "0.4"
+entry = "target/wasm32-wasip2/release/haunt_plugin.wasm"
+license = "MIT"
+
+[capabilities]
+events = ["agent.task", "agent.tool"]
+
+[contributes]
+commands = [{ id = "say-hello", title = "Say hello", key = "cmd+shift+h" }]

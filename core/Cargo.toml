@@ -1,0 +1,30 @@
+[package]
+name = "haunt-core"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[features]
+default = ["plugins"]
+ffi = ["dep:uniffi"]
+plugins = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:sha2", "dep:hmac", "dep:toml"]
+
+[dependencies]
+serde.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+libc = "0.2"
+thiserror.workspace = true
+uniffi = { workspace = true, optional = true }
+wasmtime = { version = "50", optional = true, default-features = false, features = ["cranelift", "component-model", "runtime", "std"] }
+sha2 = { version = "0.10", optional = true }
+hmac = { version = "0.12", optional = true }
+getrandom = "0.4"
+wasmtime-wasi = { version = "50", optional = true, default-features = false, features = ["p2"] }
+toml = { version = "1", optional = true, default-features = false, features = ["std", "parse", "serde", "display"] }
+
+[dev-dependencies]
+wasmtime = { version = "50", default-features = false, features = ["cranelift", "component-model", "runtime", "std", "wat"] }
+
+[[example]]
+name = "plugin_bench"
+required-features = ["plugins"]

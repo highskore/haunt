@@ -1,0 +1,19 @@
+2026-11-01T20:33:57Z start plugin=LoadStats(wasmBytes: 50657, fromCache: true, compileMs: 3.732792, instantiateMs: 0.198209)
+2026-11-01T20:34:01Z notify surface=D3E6E384-1C92-481A-82DF-99A124E58B9E title=probe-mark bytes=5
+2026-11-01T20:34:02Z event surface=D3E6E384-1C92-481A-82DF-99A124E58B9E bytes=210 kind=task_created decoration=Optional(Haunt.Decoration(badge: Optional("new task"), style: "meta", metaSuffix: Optional("write the parser"))) plugin_logs=["hello saw task_created"]
+2026-11-01T20:34:04Z notify surface=D3E6E384-1C92-481A-82DF-99A124E58B9E title=probe-mark bytes=6
+2026-11-01T20:34:05Z event surface=D3E6E384-1C92-481A-82DF-99A124E58B9E bytes=210 kind=task_created decoration=Optional(Haunt.Decoration(badge: Optional("new task"), style: "meta", metaSuffix: Optional("write the parser"))) plugin_logs=["hello saw task_created"]
+2026-11-01T20:34:06Z event surface=D3E6E384-1C92-481A-82DF-99A124E58B9E bytes=215 kind=tool_start decoration=nil plugin_logs=["hello saw tool_start"]
+2026-11-01T20:34:07Z event surface=D3E6E384-1C92-481A-82DF-99A124E58B9E bytes=202 kind=task_updated decoration=nil plugin_logs=["hello saw task_updated"]
+2026-11-01T20:34:08Z event surface=D3E6E384-1C92-481A-82DF-99A124E58B9E bytes=249 kind=tool_done decoration=nil plugin_logs=["hello saw tool_done"]
+2026-11-01T20:34:10Z event surface=D3E6E384-1C92-481A-82DF-99A124E58B9E bytes=169 kind=subagent_start decoration=nil plugin_logs=["hello saw subagent_start"]
+2026-11-01T20:34:11Z event surface=D3E6E384-1C92-481A-82DF-99A124E58B9E bytes=168 kind=subagent_stop decoration=nil plugin_logs=["hello saw subagent_stop"]
+2026-11-01T20:34:12Z notify surface=D3E6E384-1C92-481A-82DF-99A124E58B9E title=probe-mark bytes=5
+2026-11-01T20:34:13Z event surface=D3E6E384-1C92-481A-82DF-99A124E58B9E bytes=200 kind=plan_exit decoration=nil plugin_logs=["hello saw plan_exit"]
+2026-11-01T20:34:14Z event surface=D3E6E384-1C92-481A-82DF-99A124E58B9E bytes=250 kind=plan_exit decoration=nil plugin_logs=["hello saw plan_exit"]
+2026-11-01T20:34:15Z event surface=D3E6E384-1C92-481A-82DF-99A124E58B9E bytes=255 kind=plan_exit decoration=nil plugin_logs=["hello saw plan_exit"]
+2026-11-01T20:34:16Z reject surface=D3E6E384-1C92-481A-82DF-99A124E58B9E bytes=255 error=InvalidJson(reason: "EOF while parsing an object at line 1 column 255") tail=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxEND!"
+2026-11-01T20:34:18Z reject surface=D3E6E384-1C92-481A-82DF-99A124E58B9E bytes=255 error=InvalidJson(reason: "EOF while parsing a string at line 1 column 255") tail=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+2026-11-01T20:34:19Z reject surface=D3E6E384-1C92-481A-82DF-99A124E58B9E bytes=255 error=InvalidJson(reason: "EOF while parsing a string at line 1 column 255") tail=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+2026-11-01T20:34:20Z reject surface=D3E6E384-1C92-481A-82DF-99A124E58B9E bytes=255 error=InvalidJson(reason: "EOF while parsing a string at line 1 column 255") tail=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+2026-11-01T20:34:25Z notify surface=D3E6E384-1C92-481A-82DF-99A124E58B9E title=probe-mark bytes=4

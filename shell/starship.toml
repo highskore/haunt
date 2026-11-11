@@ -1,0 +1,18 @@
+# haunt prompt: dim path and branch, then ❯.
+add_newline = true
+format = "$directory$git_branch$line_break$character"
+
+[directory]
+style = "#6f6f6f"
+truncation_length = 3
+truncate_to_repo = false
+format = "[$path]($style) "
+
+[git_branch]
+style = "#6f6f6f"
+symbol = ""
+format = "[$branch]($style)"
+
+[character]
+success_symbol = "[❯](#e8e8e8)"
+error_symbol = "[❯](#e8e8e8)"

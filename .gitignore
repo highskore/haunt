@@ -1,0 +1,8 @@
+/.toolchain/
+/deps-src/
+/.cache/
+target/
+/build/
+*.xcodeproj/
+.DS_Store
+/.sign-id

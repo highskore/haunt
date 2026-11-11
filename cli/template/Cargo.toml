@@ -1,0 +1,22 @@
+[package]
+# Fixed so the manifest's `entry` path stays valid in every plugin made from this template.
+name = "haunt-plugin"
+description = "{{description}}"
+edition = "2024"
+license = "MIT"
+version = "0.1.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.63", default-features = false, features = ["macros", "realloc"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"
+
+[workspace]

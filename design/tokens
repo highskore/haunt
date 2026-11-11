@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fail if tokens.json drifted from the mockup CSS; --write regenerates it
+set -euo pipefail
+exec uv run --quiet --no-project  "$(dirname "$0")/tools/tokens.py" "$@"

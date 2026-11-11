@@ -1,0 +1,19 @@
+[package]
+name = "haunt-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "haunt"
+path = "src/main.rs"
+
+[features]
+default = ["plugins"]
+# `haunt plugin`; without it the CLI builds without wasmtime.
+plugins = ["haunt-core/plugins"]
+
+[dependencies]
+serde_json.workspace = true
+haunt-core = { path = "../core", default-features = false }
+sha2 = "0.10"
