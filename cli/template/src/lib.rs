@@ -12,6 +12,11 @@ use haunt::plugin::types::{LogLevel, Style};
 struct Plugin;
 
 fn decorate(event: AgentEvent) -> Option<Decoration> {
+    // Unverified events can be forged by anything in the terminal (OSC, wrong nonce) — see the
+    // `verified` comment in wit/haunt-plugin.wit. Never render their content.
+    if !event.verified {
+        return None;
+    }
     match event.kind.as_str() {
         "task_created" => Some(Decoration { badge: Some("new task".into()), style: Style::Meta, meta_suffix: event.summary }),
         "tool_ran" => Some(Decoration { badge: event.summary, style: Style::Kbd, meta_suffix: None }),
@@ -60,10 +65,22 @@ mod tests {
         AgentEvent { kind: kind.into(), session_id: None, agent_id: None, cwd: None, summary: summary.map(Into::into), verified: true }
     }
 
+    fn unverified(kind: &str, summary: Option<&str>) -> AgentEvent {
+        let mut event = event(kind, summary);
+        event.verified = false;
+        event
+    }
+
     #[test]
     fn badges_tasks_and_tools_only() {
         assert_eq!(decorate(event("task_created", Some("fix it"))).unwrap().badge.as_deref(), Some("new task"));
         assert_eq!(decorate(event("tool_ran", Some("Bash"))).unwrap().badge.as_deref(), Some("Bash"));
         assert!(decorate(event("stop", None)).is_none());
+    }
+
+    #[test]
+    fn skips_unverified_events() {
+        assert!(decorate(unverified("task_created", Some("forged subject"))).is_none());
+        assert!(decorate(unverified("tool_ran", Some("Bash"))).is_none());
     }
 }
