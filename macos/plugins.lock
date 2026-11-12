@@ -1,8 +1,8 @@
 # The first-party plugin commits make-app.sh bundles: <name> <repo> <rev>. Bump a rev after pushing the plugin.
-allowlist ssh://git@github.com/highskore/haunt-allowlist.git 6055d99aed0e83f6c63235433a0243c0ef50deb4
-commands ssh://git@github.com/highskore/haunt-commands.git f0bb547ecd63c8e2f423dbc535420e204dd336ea
-decision-log ssh://git@github.com/highskore/haunt-decision-log.git d8f67d1ba422580c07136a3a805a0c36dd7d00b4
-tabs-plus ssh://git@github.com/highskore/haunt-tabs-plus.git 724e2558ed350449318b101e1e8faf73987471b7
+allowlist ssh://git@github.com/highskore/haunt-allowlist.git 9d7b36e4a575dfa53f982f4971c7b02b029b1d0c
+commands ssh://git@github.com/highskore/haunt-commands.git b8b0a03d63a01c2de55ab38918052389d7090731
+decision-log ssh://git@github.com/highskore/haunt-decision-log.git c8ad2b9c99e42075ef978b62bf9feb991b3aa988
+tabs-plus ssh://git@github.com/highskore/haunt-tabs-plus.git bad1345b50f5fafb56767299b3fce554754bf739
 theme-glass ssh://git@github.com/highskore/haunt-theme-glass.git c9932a2997d660e0ad8f82e00f498e11610c75c9
 theme-sigil ssh://git@github.com/highskore/haunt-theme-sigil.git e88f26c9948eaf6e67b1f2ca5db49be367a8ff2c
 theme-win95 ssh://git@github.com/highskore/haunt-theme-win95.git 374ea62ae903a182107f404f8c25bfbb2eae4447
