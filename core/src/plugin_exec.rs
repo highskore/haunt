@@ -52,7 +52,7 @@ impl ExecCommand {
                 if !(1..=LOG_MAX).contains(n) {
                     return Err(format!("git-log takes 1 to {LOG_MAX} commits"));
                 }
-                ("git", vec!["log".into(), "-n".into(), n.to_string(), "--no-color".into(), "--format=%H%x1f%an%x1f%at%x1f%s".into()])
+                ("git", vec!["log".into(), "-n".into(), n.to_string(), "--no-color".into(), "--no-show-signature".into(), "--format=%H%x1f%an%x1f%at%x1f%s".into()])
             }
         })
     }
@@ -80,12 +80,81 @@ pub type ExecSink = Arc<dyn Fn(ExecDone) + Send + Sync>;
 /// Only system and Homebrew locations, never the user's PATH, which an agent's session can change.
 const BIN_DIRS: [&str; 4] = ["/opt/homebrew/bin", "/usr/local/bin", "/Library/Developer/CommandLineTools/usr/bin", "/Applications/Xcode.app/Contents/Developer/usr/bin"];
 
+/// Pinned at command scope, which beats any repo, include or worktree config, and passed to every git gh
+/// starts too: nothing a repo's config names (fsmonitor, pager, hooks, external diff, ssh, credential or
+/// signing programs, editors) runs, no network, and submodules, which have configs of their own, are skipped.
+/// The app's `GitRunner.safeConfig` (macos/Sources/GitDiff.swift) is the same list.
+const SAFE_CONFIG: [(&str, &str); 33] = [
+    ("core.fsmonitor", "false"), ("core.untrackedCache", "false"), ("core.pager", "cat"), ("core.quotePath", "false"),
+    ("core.hooksPath", "/dev/null"), ("core.attributesFile", "/dev/null"), ("diff.external", ""), ("color.ui", "false"),
+    ("submodule.recurse", "false"), ("diff.ignoreSubmodules", "all"), ("status.submoduleSummary", "false"),
+    ("protocol.allow", "never"), ("protocol.ext.allow", "never"), ("protocol.file.allow", "never"),
+    ("protocol.ssh.allow", "never"), ("protocol.http.allow", "never"), ("protocol.https.allow", "never"),
+    ("core.sshCommand", ""), ("core.askPass", ""), ("credential.helper", ""), ("gpg.program", ""),
+    ("gpg.openpgp.program", ""), ("gpg.x509.program", ""), ("gpg.ssh.program", ""), ("log.showSignature", "false"),
+    ("core.editor", "true"), ("sequence.editor", "true"), ("core.alternateRefsCommand", ""), ("core.gitProxy", ""),
+    ("diff.noprefix", "false"), ("diff.relative", "false"), ("status.showUntrackedFiles", "normal"), ("core.preloadIndex", "true"),
+];
+
+/// git's empty tree: attributes come from it, so no `.gitattributes` can name a filter (git 2.40 and later).
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+fn environment(c: &mut Command) {
+    let path = BIN_DIRS.iter().chain(&["/usr/bin", "/bin"]).copied().collect::<Vec<_>>().join(":");
+    c.env_clear();
+    for (k, v) in [
+        ("PATH", path.as_str()), ("LANG", "en_US.UTF-8"), ("NO_COLOR", "1"), ("PAGER", "cat"),
+        ("GIT_TERMINAL_PROMPT", "0"), ("GIT_OPTIONAL_LOCKS", "0"), ("GIT_PAGER", "cat"), ("GIT_CONFIG_NOSYSTEM", "1"),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_ATTR_NOSYSTEM", "1"), ("GIT_ATTR_SOURCE", EMPTY_TREE),
+        ("GIT_NO_REPLACE_OBJECTS", "1"), ("GIT_NO_LAZY_FETCH", "1"),
+        ("GH_PROMPT_DISABLED", "1"), ("GH_NO_UPDATE_NOTIFIER", "1"), ("GH_SPINNER_DISABLED", "1"), ("GH_PAGER", "cat"),
+    ] {
+        c.env(k, v);
+    }
+    c.env("GIT_CONFIG_COUNT", SAFE_CONFIG.len().to_string());
+    for (i, (k, v)) in SAFE_CONFIG.iter().enumerate() {
+        c.env(format!("GIT_CONFIG_KEY_{i}"), k).env(format!("GIT_CONFIG_VALUE_{i}"), v);
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        c.env("HOME", home);
+    }
+}
+
+/// `p` with links resolved, if it and every folder up to / belong to root or the user and only they, admin
+/// or wheel can write to them, as `GitRunner.trusted` checks: a binary anyone else could replace never runs.
+fn trusted(p: &Path) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: getuid has no preconditions.
+    let me = unsafe { libc::getuid() };
+    let safe = |p: &Path| {
+        std::fs::symlink_metadata(p).is_ok_and(|m| {
+            (m.uid() == 0 || m.uid() == me) && m.mode() & 0o002 == 0 && (m.mode() & 0o020 == 0 || m.gid() == 0 || m.gid() == 80)
+        })
+    };
+    let real = p.canonicalize().ok()?;
+    let m = std::fs::metadata(&real).ok()?;
+    (m.is_file() && m.mode() & 0o111 != 0 && real.ancestors().all(safe)).then_some(real)
+}
+
 fn binary(name: &str) -> Result<PathBuf, String> {
     BIN_DIRS
         .iter()
-        .map(|d| Path::new(d).join(name))
-        .find(|p| p.is_file())
-        .ok_or_else(|| format!("{name} is not installed in {}", BIN_DIRS.join(", ")))
+        .find_map(|d| trusted(&Path::new(d).join(name)))
+        .ok_or_else(|| format!("{name} is not installed in {}, or someone other than you or root can change it", BIN_DIRS.join(", ")))
+}
+
+/// Whether the repo's own config (any scope but our pins) defines a filter driver, which `git status` may
+/// run on a changed file; reading config runs nothing. Unknown counts as yes.
+fn defines_filters(git: &Path, dir: &Path) -> bool {
+    let args = ["config", "--show-scope", "-z", "--get-regexp", r"^filter\."].map(String::from);
+    match run_argv(git, &args, dir, TIMEOUT) {
+        Ok(o) if o.status == 1 => false,
+        Ok(o) if o.status == 0 && !o.truncated => {
+            let f: Vec<&str> = o.stdout.split('\0').collect();
+            f.chunks(2).any(|e| e.len() == 2 && e[0] != "command")
+        }
+        _ => true,
+    }
 }
 
 /// Reads at most `OUTPUT_MAX` and drains the rest, so the child never blocks on a full pipe.
@@ -107,36 +176,18 @@ fn read_capped(mut r: impl Read) -> (Vec<u8>, bool) {
 /// Runs `cmd` in `dir` and waits, at most `TIMEOUT`, then kills its whole process group.
 pub fn run(cmd: &ExecCommand, dir: &Path) -> Result<ExecOutput, String> {
     let (prog, args) = cmd.argv()?;
-    run_argv(&binary(prog)?, &args, dir, TIMEOUT)
+    let bin = binary(prog)?;
+    if *cmd == ExecCommand::GitStatus && defines_filters(&bin, dir) {
+        return Err("this repository's config defines git filters, which git status could run; Haunt won't".into());
+    }
+    run_argv(&bin, &args, dir, TIMEOUT)
 }
 
 fn run_argv(bin: &Path, args: &[String], dir: &Path, timeout: Duration) -> Result<ExecOutput, String> {
     let prog = bin.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let path = BIN_DIRS.iter().chain(&["/usr/bin", "/bin"]).copied().collect::<Vec<_>>().join(":");
     let mut c = Command::new(bin);
-    c.args(args)
-        .current_dir(dir)
-        .env_clear()
-        .env("PATH", path)
-        .env("LANG", "en_US.UTF-8")
-        .env("NO_COLOR", "1")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_PAGER", "cat")
-        // A repo's own config could name a program for fsmonitor to run on every status.
-        .env("GIT_CONFIG_COUNT", "1")
-        .env("GIT_CONFIG_KEY_0", "core.fsmonitor")
-        .env("GIT_CONFIG_VALUE_0", "false")
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_NO_UPDATE_NOTIFIER", "1")
-        .env("GH_SPINNER_DISABLED", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    if let Some(home) = std::env::var_os("HOME") {
-        c.env("HOME", home);
-    }
+    environment(&mut c);
+    c.args(args).current_dir(dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let mut child = c.spawn().map_err(|e| format!("{prog}: {e}"))?;
     let (out, err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
     let out = std::thread::spawn(move || read_capped(out));
@@ -181,18 +232,64 @@ mod tests {
         }
     }
 
-    #[test]
-    fn git_runs_in_the_folder_without_the_repos_fsmonitor() {
-        let Ok(_) = binary("git") else { return };
-        let dir = crate::testdir::TempDir::created("exec");
-        let git = |a: &[&str]| Command::new(binary("git").unwrap()).args(a).current_dir(&*dir).output().unwrap();
-        git(&["init", "-q", "-b", "trunk"]);
+    /// A repo whose config names a program everywhere git could run one, each touching `marker`.
+    fn hostile_repo(tag: &str) -> (crate::testdir::TempDir, PathBuf) {
+        let dir = crate::testdir::TempDir::created(tag);
         let marker = dir.join("ran");
-        git(&["config", "core.fsmonitor", &format!("touch {}; false", marker.display())]);
-        let o = run(&ExecCommand::GitStatus, &dir).unwrap();
-        assert_eq!(o.status, 0, "{o:?}");
-        assert!(o.stdout.contains("# branch.head trunk") && !o.truncated, "{o:?}");
-        assert!(!marker.exists(), "the repo's fsmonitor must not run");
+        let evil = dir.join("evil.sh");
+        std::fs::write(&evil, format!("#!/bin/sh\ntouch {}\ncat\n", marker.display())).unwrap();
+        std::fs::set_permissions(&evil, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let git = |a: &[&str]| assert!(Command::new(binary("git").unwrap()).args(a).current_dir(&*dir).env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap().status.success(), "{a:?}");
+        git(&["init", "-q", "-b", "trunk"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        git(&["add", "a.txt"]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "one"]);
+        let e = evil.display().to_string();
+        for (k, v) in [
+            ("core.fsmonitor", e.as_str()), ("core.pager", &e), ("pager.status", &e), ("pager.log", &e), ("gpg.program", &e),
+            ("log.showSignature", "true"), ("diff.external", &e), ("core.sshCommand", &e), ("core.hooksPath", "."),
+        ] {
+            git(&["config", k, v]);
+        }
+        std::fs::write(dir.join(".gitattributes"), "* filter=evil\n").unwrap();
+        std::fs::write(dir.join("a.txt"), "two\n").unwrap();
+        (dir, marker)
+    }
+
+    #[test]
+    fn a_hostile_repo_config_runs_nothing() {
+        let Ok(_) = binary("git") else { return };
+        let (dir, marker) = hostile_repo("exec-hostile");
+        let git_cmds = [ExecCommand::GitStatus, ExecCommand::GitBranch, ExecCommand::GitHead, ExecCommand::GitLog(5)];
+        for c in &git_cmds {
+            let o = run(c, &dir).unwrap();
+            assert_eq!(o.status, 0, "{c:?}: {o:?}");
+        }
+        assert!(run(&ExecCommand::GitStatus, &dir).unwrap().stdout.contains("# branch.head trunk"));
+        // A filter in the repo's config could run on any changed file, attributes or not: status is refused.
+        Command::new(binary("git").unwrap()).args(["config", "filter.evil.clean", &dir.join("evil.sh").display().to_string()]).current_dir(&*dir).output().unwrap();
+        assert!(run(&ExecCommand::GitStatus, &dir).unwrap_err().contains("filters"));
+        for c in &git_cmds[1..] {
+            assert_eq!(run(c, &dir).unwrap().status, 0, "{c:?}");
+        }
+        assert!(!marker.exists(), "a program from the repo's config ran");
+    }
+
+    #[test]
+    fn only_binaries_no_one_else_can_change_run() {
+        let dir = crate::testdir::TempDir::created("exec-trust");
+        let bin = dir.join("git");
+        std::fs::write(&bin, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o757)).unwrap();
+        assert!(trusted(&bin).is_none(), "world-writable");
+        std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        // The temp dir's ancestors include the sticky, world-writable /private/tmp parent chain on macOS.
+        let tmp_safe = Path::new(&*dir).canonicalize().unwrap().ancestors().all(|a| {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::symlink_metadata(a).is_ok_and(|m| m.mode() & 0o002 == 0)
+        });
+        assert_eq!(trusted(&bin).is_some(), tmp_safe);
+        assert!(trusted(Path::new("/bin/sh")).is_some());
     }
 
     #[test]

@@ -244,6 +244,7 @@ enum GitRunner {
         "protocol.http.allow=never", "protocol.https.allow=never",
         "core.sshCommand=", "core.askPass=", "credential.helper=", "gpg.program=",
         "gpg.openpgp.program=", "gpg.x509.program=", "gpg.ssh.program=", "core.editor=true", "sequence.editor=true",
+        "log.showSignature=false", "core.alternateRefsCommand=", "core.gitProxy=",
     ]
 
     /// Whether the repo's config defines a filter, textconv or external diff driver (a working-tree diff

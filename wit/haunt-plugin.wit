@@ -360,7 +360,8 @@ interface keys {
 // Capability `exec`, which names the commands it may run, e.g. `exec = ["gh-pr-checks", "git-status"]`.
 // Each runs with fixed arguments, no shell, no stdin and a cleared environment, in the folder the app
 // opened tab `surface` in, which must qualify as a `${cwd}` of `fs` (inside your home folder, not under a
-// dot-folder or ~/Library). git and gh come from Homebrew or the Command Line Tools, never PATH. A 10 s
+// dot-folder or ~/Library). git and gh come from Homebrew or the Command Line Tools, never PATH, and no
+// program the repo's git config names ever runs; git-status errs in a repo whose config defines a filter. A 10 s
 // timeout kills it and whatever it started; each stream is cut to 256 KB. The result arrives at
 // `on-exec(job, ...)`. At most 2 running per plugin.
 interface exec {
