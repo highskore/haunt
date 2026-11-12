@@ -37,7 +37,7 @@ Every plugin can add palette commands and modes, add entries to a tab's context 
 | `notifications = true` | `notify.notify`, notifications with action buttons; replies arrive at `on-action` |
 | `pty_write = true` | `pty.answer`: Allow or Deny for the surface's pending permission request, nothing else. A verified `permission_seen` haunt can answer carries its `request-key`. |
 | `pty_type = true` | `typing.type-text`: types text, then Return if asked, into the current tab, only while handling a palette command or key the user just ran and never while that tab has a prompt up. No control or invisible characters but a tab. |
-| `fs_read = ["glob", ...]` | `fs.read` and `fs.list` on matching paths |
+| `fs_read = ["${cwd}/glob", ...]` | `fs.read` (files up to 4 MB) and `fs.list` (at most 4096 names) on matching paths inside agent folders; shown in red at install |
 | `fs_write = ["glob", ...]` | `fs.write` on matching paths |
 | `decisions_read = true` | `decisions.query`: the verified permission decisions, newest first. Read only. |
 | `allowlist_suggest = true` | `allowlist.approvals` (each exact Bash command approved in haunt at least twice, per project, with its folder) and `allowlist.propose`, which only offers a rule; Haunt writes it when the user accepts. |
@@ -45,7 +45,7 @@ Every plugin can add palette commands and modes, add entries to a tab's context 
 | `timer = true` | `timer.every(seconds)`: `on-tick(now-ms)` every 15 seconds or more, until `timer.stop()`. Every plugin can read its time zone with `clock.local-offset-min()`. |
 | `sidebar = true` | `sidebar.rows` (tab names, kinds and state groups, no task text) and `sidebar.arrange`: pins, named sections, manual order and colours over Haunt's grouping. Rows needing you always stay first. Drags arrive at `on-row-moved`. |
 
-An fs glob is absolute or starts with `${cwd}/` (the agent's folder, from verified events only, never `$HOME` or the haunt dir). It may use `*` within a path segment, but not `**`, `.` or `..`. Nothing inside the haunt dir is ever reachable.
+An `fs_read` glob starts with `${cwd}/`; an `fs_write` glob is absolute or starts with `${cwd}/` (the agent's folder, from verified events only, never `$HOME` or the haunt dir). It may use `*` within a path segment, but not `**`, `.` or `..`. Nothing inside the haunt dir is ever reachable.
 
 `net`, `hid`, `exec`, `terminal_read` and `clipboard` are reserved: this Haunt version refuses a manifest that asks for them.
 

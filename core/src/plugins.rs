@@ -238,7 +238,7 @@ impl HostState {
             kv: Kv::open(kv_path),
             palette: Vec::new(),
             outbox: Vec::new(),
-            fs: FsScope::new(&caps.fs_read, &caps.fs_write, haunt_dir),
+            fs: FsScope::new(&cwd_globs(&caps.fs_read), &caps.fs_write, haunt_dir),
             pty_times: VecDeque::new(),
             sidebar: match &core {
                 Some(c) if caps.sidebar => Some(c.attach_sidebar()),
@@ -569,6 +569,11 @@ impl wrows::Host for HostState {
             core.detach_rows(token);
         }
     }
+}
+
+/// The `fs_read` globs the manifest check allows, again, so a hand-edited lockfile can't widen reads.
+fn cwd_globs(globs: &[String]) -> Vec<String> {
+    globs.iter().filter(|g| g.starts_with(crate::plugin_manifest::FS_READ_PREFIX)).cloned().collect()
 }
 
 pub const TICK_MIN_SECS: u32 = 15;
@@ -1381,6 +1386,11 @@ mod tests {
         assert!(core.snapshot().groups.iter().flat_map(|g| &g.rows).all(|r| r.decoration.is_none()), "a closed tab's decorations go");
         third.clear_all();
         assert!(third.decorate(b.surface_id, Some(deco("x"))).is_ok());
+    }
+
+    #[test]
+    fn a_lockfile_cannot_widen_fs_read_past_agent_folders() {
+        assert_eq!(cwd_globs(&["/etc/hosts".into(), "${cwd}/a".into(), "${cwd}x".into()]), ["${cwd}/a"]);
     }
 
     #[test]

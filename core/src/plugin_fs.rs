@@ -8,6 +8,9 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 
 pub const FILE_CAP: usize = 4 << 20;
+/// Names `list` returns, and entries it looks at, at most; it runs on the host, outside the CPU budget.
+pub const LIST_CAP: usize = 4096;
+const LIST_SCAN: usize = 65_536;
 const MAX_CWDS: usize = 256;
 const CWD: &str = "${cwd}";
 const GLOB_CAP: usize = 256;
@@ -197,9 +200,15 @@ impl FsScope {
             return Err(denied(path));
         }
         let mut out = Vec::new();
-        for e in std::fs::read_dir(&full).map_err(|e| io_err(path, e))? {
+        for (i, e) in std::fs::read_dir(&full).map_err(|e| io_err(path, e))?.enumerate() {
+            if i == LIST_SCAN {
+                return Err(format!("{path}: more than {LIST_SCAN} entries"));
+            }
             let e = e.map_err(|e| io_err(path, e))?;
             if self.allowed(&self.read, &full.join(e.file_name())) {
+                if out.len() == LIST_CAP {
+                    return Err(format!("{path}: more than {LIST_CAP} matching entries"));
+                }
                 out.push(e.file_name().to_string_lossy().into_owned());
             }
         }
@@ -345,6 +354,19 @@ mod tests {
         let (r, w) = rx.recv_timeout(std::time::Duration::from_secs(2)).expect("fs on a FIFO must not block");
         assert!(r.unwrap_err().contains("not a regular file"));
         assert!(w.unwrap_err().contains("not a regular file"));
+    }
+
+    #[test]
+    fn list_is_capped() {
+        let root = tempdir("list-cap");
+        let dir = root.join("proj/.claude");
+        for i in 0..=LIST_CAP {
+            std::fs::write(dir.join(format!("{i}.json")), "").unwrap();
+        }
+        let e = scope(&root).list(dir.to_str().unwrap()).unwrap_err();
+        assert!(e.contains("more than 4096 matching entries"), "{e}");
+        std::fs::remove_file(dir.join("0.json")).unwrap();
+        assert_eq!(scope(&root).list(dir.to_str().unwrap()).unwrap().len(), LIST_CAP);
     }
 
     #[test]

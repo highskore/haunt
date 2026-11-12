@@ -151,6 +151,9 @@ impl Capabilities {
                 return err(format!("unknown event {e:?} in [capabilities].events"));
             }
         }
+        if let Some(g) = self.fs_read.iter().find(|g| !g.starts_with(FS_READ_PREFIX)) {
+            return err(format!("fs_read glob {g:?} must start with {FS_READ_PREFIX}: a plugin reads only inside agent folders"));
+        }
         for g in self.fs_read.iter().chain(&self.fs_write) {
             crate::plugin_fs::validate_glob(g).map_err(ManifestError)?;
         }
@@ -194,7 +197,7 @@ impl Capabilities {
             out.push(("can type text into the current tab when you run one of its commands".into(), true));
         }
         for g in &self.fs_read {
-            out.push((format!("can read files matching {}", plain_glob(g)), false));
+            out.push((format!("can read files matching {}, which can contain secrets", plain_glob(g)), true));
         }
         for g in &self.fs_write {
             out.push((format!("can write files matching {}", plain_glob(g)), true));
@@ -222,6 +225,9 @@ impl Capabilities {
         grown.describe()
     }
 }
+
+/// Every `fs_read` glob starts with this: reads stay inside the folders agents work in.
+pub const FS_READ_PREFIX: &str = "${cwd}/";
 
 /// The capabilities every plugin gets, for the install prompt.
 pub const ALWAYS: &str = "can add commands and modes to the palette and entries to tab menus, keep up to 10 MB of its own data, and write to its log";
@@ -445,6 +451,18 @@ mod tests {
         assert!(Manifest::parse(&manifest("terminal-read = true")).is_err());
         assert!(Manifest::parse(&manifest("events = [\"agent.tools\"]")).is_err());
         assert!(Manifest::parse(&manifest("fs_read = [\"relative/path\"]")).is_err());
+        let e = Manifest::parse(&manifest("fs_read = [\"/etc/hosts\"]")).unwrap_err();
+        assert!(e.0.contains("must start with ${cwd}/"), "{e}");
+        assert!(Manifest::parse(&manifest("fs_write = [\"/tmp/x\"]")).is_ok(), "fs_write keeps absolute globs");
+    }
+
+    #[test]
+    fn new_0_5_capabilities_parse_and_reading_files_is_shown_in_red() {
+        let m = Manifest::parse(&manifest("decorate = true\ntimer = true\nfs_read = [\"${cwd}/x\"]")).unwrap();
+        let lines = m.capabilities.describe();
+        assert!(lines.iter().any(|(l, red)| l.contains("label, a bar or a sparkline") && !red));
+        assert!(lines.iter().any(|(l, red)| l.contains("every 15 seconds") && !red));
+        assert!(lines.iter().any(|(l, red)| l.starts_with("can read files matching <agent folder>/x") && *red));
     }
 
     #[test]
