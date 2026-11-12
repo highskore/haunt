@@ -507,13 +507,14 @@ private final class CanvasView: NSView {
                 NSBezierPath(roundedRect: r, xRadius: 3, yRadius: 3).fill()
                 let dark = shade > 0.6 && !warn
                 let ctx = NSGraphicsContext.current!.cgContext
+                let sub = sub.flatMap { r.height >= 30 ? $0 : nil }
                 let top = sub == nil ? r.midY - 8 : r.midY - 15
                 if let label {
                     let t = Draw.line(label, Draw.ui(11), dark ? Tok.Color.windowBg : Tok.Color.textPrimary)
                     Draw.text(Draw.truncated(t, r.width - 8, Draw.ui(11), Tok.Color.textPrimary), font: Draw.ui(11), x: r.minX + 4,
                               top: top, lineHeight: 16, in: ctx)
                 }
-                if let sub, r.height >= 30 {
+                if let sub {
                     let color = dark ? Tok.Color.windowBg.withAlphaComponent(0.7) : PanelFrame.color(.dim)
                     let t = Draw.line(sub, Draw.ui(10), color)
                     Draw.text(Draw.truncated(t, r.width - 8, Draw.ui(10), color), font: Draw.ui(10), x: r.minX + 4,
