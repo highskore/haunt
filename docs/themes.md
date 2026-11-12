@@ -127,12 +127,85 @@ Every effect is off by default, so black and white draws as it did before them.
 
 **`[strings]`.** A theme may word seven places: `titlebar.right`, `palette.header`, `palette.foot` (replacing the default hints; a mode's hints stay Haunt's), `palette.input.glyph`, `palette.message` (with `palette.frame = "dialog"`), `sidebar.foot` (with `ornament`; it must show `{agents}` or `{agents.roman}`) and `row.sub.prefix` (before a subagent line). Each is one plain line of up to 64 code points, with no control, bidi or invisible characters and at most two combining marks on a character; none may pass for one of Haunt's status words (Needs you, Running, Idle, Waiting for you, Approve, Done, Failed, and Allow or Deny as a word), checked as plugins' row labels are, lookalikes, spacing and accents included, nor read as a permission request or its answer (no word may start with Allow, Deny, Deni, Approv, Permi or Request). Anything else is refused and logged. `{day.roman}`, `{month.roman}` and `{year.roman}` come from the clock, `{agents}` and `{agents.roman}` from the sidebar; the filled-in line is checked again, and Haunt draws its own words in its place if it fails or doesn't fit whole; a theme's words are never cut short. `row.sub.prefix` is checked together with the subagent label beside it, as cut to fit.
 
+## Layers
+
+A theme can draw its own look as data: rules, frames, bevels, gradients, patterns, small images and vector marks, each in a named **slot**. Haunt draws only what the theme lists, clipped to the slot, under the slot's text, and never on the terminal. A layer can't contain text: `[strings]` stay a theme's only words.
+
+```toml
+[[layer]]
+id = "row-brackets"        # optional; a theme that extends this one replaces the layer with the same id
+slot = "row.selected"
+when = ["focused"]         # optional: draw only in all of these states
+opacity = 1.0              # 0–1
+
+  [[layer.draw]]
+  kind = "path"
+  d = "M0 6 V0 H6"         # SVG path syntax: M L H V C Q Z, absolute or relative
+  view = [6, 6]            # the units `d` is in, scaled to the frame
+  x = "left"               # the frame: an anchor and a length on each axis...
+  w = 6
+  y = "top"
+  h = 6
+  stroke = "@ornament"     # "#rrggbb", "#rrggbbaa", or "@" and a colour token's name
+  repeat = "corners"       # once in each corner, turned to face inward
+
+  [[layer.draw]]
+  kind = "rect"
+  left = 2                 # ...or insets from the slot's edges (the default: all 0, the whole slot)
+  right = 2
+  radius = 4
+  fill = "#ffffff10"
+```
+
+**Slots.** Each is drawn after its own background and before its text.
+
+| Slot | Bounds |
+| --- | --- |
+| `window.bg` | the window, behind every view, minus the terminal |
+| `pane.backdrop` | behind the terminal, at most 12% opaque, only when Ghostty's `background-opacity` is under 1 |
+| `pane.frame` | a 4 pt ring around the terminal, never inside it |
+| `titlebar`, `sidebar`, `sidebar.footer`, `palette`, `palette.field` | those areas |
+| `lights` | each traffic light; `index = 0`–`2` picks one |
+| `label.group` | a group label's line; its text is a text run |
+| `row`, `row.selected`, `row.hover` | a sidebar row's box; they may spill 6 pt past it (shadows), never past the sidebar |
+| `palette.row.selected`, `palette.row.hover` | a palette entry, with the same 6 pt |
+| `icon`, `bar.track`, `bar.fill` | a row's icon, its progress track and the filled part |
+| `status.needs` | a needs-you status; its text is a text run |
+| `palette.caption`, `button`, `button.default` | reserved for the dialog palette |
+
+**States** (`when`): `focused`, `inactive`, `selected`, `hover`, `pressed`.
+
+**The frame.** On each axis, either insets (`left`/`right`, `top`/`bottom`, from −400 to 400; negative reaches out, still clipped), or an anchor (`x`: `left`, `center`, `right`, `text.left`, `text.right`; `y`: `top`, `center`, `bottom`) with a length (`w`, `h`) and an offset (`dx`, `dy`). `from_text = true` starts the left inset at the end of the slot's text run, for a rule after a label. Text anchors are only for `label.group` and `status.needs`.
+
+| `kind` | Keys | Draws |
+| --- | --- | --- |
+| `rect` | `radius`, `fill`, `stroke`, `width`, `dash` | a (rounded) rectangle |
+| `line` | `stroke`, `width`, `dash`, `along` | a line along the frame's `top`, `bottom`, `left`, `right`, `hmid` (default) or `vmid` |
+| `gradient` | `stops`, `angle`, `radius` | a linear gradient: 2–8 `"#colour"` or `"#colour 40%"` stops (places for all or none, in order); `angle` 0 runs left to right, 90 (default) top to bottom |
+| `bevel` | `rings` | one or two 1 pt rings, outermost first, each `[top, left, bottom, right]` colours |
+| `pattern` | `cell`, `dots`; or `tile` | a cell up to 16×16 pt with up to 64 1-pt `"#colour x y"` dots, or a PNG tile, repeated over the frame |
+| `image` | `file`, `repeat` | a PNG from the theme's folder; `repeat` `"corners"` or `"tile"` |
+| `path` | `d`, `view`, `fill`, `stroke`, `width`, `dash`, `repeat` | a vector shape, up to 256 commands; `repeat = "corners"` |
+| `shadow` | `color`, `blur`, `offset`, `radius` | a soft shadow around the frame's shape, not the shape itself: `blur` up to 12, `offset` up to ±6 |
+
+`width` is 0.25–8 pt, `dash` 1–4 lengths from 0.5 to 40, `radius` 0–40.
+
+**What Haunt enforces.**
+- **Clipping:** every layer is clipped to its slot; no slot reaches into the terminal, and `pane.backdrop` is under it.
+- **Readable text:** in a slot with text, every fill, gradient stop (and the blend between stops) and stroke wider than 2 pt is laid over the slot's background, and each of the slot's text colours must still read at 3:1 on it; a layer that fails is skipped and logged. Images and patterns in such a slot are drawn at most 12% opaque.
+- **Caps:** 64 layers for the whole `extends` chain, 16 shapes a layer, 8 images a chain, each PNG up to 256 KB and 512×512 px, 4 MB decoded in all. Images are PNG only, with a plain `[a-z0-9-].png` name in the theme's own folder; no SVG, no animated PNG.
+- **No animation, no text.**
+- **Bad input:** an unknown slot, kind, state or key, a value out of range or of the wrong type, is logged once per save and skipped: the key, else the shape, else the layer. The rest of the theme still applies.
+
+An image fills its frame; a tiled image or pattern tile is drawn at half its pixel size, as @2x art. Core checks the tables and decodes the PNGs (`core/src/theme_layers.rs`); the app resolves colours and draws (`macos/Sources/Layers.swift`).
+
 ## How it works
 
 1. **Tokens.** `gen_tokens.py` emits a `Theme` struct with one field per token from `tokens.json`, plus `AppTokens` (`[app]`) and `Effects`. `Tok.Color.x`, `Tok.Size.x` and `Tok.Font.x` read `Theme.current`.
 2. **Loading.** `HauntConfig.reload` reads `theme`, `LoadedTheme.load` resolves the chain and builds a `Theme` from the defaults plus the overrides, and the theme's `[layout]` and `[ghostty]` go under your own.
 3. **Live reload.** Haunt watches `config.toml`, the themes folder, and the active theme's files (every candidate path, so creating a missing one reloads too). The watches follow the theme on screen, a preview's included. Saving a theme or changing `theme =` takes effect at once. The pickers' list is kept until the themes folder or the installed plugins change.
 4. **Applying.** On a theme change, AppDelegate sets `Theme.current`, flushes the font and row caches, resets the colours held outside `draw`, relays out every view and rewrites the Ghostty config.
-5. **Plugins** read the theme on screen through the `theme` import's `tokens()` (from `Theme.exported()`), so their rows and decorations can match it.
+5. **Layers.** `LoadedTheme.load` hands the chain's files to core, ancestors first, and resolves what comes back against the finished theme; `Layers.draw` is called at each slot's site.
+6. **Plugins** read the theme on screen through the `theme` import's `tokens()` (from `Theme.exported()`), so their rows and decorations can match it.
 
 Fixtures use `bw`, as they ignore your `config.toml`, so `design/check` keeps comparing against the mockups. `HAUNT_THEME=<id>` puts a fixture in another theme, found in the bundled themes or `$TMPDIR/haunt-fixture/themes`.
