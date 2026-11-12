@@ -638,7 +638,18 @@ impl wnotify::Host for HostState {
         if actions.len() > 4 {
             return Err("at most 4 actions".into());
         }
-        let actions: Vec<NotifyAction> = actions.into_iter().map(|a| NotifyAction { id: clip(a.id), title: clip(a.title) }).collect();
+        let actions: Vec<NotifyAction> = actions
+            .into_iter()
+            .map(|a| {
+                let (id, title) = (clip(a.id), clip(a.title));
+                // A button has no tooltip: one that opens a link names its host.
+                let title = match link_host(&id).filter(|_| link_ok(&id, &self.links).is_ok()) {
+                    Some(host) => format!("{title} ({host})"),
+                    None => title,
+                };
+                NotifyAction { id, title }
+            })
+            .collect();
         let binding = binding.map(clip);
         let r = HostRequest::Notify { plugin_id: self.id.clone(), title: clip(title), body: clip(body), actions: actions.clone(), binding: binding.clone() };
         self.request(r)?;
@@ -1146,6 +1157,28 @@ impl HostState {
         }
     }
 
+    /// The user just did something for this plugin: the call may copy once, and open `clicked` if it is
+    /// the link the button carried.
+    fn arm(&mut self, copy: bool, clicked: Option<&str>) {
+        self.copy_ok = copy;
+        self.clicked = clicked.filter(|a| !a.is_empty()).map(str::to_owned);
+    }
+
+    fn disarm(&mut self) {
+        (self.copy_ok, self.clicked) = (false, None);
+    }
+
+    /// The user chose `action_id` on one of this run's notifications or its latest hold summary: armed
+    /// like a panel button.
+    fn notify_click(&mut self, action_id: &str, binding: &str) -> Result<(), String> {
+        let held = binding == HOLD_BINDING && self.hold_actions.iter().any(|a| a == action_id);
+        if !held && !self.notified.iter().any(|(a, b)| a == action_id && b == binding) {
+            return Err(format!("no notification action {action_id:?}"));
+        }
+        self.arm(true, Some(action_id));
+        Ok(())
+    }
+
     /// A call that trapped doesn't get to change the clipboard or open a link.
     fn drop_user_effects(&mut self) {
         self.outbox.retain(|r| !matches!(r, HostRequest::ClipboardWrite { .. } | HostRequest::OpenUrl { .. }));
@@ -1367,6 +1400,11 @@ impl wlink::Host for HostState {
 
 /// Whether `url` may be opened: `https://`, then exactly one of `domains` (so no user, password or
 /// port), then a path, query or fragment of printable ASCII with no space or backslash.
+fn link_host(url: &str) -> Option<&str> {
+    let rest = url.strip_prefix("https://")?;
+    Some(&rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())])
+}
+
 pub fn link_ok(url: &str, domains: &[String]) -> Result<(), String> {
     let rest = url.strip_prefix("https://").ok_or("only https links open")?;
     let (host, tail) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
@@ -1694,10 +1732,9 @@ impl LoadedPlugin {
         if action.is_empty() {
             data.release_sheet(id);
         }
-        (data.copy_ok, data.clicked) = (!action.is_empty(), Some(action.to_owned()).filter(|a| !a.is_empty()));
+        data.arm(!action.is_empty(), Some(action));
         let res = self.user_call(|p| p.on_action(action, &format!("panel:{id}")));
-        let data = self.store.data_mut();
-        (data.copy_ok, data.clicked) = (false, None);
+        self.store.data_mut().disarm();
         res
     }
 
@@ -1765,12 +1802,10 @@ impl LoadedPlugin {
     /// `on-action(action_id, binding)`, only for an action this plugin posted in this run or put in its
     /// latest hold summary.
     pub fn notify_action(&mut self, action_id: &str, binding: &str) -> Result<(), PluginError> {
-        let st = self.store.data();
-        let held = binding == HOLD_BINDING && st.hold_actions.iter().any(|a| a == action_id);
-        if !held && !st.notified.iter().any(|(a, b)| a == action_id && b == binding) {
-            return Err(PluginError(format!("no notification action {action_id:?}")));
-        }
-        self.on_action(action_id, binding)
+        self.store.data_mut().notify_click(action_id, binding).map_err(PluginError)?;
+        let res = self.on_action(action_id, binding);
+        self.store.data_mut().disarm();
+        res
     }
 
     /// The user ran palette item `action_id` (from the palette or its key): `typing` may type into the
@@ -1822,12 +1857,12 @@ impl LoadedPlugin {
         let data = self.store.data_mut();
         data.typing_into = data.core.as_ref().and_then(CoreHandle::selected_surface).filter(|_| terminal_shown);
         data.reads_left = READS_PER_ACTION;
-        data.copy_ok = true;
+        data.arm(true, None);
         let res = self.user_call(|p| p.on_action(action_id, payload));
         let data = self.store.data_mut();
         data.typing_into = None;
         data.reads_left = 0;
-        data.copy_ok = false;
+        data.disarm();
         res
     }
 
@@ -2848,6 +2883,37 @@ mod tests {
         }
         assert_eq!(st.notified.len(), MAX_NOTIFIED);
         assert!(!st.notified.iter().any(|(a, _)| a == "open-pr"), "oldest first out");
+    }
+
+    #[test]
+    fn a_click_on_a_notification_action_may_open_its_link_and_copy_once() {
+        use wclip::Host as _;
+        use wlink::Host as _;
+        use wnotify::Host as _;
+        let caps = Capabilities { notifications: true, clipboard: Some("write".into()), open_url: vec!["github.com".into()], ..Default::default() };
+        let mut st = HostState::new("dev.haunt.ci-lights", &caps, None, None, None);
+        let pr = "https://github.com/o/r/pull/142";
+        let action = |id: &str, title: &str| wnotify::Action { id: id.into(), title: title.into() };
+        st.notify("api · #142 checks failed".into(), String::new(), vec![action(pr, "Open PR"), action("https://evil.com/x", "Docs"), action("snooze", "Snooze")], Some("s1".into())).unwrap();
+        let Some(HostRequest::Notify { actions, .. }) = st.outbox.pop() else { panic!() };
+        let titles: Vec<&str> = actions.iter().map(|a| a.title.as_str()).collect();
+        assert_eq!(titles, ["Open PR (github.com)", "Docs", "Snooze"], "a link's button names its host, if it can open");
+
+        assert!(st.open_url(pr.into()).is_err() && st.write("x".into()).is_err(), "delivering a notification arms nothing");
+        assert!(st.notify_click(pr, "").is_err(), "the binding must match the one posted");
+        assert!(st.notify_click("https://github.com/o/r/pull/9", "s1").is_err(), "only a posted action");
+        st.notify_click(pr, "s1").unwrap();
+        assert!(st.open_url("https://github.com/o/r/pull/9".into()).is_err(), "only the action's own url");
+        st.notify_click(pr, "s1").unwrap();
+        st.open_url(pr.into()).unwrap();
+        assert!(st.open_url(pr.into()).is_err(), "once per click");
+        st.write("brief".into()).unwrap();
+        st.disarm();
+        st.notify_click("snooze", "s1").unwrap();
+        assert!(st.open_url("snooze".into()).is_err());
+        st.disarm();
+        assert!(st.write("x".into()).is_err(), "the call ended");
+        assert_eq!(st.outbox.iter().filter(|r| matches!(r, HostRequest::OpenUrl { .. })).count(), 1);
     }
 
     #[test]
