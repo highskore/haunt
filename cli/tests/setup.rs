@@ -454,7 +454,7 @@ fn a_bundled_theme_previews_without_writing_then_installs() {
     let e = Env::new("plugins-theme", a);
     let p = e.root.join("bundle/dev.haunt.theme-glass");
     std::fs::create_dir_all(&p).unwrap();
-    let manifest = "[plugin]\nid = \"dev.haunt.theme-glass\"\nname = \"Glass\"\nversion = \"0.1.0\"\napi = \"0.4\"\n\
+    let manifest = "[plugin]\nid = \"dev.haunt.theme-glass\"\nname = \"Glass\"\nversion = \"0.1.0\"\napi = \"0.5\"\n\
         [capabilities]\ntheme = true\n[contributes.theme]\nid = \"glass\"\nfile = \"theme.toml\"\n";
     std::fs::write(p.join("haunt-plugin.toml"), manifest).unwrap();
     std::fs::write(p.join("theme.toml"), "name = \"Glass\"\n").unwrap();

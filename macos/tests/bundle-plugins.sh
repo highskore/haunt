@@ -65,7 +65,7 @@ cat >"$P/haunt-plugin.toml" <<'EOF'
 id = "dev.haunt.theme-glass"
 name = "Glass"
 version = "0.1.0"
-api = "0.4"
+api = "0.5"
 [capabilities]
 theme = true
 [contributes.theme]
@@ -95,7 +95,7 @@ set -e
 
 # Every repo is checked before any is built, and the id is [plugin]'s, read as TOML.
 mkdir -p "$T/badid"
-printf '[plugin]\nid = "Dev.Haunt.X"\nname = "X"\nversion = "0.1.0"\napi = "0.4"\nentry = "x.wasm"\n[contributes.theme]\nid = "dev.haunt.x"\n' >"$T/badid/haunt-plugin.toml"
+printf '[plugin]\nid = "Dev.Haunt.X"\nname = "X"\nversion = "0.1.0"\napi = "0.5"\nentry = "x.wasm"\n[contributes.theme]\nid = "dev.haunt.x"\n' >"$T/badid/haunt-plugin.toml"
 set +e
 HAUNT_PLUGINS_DIR="$DIR" HAUNT_FIRST_PARTY_PLUGINS="$T/badid" macos/bundle-plugins.sh "$T/first" tabs-plus 2>"$T/err"; code=$?
 set -e

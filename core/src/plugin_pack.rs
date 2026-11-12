@@ -179,7 +179,7 @@ mod tests {
     use crate::plugins::PluginHost;
     use crate::testdir::TempDir;
 
-    const THEME: &str = "[plugin]\nid = \"dev.haunt.theme-glass\"\nname = \"Glass\"\nversion = \"0.1.0\"\napi = \"0.4\"\n\
+    const THEME: &str = "[plugin]\nid = \"dev.haunt.theme-glass\"\nname = \"Glass\"\nversion = \"0.1.0\"\napi = \"0.5\"\n\
         [capabilities]\ntheme = true\n[contributes.theme]\nid = \"glass\"\nfile = \"theme.toml\"\nfonts = [\"fonts/A.ttf\"]\nlicenses = [\"OFL.txt\"]\n";
 
     fn pack(dir: &Path, manifest: &str) -> PathBuf {
@@ -194,7 +194,7 @@ mod tests {
 
     fn manifest(contributes: &str, caps: &str, entry: &str) -> Result<Manifest, ManifestError> {
         Manifest::parse(&format!(
-            "[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.4\"\n{entry}\n[capabilities]\n{caps}\n[contributes.theme]\n{contributes}\n"
+            "[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.5\"\n{entry}\n[capabilities]\n{caps}\n[contributes.theme]\n{contributes}\n"
         ))
     }
 
@@ -224,7 +224,7 @@ mod tests {
         assert!(manifest(t, "theme = true\nnotifications = true", "").unwrap_err().0.contains("only capability must be theme"));
         assert!(manifest(t, "", "").unwrap_err().0.contains("only capability must be theme"));
         assert!(manifest(t, "theme = true", "entry = \"p.wasm\"").unwrap_err().0.contains("leave out entry"));
-        let none = Manifest::parse("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.4\"\n[capabilities]\ntheme = true\n");
+        let none = Manifest::parse("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.5\"\n[capabilities]\ntheme = true\n");
         assert!(none.unwrap_err().0.contains("must contribute a theme"));
     }
 
