@@ -235,7 +235,9 @@ enum Layers {
         // Never under 2x: a hairline that 1x would blend away is a solid line on a Retina screen.
         let scale = max(2, abs(ctx.userSpaceToDeviceSpaceTransform.a).rounded(.up))
         // `anyBase`: the text may sit on any of these (a gradient's stops), and must read on each.
-        let why = runs.isEmpty ? nil : (anyBase ?? [base]).lazy.compactMap { b in
+        // An empty list is no list: the text is still checked, over `base`.
+        let bases = anyBase.flatMap { $0.isEmpty ? nil : $0 } ?? [base]
+        let why = runs.isEmpty ? nil : bases.lazy.compactMap { b in
             verdict(shown, slot: slot, bounds: bounds, clip: clip, exclude: exclude, run: run, runs: runs, base: b,
                     state: state, index: index, scale: scale, ctm: ctx.ctm, names: names, context: ctx)
         }.first

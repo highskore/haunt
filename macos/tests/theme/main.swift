@@ -738,6 +738,15 @@ do {
               "the palette's veil, translated, is under the field's text: alone \(alone), \(Layers.skipped)")
         Layers.endFrame()
     }
+    // An empty anyBase still checks the text, over base.
+    do {
+        let own = [LayerSpec(id: "own", slot: "row.selected", prims: [PrimSpec(kind: "rect", fill: primary)])]
+        Layers.set(Layers.resolve(own, images: [], theme: white).0, source: LayerSource(specs: own))
+        let c = canvas()
+        check(!Layers.draw("row.selected", CGRect(x: 10, y: 10, width: 80, height: 40), text: [Layers.Run(rect: inner[0], ink: white.color.textPrimary)],
+                           anyBase: [], in: c.ctx), "an empty anyBase never skips the check")
+        Layers.endFrame()
+    }
     // At the screen's scale: half-point rules every point read as a grey at 1x, as solid lines on a Retina screen.
     var rules: [PrimSpec.Cmd] = []
     for y in 0..<40 {
