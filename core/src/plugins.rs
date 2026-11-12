@@ -3286,6 +3286,129 @@ mod tests {
         store
     }
 
+    /// A whole-world plugin. `on-action(id, _)` does nothing for an `id` starting with "?"; otherwise it copies
+    /// "copied" twice and opens `id` twice, then traps if `id` starts with "!". `on-event` copies and opens
+    /// https://github.com/o/r. Every other export is empty.
+    const ARMING_PLUGIN: &str = r#"(module
+        (import "haunt:plugin/clipboard@0.5.0" "write" (func $write (param i32 i32 i32)))
+        (import "haunt:plugin/link@0.5.0" "open-url" (func $open (param i32 i32 i32)))
+        (memory (export "memory") 1)
+        (data (i32.const 64) "copied")
+        (data (i32.const 80) "https://github.com/o/r")
+        (global $heap (mut i32) (i32.const 1024))
+        (func (export "cabi_realloc") (param i32 i32 i32 i32) (result i32)
+            (local $p i32)
+            (local.set $p (i32.and (i32.add (global.get $heap) (i32.sub (local.get 2) (i32.const 1))) (i32.sub (i32.const 0) (local.get 2))))
+            (global.set $heap (i32.add (local.get $p) (local.get 3)))
+            (local.get $p))
+        (func (export "init") (param i32 i32))
+        (func (export "on-settings-changed") (param i32 i32))
+        (func (export "on-event") (param i32)
+            (call $write (i32.const 64) (i32.const 6) (i32.const 16))
+            (call $open (i32.const 80) (i32.const 22) (i32.const 16)))
+        (func (export "palette-items") (param i32 i32 i32 i32) (result i32) (i32.const 8))
+        (func (export "on-action") (param $id i32) (param $len i32) (param i32 i32)
+            (if (i32.and (i32.gt_u (local.get $len) (i32.const 0)) (i32.eq (i32.load8_u (local.get $id)) (i32.const 63)))
+                (then return))
+            (call $write (i32.const 64) (i32.const 6) (i32.const 16))
+            (call $write (i32.const 64) (i32.const 6) (i32.const 16))
+            (call $open (local.get $id) (local.get $len) (i32.const 16))
+            (call $open (local.get $id) (local.get $len) (i32.const 16))
+            (if (i32.and (i32.gt_u (local.get $len) (i32.const 0)) (i32.eq (i32.load8_u (local.get $id)) (i32.const 33)))
+                (then unreachable)))
+        (func (export "row-menu") (param i32 i32) (result i32) (i32.const 8))
+        (func (export "on-row-moved") (param i32 i32 i32 i32 i32 i32 i32))
+        (func (export "on-theme-changed"))
+        (func (export "on-tick") (param i64))
+        (func (export "on-exec") (param i64 i32 i32 i32 i32 i32 i32 i32))
+        (func (export "on-away-changed") (param i32 i64))
+        (func (export "on-hover-hold") (param i32 i32 i32)))"#;
+
+    /// `ARMING_PLUGIN` as a component of the plugin world, loaded with clipboard, open_url and panel.
+    fn arming_plugin() -> LoadedPlugin {
+        let mut resolve = wit_parser::Resolve::default();
+        let pkg = resolve.push_path(Path::new(env!("CARGO_MANIFEST_DIR")).join("../wit/haunt-plugin.wit")).unwrap().0;
+        let world = resolve.select_world(&[pkg], Some("plugin")).unwrap();
+        let mut module = wat::parse_str(ARMING_PLUGIN).unwrap();
+        wit_component::embed_component_metadata(&mut module, &resolve, world, wit_component::StringEncoding::UTF8, false).unwrap();
+        let bytes = wit_component::ComponentEncoder::default().module(&module).unwrap().validate(true).encode().unwrap();
+        let host = PluginHost::new().unwrap();
+        let component = Component::new(&host.engine, &bytes).unwrap();
+        let caps = Capabilities { clipboard: Some("write".into()), open_url: vec!["github.com".into()], panel: true, ..Default::default() };
+        let spec = LoadSpec { id: "dev.x.arming".into(), name: "Arming".into(), caps, settings_json: "{}".into(), ..Default::default() };
+        host.instantiate(&component, &spec).unwrap()
+    }
+
+    /// The clipboard writes and opened links the last calls queued, taken from the outbox.
+    fn effects(p: &mut LoadedPlugin) -> (Vec<String>, Vec<String>) {
+        let (mut copied, mut opened) = (Vec::new(), Vec::new());
+        for r in std::mem::take(&mut p.store.data_mut().outbox) {
+            match r {
+                HostRequest::ClipboardWrite { text, .. } => copied.push(text),
+                HostRequest::OpenUrl { url, .. } => opened.push(url),
+                _ => {}
+            }
+        }
+        (copied, opened)
+    }
+
+    fn show_button(p: &mut LoadedPlugin, action: &str) -> u64 {
+        use wpanel::Host as _;
+        let button = wpanel::Node::Button(wpanel::ButtonNode { label: "Open".into(), action: action.into(), primary: false, surface: None });
+        p.store.data_mut().show("p".into(), wpanel::Placement::Card, "PR".into(), vec![wpanel::PanelNode { parent: None, node: button }]).unwrap();
+        let shown = p.store.data().outbox.iter().rev().find_map(|r| match r {
+            HostRequest::ShowPanel { panel, .. } => Some(panel.generation),
+            _ => None,
+        });
+        effects(p);
+        shown.unwrap()
+    }
+
+    fn disarmed(p: &LoadedPlugin) -> bool {
+        let st = p.store.data();
+        !st.copy_ok && st.clicked.is_none() && st.reads_left == 0 && st.typing_into.is_none() && !st.user_call
+    }
+
+    #[test]
+    fn only_the_user_action_itself_may_copy_or_open_a_link() {
+        let pr = "https://github.com/o/r/pull/1";
+        let mut p = arming_plugin();
+        assert!(disarmed(&p), "init arms nothing");
+
+        let g = show_button(&mut p, pr);
+        p.panel_action("p", g, pr).unwrap();
+        assert_eq!(effects(&mut p), (vec!["copied".to_string()], vec![pr.to_string()]), "a button press copies once and opens its own url once");
+        assert!(disarmed(&p), "disarmed after the press");
+
+        let g2 = show_button(&mut p, pr);
+        assert!(p.panel_action("p", g, pr).is_err(), "an older show's button");
+        assert_eq!(effects(&mut p), (vec![], vec![]));
+        p.panel_action("p", g2, "").unwrap();
+        assert_eq!(effects(&mut p), (vec![], vec![]), "closing the panel is not a press");
+        assert!(disarmed(&p));
+
+        let idle = "?https://github.com/o/r";
+        let g3 = show_button(&mut p, idle);
+        p.panel_action("p", g3, idle).unwrap();
+        assert!(disarmed(&p), "an unspent press is disarmed when it returns");
+        p.on_event(&tapped(EventKind::Stop, true, None)).unwrap();
+        assert_eq!(effects(&mut p), (vec![], vec![]), "an agent event arms nothing, even after a press it didn't use");
+
+        p.run_command(pr, true).unwrap();
+        assert_eq!(effects(&mut p), (vec!["copied".to_string()], vec![]), "a command may copy once but opens no link");
+        assert!(disarmed(&p), "run_user_action disarms afterwards");
+        p.run_command(idle, true).unwrap();
+        assert!(disarmed(&p), "an unspent command is disarmed too");
+        p.on_event(&tapped(EventKind::Stop, true, None)).unwrap();
+        assert_eq!(effects(&mut p), (vec![], vec![]));
+
+        let trap = "!https://github.com/o/r";
+        let g4 = show_button(&mut p, trap);
+        assert!(p.panel_action("p", g4, trap).is_err());
+        assert_eq!(effects(&mut p), (vec![], vec![]), "a call that traps leaves nothing queued");
+        assert!(disarmed(&p));
+    }
+
     #[test]
     fn runaway_call_is_interrupted() {
         let host = PluginHost::new().unwrap();

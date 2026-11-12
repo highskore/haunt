@@ -721,6 +721,9 @@ dependencies = [
  "uniffi",
  "wasmtime",
  "wasmtime-wasi",
+ "wat",
+ "wit-component",
+ "wit-parser",
 ]
 
 [[package]]

@@ -28,6 +28,10 @@ toml = { version = "1", optional = true, default-features = false, features = ["
 
 [dev-dependencies]
 wasmtime = { version = "50", default-features = false, features = ["cranelift", "component-model", "runtime", "std", "wat"] }
+# Builds whole-world test plugins from a core WAT module and the WIT (already locked through wasmtime's bindgen).
+wat = "1"
+wit-component = "0.261"
+wit-parser = "0.261"
 
 [[example]]
 name = "plugin_bench"
