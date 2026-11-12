@@ -375,12 +375,16 @@ enum GitRunner {
         return out
     }
 
+    #if DEBUG
     /// Called with each `run`'s arguments; the review tests count processes with it.
     nonisolated(unsafe) static var willRun: (([String]) -> Void)?
+    #endif
 
     /// Blocks the calling thread; call it off the main thread. Output past `maxBytes` is counted, not kept.
     static func run(_ args: [String], cwd: String, timeout: TimeInterval = 10, maxBytes: Int = 16 << 20, input: Data? = nil) -> Output? {
+        #if DEBUG
         willRun?(args)
+        #endif
         guard let git = gitPath, let sandbox = sandboxed(git) else { return nil }
         return spawn(sandboxExec, sandbox + safeConfig.flatMap { ["-c", $0] } + ["--no-pager"] + args, cwd: cwd,
                      env: environment(), timeout: timeout, maxBytes: maxBytes, input: input)
@@ -395,6 +399,8 @@ enum GitRunner {
         let (rd, wr) = (fds[0], fds[1])
         var inFds: [Int32] = [-1, -1]
         if input != nil, pipe(&inFds) != 0 { close(rd); close(wr); return nil }
+        // So a fork on another thread (a shell starting) can't inherit an end and hold the pipe open.
+        for fd in [rd, wr, inFds[0], inFds[1]] where fd >= 0 { _ = fcntl(fd, F_SETFD, FD_CLOEXEC) }
         var actions: posix_spawn_file_actions_t?
         var attr: posix_spawnattr_t?
         posix_spawn_file_actions_init(&actions)
