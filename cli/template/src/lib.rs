@@ -57,6 +57,10 @@ impl Guest for Plugin {
     }
 
     fn on_tick(_now_ms: u64) {}
+
+    fn on_exec(_job: u64, _outcome: Result<haunt::plugin::exec::Output, String>) {}
+
+    fn on_away_changed(_away: bool, _away_ms: u64) {}
 }
 
 export!(Plugin);

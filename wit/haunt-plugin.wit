@@ -4,6 +4,8 @@
 // 0.4: `theme` and `typing` imports; `on-theme-changed` export.
 // 0.5: surface, tool, command, file path, task id and request key on agent-event; `rows`, `timer`,
 //      `clock` and `panel` imports; `on-tick` export; `on-event` returns nothing.
+//      Draft, not linked yet: `hold`, `top-row`, `keys`, `exec`, `sound`, `speech`, `dock`, `glow`,
+//      `title` and `terminal` imports; `on-exec` and `on-away-changed` exports.
 package haunt:plugin@0.5.0;
 
 interface types {
@@ -93,7 +95,8 @@ interface theme {
   tokens: func() -> list<token>;
 }
 
-// Capability `notifications`. Replies arrive at `on-action`.
+// Capability `notifications`. Choosing an action calls `on-action(action.id, binding or "")`. When
+// `binding` is an open tab's surface id, choosing the notification or an action also brings that tab up.
 interface notify {
   record action {
     id: string,
@@ -316,8 +319,126 @@ interface panel {
   close: func(id: string);
 }
 
+// --- Draft: B-D and 5-10. The shapes are settled for plugins to build against; the host doesn't link
+// --- these imports yet, and a manifest asking for their capabilities doesn't install yet.
+
+// Capability `notify_hold`. Holds haunt's notifications and other plugins' while the user focuses,
+// then shows one that sums them up. A permission prompt is never held: its notification still shows,
+// and its row still goes to NEEDS YOU. One hold at a time, owned by the plugin that started it.
+interface hold {
+  // Holds for `minutes` (1 to 240); haunt releases it then if the plugin hasn't.
+  start: func(minutes: u32) -> result<_, string>;
+  // Ends the hold and shows the summary; how many notifications were held.
+  release: func() -> u32;
+}
+
+// Capability `sidebar_top`. One row above every group in the sidebar, drawn like a tab row; the first
+// plugin to set it owns it until it sets `none`. Text is plain; title cut to 32, sub and right to 24.
+// Clicking it calls `on-action(action, "top")` when `action` is set.
+interface top-row {
+  use rows.{tone};
+  record top {
+    title: string,
+    sub: option<string>,
+    right: option<string>,
+    tone: tone,
+    // A thin bar under the row, 0 to 1.
+    bar: option<f32>,
+    action: option<string>,
+  }
+  set: func(row: option<top>) -> result<_, string>;
+}
+
+// Capability `keys`. `chord` is written as in config.toml (`"ctrl+shift+p"`). Pressing it calls
+// `on-action(id, "key-down")`, releasing it `on-action(id, "key-up")`. Refused for a chord haunt or
+// macOS reserves, or one the user already bound; the user can rebind it in config. At most 8 per plugin.
+interface keys {
+  bind: func(id: string, chord: string) -> result<_, string>;
+  unbind: func(id: string);
+}
+
+// Capability `exec`, which names the commands it may run, e.g. `exec = ["gh-pr-checks", "git-status"]`.
+// Each runs with fixed arguments, no shell and no stdin, in the folder the app opened tab `surface` in
+// (the `${cwd}` of `fs`), with a 10 s timeout and output cut to 256 KB. The result arrives at
+// `on-exec(job, ...)`. At most 2 running per plugin.
+interface exec {
+  variant command {
+    // gh pr checks --json name,state,bucket,startedAt,completedAt,link
+    gh-pr-checks,
+    // gh pr view --json number,url,title,state,isDraft,headRefName
+    gh-pr-view,
+    // git status --porcelain=v2 --branch
+    git-status,
+    // git rev-parse --abbrev-ref HEAD
+    git-branch,
+    // git rev-parse HEAD
+    git-head,
+    // git log -n <1 to 50> --no-color --format=%H%x1f%an%x1f%at%x1f%s
+    git-log(u32),
+  }
+  record output {
+    // The exit status; -1 when it timed out or was killed.
+    status: s32,
+    stdout: string,
+    stderr: string,
+    truncated: bool,
+  }
+  // A job id for `on-exec`.
+  run: func(surface: string, command: command) -> result<u64, string>;
+}
+
+// Capability `sound`. Plays haunt's bundled sounds, never the plugin's own audio; the user's Sound
+// setting can mute every plugin.
+interface sound {
+  enum name { chime, bell, rain }
+  // One shot. `pitch` in semitones, -12 to 12; `volume` 0 to 1. At most 4 a second.
+  play: func(sound: name, pitch: s32, volume: f32) -> result<_, string>;
+  // Loops `sound` at `level`, 0 to 1; 0 stops it. One loop per plugin.
+  ambient: func(sound: name, level: f32) -> result<_, string>;
+}
+
+// Capability `speech`. Speaks in the system voice. Text is plain and cut to 200 characters; one
+// utterance at a time, at most 1 every 2 s.
+interface speech {
+  say: func(text: string) -> result<_, string>;
+  stop: func();
+}
+
+// Capability `dock`. The Dock tile: whole images, one per state, that the plugin ships.
+interface dock {
+  // Up to 8 PNGs, at most 1 MB each, by id (letters, digits, '-'); replaces earlier ones.
+  images: func(images: list<tuple<string, list<u8>>>) -> result<_, string>;
+  // Shows image `id` (none: haunt's own icon) with `badge` as the Dock's count badge (none: no badge).
+  // `blink` is an image haunt shows briefly every few seconds, except under Reduce Motion. The first
+  // plugin to show owns the tile until it shows `none` with no badge.
+  show: func(id: option<string>, badge: option<u32>, blink: option<string>) -> result<_, string>;
+}
+
+// Capability `glow`. A hairline glow along the top edge of the display haunt's window is on, over every
+// app, breathing (steady under Reduce Motion), with `label` (plain, at most 32 characters) at its right
+// end. The first plugin to show it owns it until `hide`.
+interface glow {
+  use rows.{tone};
+  show: func(tone: tone, label: option<string>) -> result<_, string>;
+  hide: func();
+}
+
+// Capability `title`. One line of dim mono text right-aligned in the title bar, next to its buttons;
+// plain, at most 48 characters; `none` clears it. The first plugin to set it owns it.
+interface title {
+  set: func(text: option<string>) -> result<_, string>;
+}
+
+// Capability `terminal_read`. The last `lines` (1 to 50) visible lines of another tab's screen, oldest
+// first, with hidden characters spelled out. Read only, never input; only while handling a key or
+// palette command the user just used, like `typing`.
+interface terminal {
+  read: func(surface: string, lines: u32) -> result<list<string>, string>;
+}
+
 world plugin {
   use types.{agent-event, palette-item, menu-item};
+  use exec.{output};
   import log;
   import kv;
   import palette;
@@ -333,6 +454,16 @@ world plugin {
   import timer;
   import clock;
   import panel;
+  import hold;
+  import top-row;
+  import keys;
+  import exec;
+  import sound;
+  import speech;
+  import dock;
+  import glow;
+  import title;
+  import terminal;
 
   export init: func(settings: string);
   export on-settings-changed: func(settings: string);
@@ -349,4 +480,10 @@ world plugin {
   // The interval asked for with `timer.every` passed; `now-ms` is Unix ms. Only plugins granted `timer`
   // get it.
   export on-tick: func(now-ms: u64);
+  // Draft. A job from `exec.run` finished. Only plugins granted `exec` get it.
+  export on-exec: func(job: u64, outcome: result<output, string>);
+  // Draft. The user stepped away (screen locked or asleep, or idle for the `away_after` setting) or
+  // came back; `away-ms` is how long they were gone, set when `away` is false. Only plugins granted
+  // `away` get it.
+  export on-away-changed: func(away: bool, away-ms: u64);
 }
