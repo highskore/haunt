@@ -4,8 +4,8 @@
 // 0.4: `theme` and `typing` imports; `on-theme-changed` export.
 // 0.5: surface, tool, command, file path, task id and request key on agent-event; `rows`, `timer`,
 //      `clock` and `panel` imports; `on-tick` export; `on-event` returns nothing.
-//      `hold`, `top-row`, `keys`, `exec` and `terminal` imports; `on-exec`, `on-away-changed` and
-//      `on-hover-hold` exports. Draft, not linked yet: `sound`, `speech`, `dock`, `glow` and `title` imports.
+//      `hold`, `top-row`, `keys`, `exec` and `terminal` imports; `on-exec`, `on-away-changed`,
+//      `on-hover-hold` and `on-fs-tree` exports. Draft, not linked yet: `sound`, `speech`, `dock`, `glow` and `title` imports.
 package haunt:plugin@0.5.0;
 
 interface types {
@@ -510,18 +510,20 @@ interface fs-list {
   record entry { name: string, size: u64, dir: bool }
   entries: func(dir: string) -> result<list<entry>, string>;
 
-  // The folders under `dir` (scoped like `entries`) down to `depth` levels (0 to 5), sorted by path
-  // ("" is `dir` itself), each with its regular files and their bytes; files deeper than `depth` count
+  // Starts a walk of the folders under `dir` (scoped like `entries`) down to `depth` levels (0 to 5)
+  // and returns a job id at once; the result reaches `on-fs-tree(job, ...)`, sorted by path ("" is
+  // `dir` itself), each folder with its regular files and their bytes; files deeper than `depth` count
   // toward their folder at `depth`. Dot entries and symlinks are skipped. After 50,000 entries or
   // 1.5 s it returns what it counted with `truncated`. One call per 10 s.
   record folder { path: string, files: u32, bytes: u64 }
   record tree-result { folders: list<folder>, truncated: bool }
-  tree: func(dir: string, depth: u8) -> result<tree-result, string>;
+  tree: func(dir: string, depth: u8) -> result<u64, string>;
 }
 
 world plugin {
   use types.{agent-event, palette-item, menu-item};
   use exec.{output};
+  use fs-list.{tree-result};
   import log;
   import kv;
   import palette;
@@ -575,4 +577,6 @@ world plugin {
   export on-away-changed: func(away: bool, away-ms: u64);
   // See `keys.hover-hold`. Only the plugin holding it gets it.
   export on-hover-hold: func(held: bool, surface: string);
+  // The walk `fs-list.tree` returned `job` for finished.
+  export on-fs-tree: func(job: u64, outcome: result<tree-result, string>);
 }

@@ -334,6 +334,8 @@ pub struct HostState {
     exec: Vec<String>,
     /// Jobs started and not yet reported.
     exec_jobs: Vec<u64>,
+    /// `fs-list.tree` walks started and not yet reported.
+    tree_jobs: Vec<u64>,
 }
 
 impl Drop for HostState {
@@ -398,6 +400,7 @@ impl HostState {
             read_only: None,
             exec: caps.exec.clone(),
             exec_jobs: Vec::new(),
+            tree_jobs: Vec::new(),
             events: EventGrant { details: caps.event_details, answers: caps.pty_write },
         }
     }
@@ -1330,7 +1333,7 @@ impl wexec::Host for HostState {
         let plugin_id = self.id.clone();
         std::thread::Builder::new()
             .name("haunt-exec".into())
-            .spawn(move || sink(ExecDone { plugin_id, job, outcome: px::run(&cmd, &repo) }))
+            .spawn(move || sink(ExecDone { plugin_id, job, outcome: px::JobOutcome::Exec(px::run(&cmd, &repo)) }))
             .map_err(|e| e.to_string())?;
         self.exec_jobs.push(job);
         self.audit("exec", &clip(surface), cmd_name, job);
@@ -1425,15 +1428,26 @@ impl wfslist::Host for HostState {
         let entries = self.fs.entries(&dir)?;
         Ok(entries.into_iter().map(|e| wfslist::Entry { name: e.name, size: e.size, dir: e.dir }).collect())
     }
-    fn tree(&mut self, dir: String, depth: u8) -> Result<wfslist::TreeResult, String> {
+    /// The walk runs on a thread of its own, off the plugin set's lock, and reports through the core's
+    /// job sink like `exec.run`.
+    fn tree(&mut self, dir: String, depth: u8) -> Result<u64, String> {
+        use crate::plugin_exec::{ExecDone, JobOutcome};
         let now = Instant::now();
         if self.last_tree.is_some_and(|t| now.duration_since(t) < TREE_EVERY) {
             return Err(format!("fs-list.tree runs once per {} s", TREE_EVERY.as_secs()));
         }
         self.last_tree = Some(now);
-        let t = self.fs.tree(&dir, depth)?;
-        let folders = t.folders.into_iter().map(|f| wfslist::Folder { path: f.path, files: f.files, bytes: f.bytes }).collect();
-        Ok(wfslist::TreeResult { folders, truncated: t.truncated })
+        if depth > crate::plugin_fs::TREE_DEPTH {
+            return Err(format!("depth is at most {}", crate::plugin_fs::TREE_DEPTH));
+        }
+        let sink = self.core.as_ref().and_then(CoreHandle::exec_sink).ok_or("no haunt core to report the walk to")?;
+        let (fs, job, plugin_id) = (self.fs.clone(), NEXT_JOB.fetch_add(1, std::sync::atomic::Ordering::Relaxed), self.id.clone());
+        std::thread::Builder::new()
+            .name("haunt-fs-tree-job".into())
+            .spawn(move || sink(ExecDone { plugin_id, job, outcome: JobOutcome::Tree(fs.tree(&dir, depth)) }))
+            .map_err(|e| e.to_string())?;
+        self.tree_jobs.push(job);
+        Ok(job)
     }
 }
 
@@ -1766,13 +1780,27 @@ impl LoadedPlugin {
         self.store.data_mut().return_sheet_due(now, typed).map_err(PluginError)
     }
 
-    /// A job this instance started finished: `on-exec(job, outcome)`. Another instance's job is dropped.
-    pub fn exec_done(&mut self, job: u64, outcome: Result<crate::plugin_exec::ExecOutput, String>) -> Result<(), PluginError> {
-        let jobs = &mut self.store.data_mut().exec_jobs;
+    /// A job this instance started finished: `on-exec(job, outcome)` or `on-fs-tree(job, outcome)`.
+    /// Another instance's job is dropped.
+    pub fn exec_done(&mut self, job: u64, outcome: crate::plugin_exec::JobOutcome) -> Result<(), PluginError> {
+        use crate::plugin_exec::JobOutcome;
+        let data = self.store.data_mut();
+        let jobs = if matches!(outcome, JobOutcome::Exec(_)) { &mut data.exec_jobs } else { &mut data.tree_jobs };
         let Some(i) = jobs.iter().position(|j| *j == job) else { return Ok(()) };
         jobs.remove(i);
-        let outcome = outcome.map(|o| wexec::Output { status: o.status, stdout: o.stdout, stderr: o.stderr, truncated: o.truncated });
-        self.call(|b, s| b.call_on_exec(s, job, outcome.as_ref().map_err(String::as_str)))
+        match outcome {
+            JobOutcome::Exec(o) => {
+                let o = o.map(|o| wexec::Output { status: o.status, stdout: o.stdout, stderr: o.stderr, truncated: o.truncated });
+                self.call(|b, s| b.call_on_exec(s, job, o.as_ref().map_err(String::as_str)))
+            }
+            JobOutcome::Tree(t) => {
+                let t = t.map(|t| wfslist::TreeResult {
+                    folders: t.folders.into_iter().map(|f| wfslist::Folder { path: f.path, files: f.files, bytes: f.bytes }).collect(),
+                    truncated: t.truncated,
+                });
+                self.call(|b, s| b.call_on_fs_tree(s, job, t.as_ref().map_err(String::as_str)))
+            }
+        }
     }
 
     /// The user pressed a button on show `generation` of panel `id`, or closed it (`action` empty):
@@ -2342,8 +2370,10 @@ mod tests {
             assert!(st.entries("/".into()).unwrap_err().contains("not inside"), "no project folder seen");
         }
         assert!(st.entries("/".into()).unwrap_err().contains("rate limit"));
-        assert!(st.tree("/".into(), 2).unwrap_err().contains("not inside"));
+        assert!(st.tree("/".into(), crate::plugin_fs::TREE_DEPTH + 1).unwrap_err().contains("depth is at most"));
         assert!(st.tree("/".into(), 2).unwrap_err().contains("once per 10 s"), "a refused walk still spends the call");
+        st.last_tree = None;
+        assert!(st.tree("/".into(), 2).unwrap_err().contains("no haunt core"), "nothing to report the walk to");
     }
 
     #[test]
@@ -2911,7 +2941,8 @@ mod tests {
         let mut run = |c| {
             st.run(tab.clone(), c).unwrap();
             st.exec_jobs.clear();
-            rx.recv_timeout(Duration::from_secs(10)).unwrap().outcome.unwrap()
+            let crate::plugin_exec::JobOutcome::Exec(o) = rx.recv_timeout(Duration::from_secs(10)).unwrap().outcome else { panic!("not an exec job") };
+            o.unwrap()
         };
         assert_eq!(run(wexec::Command::GitHead).stdout, root_head, "the root repo's HEAD, not the nested one's");
         let status = run(wexec::Command::GitStatus);
@@ -2931,6 +2962,47 @@ mod tests {
         assert!(p.run(tab, wexec::Command::GitStatus).unwrap_err().contains("opened in a git repository inside your home"), "/tmp is outside home");
         p.exec_jobs = vec![1, 2];
         assert!(p.run("nope".into(), wexec::Command::GitStatus).unwrap_err().contains("at most 2"));
+    }
+
+    #[test]
+    fn a_tree_walk_reports_later_and_never_holds_up_a_user_action() {
+        use crate::plugin_exec::{ExecDone, JobOutcome};
+        use std::sync::{Mutex, mpsc};
+        use wfslist::Host as _;
+        let dir = tempdir("tree-job");
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join("proj/.git")).unwrap();
+        std::fs::create_dir_all(home.join("proj/src")).unwrap();
+        std::fs::write(home.join("proj/src/a.rs"), "abc").unwrap();
+        let core = crate::Core::new(&*dir.join("haunt"));
+        let tab = core.register_surface("/a").unwrap().surface_id;
+        // The walk's report waits until the test lets it through, as a slow filesystem would.
+        let (go, gate) = mpsc::channel::<()>();
+        let (done_tx, done) = mpsc::channel::<ExecDone>();
+        let gate = Mutex::new(gate);
+        core.handle().set_exec_sink(Some(Arc::new(move |d| {
+            gate.lock().unwrap().recv().unwrap();
+            done_tx.send(d).unwrap();
+        })));
+        let mut p = arming_plugin(&core);
+        let st = p.store.data_mut();
+        st.fs.set_home(&home);
+        assert!(st.fs.add_cwd(home.join("proj").to_str().unwrap()));
+        let job = st.tree(home.join("proj").to_str().unwrap().into(), 2).unwrap();
+
+        p.run_command("https://github.com/o/r/pull/1", true).unwrap();
+        assert_eq!(effects(&mut p).2, [tab], "a command runs while the walk is out");
+        assert!(done.try_recv().is_err(), "and the walk hasn't reported yet");
+
+        go.send(()).unwrap();
+        let d = done.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!((d.plugin_id.as_str(), d.job), ("dev.x.arming", job));
+        let JobOutcome::Tree(Ok(t)) = &d.outcome else { panic!("{:?}", d.outcome) };
+        assert_eq!(t.folders.iter().find(|f| f.path == "src").map(|f| (f.files, f.bytes)), Some((1, 3)));
+        p.exec_done(d.job, d.outcome.clone()).unwrap();
+        assert!(p.store.data().tree_jobs.is_empty(), "on-fs-tree heard it");
+        p.exec_done(d.job, JobOutcome::Exec(Err("x".into()))).unwrap();
+        assert!(p.store.data().exec_jobs.is_empty(), "a tree job's id is no exec job");
     }
 
     #[test]
@@ -3374,7 +3446,8 @@ mod tests {
         (func (export "on-tick") (param i64))
         (func (export "on-exec") (param i64 i32 i32 i32 i32 i32 i32 i32))
         (func (export "on-away-changed") (param i32 i64))
-        (func (export "on-hover-hold") (param i32 i32 i32)))"#;
+        (func (export "on-hover-hold") (param i32 i32 i32))
+        (func (export "on-fs-tree") (param i64 i32 i32 i32 i32)))"#;
 
     /// `ARMING_PLUGIN` as a component of the plugin world, loaded with clipboard, open_url, panel and
     /// sidebar, on `core`.

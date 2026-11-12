@@ -933,7 +933,7 @@ impl PluginSet {
         self.plugin(plugin_id)?.top_row_clicked()
     }
 
-    /// An `exec` job finished; the plugin that ran it hears it.
+    /// An `exec` or `fs-list.tree` job finished; the plugin that started it hears it.
     pub fn exec_done(&mut self, d: crate::plugin_exec::ExecDone) {
         if let Ok(p) = self.plugin(&d.plugin_id) {
             let _ = p.exec_done(d.job, d.outcome);

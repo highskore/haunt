@@ -63,6 +63,8 @@ impl Guest for Plugin {
     fn on_away_changed(_away: bool, _away_ms: u64) {}
 
     fn on_hover_hold(_held: bool, _surface: String) {}
+
+    fn on_fs_tree(_job: u64, _outcome: Result<haunt::plugin::fs_list::TreeResult, String>) {}
 }
 
 export!(Plugin);

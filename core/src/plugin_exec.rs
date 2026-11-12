@@ -68,12 +68,18 @@ pub struct ExecOutput {
     pub truncated: bool,
 }
 
-/// A finished job, for the plugin that ran it.
+/// A finished `exec.run` or `fs-list.tree` job, for the plugin that started it.
 #[derive(Debug, Clone)]
 pub struct ExecDone {
     pub plugin_id: String,
     pub job: u64,
-    pub outcome: Result<ExecOutput, String>,
+    pub outcome: JobOutcome,
+}
+
+#[derive(Debug, Clone)]
+pub enum JobOutcome {
+    Exec(Result<ExecOutput, String>),
+    Tree(Result<crate::plugin_fs::Tree, String>),
 }
 
 pub type ExecSink = Arc<dyn Fn(ExecDone) + Send + Sync>;

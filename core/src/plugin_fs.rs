@@ -90,7 +90,7 @@ fn git_file_target(git: &Path) -> Option<PathBuf> {
     git.parent()?.join(target).canonicalize().ok()
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct FsScope {
     read: Vec<String>,
     write: Vec<String>,
