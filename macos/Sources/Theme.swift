@@ -147,6 +147,7 @@ extension Theme {
     static let readable: [Readable] = {
         let content: [(String, [String])] = [
             ("color.needs", ["color.window.bg", "color.sidebar.bg"]),
+            ("color.needs", ["color.window.bg", "color.sidebar.bg", "color.row.selected"]),
             ("color.diff.add.ink", ["color.window.bg", "color.diff.add.bg"]),
             ("color.diff.add.mark", ["color.window.bg", "color.diff.add.bg"]),
             ("color.diff.del.ink", ["color.window.bg", "color.diff.del.bg"]),
@@ -166,7 +167,9 @@ extension Theme {
             ("color.review.body", ["color.window.bg"]),
             ("color.text.primary", ["color.window.bg"]),
             ("color.text.primary", ["color.window.bg", "color.sidebar.bg"]),
+            ("color.text.primary", ["color.window.bg", "color.sidebar.bg", "color.row.selected"]),
             ("color.text.sub", ["color.window.bg", "color.sidebar.bg"]),
+            ("color.text.sub", ["color.window.bg", "color.sidebar.bg", "color.row.selected"]),
             ("color.text.meta", ["color.window.bg", "color.sidebar.bg"]),
             ("color.text.label", ["color.window.bg", "color.sidebar.bg"]),
             ("color.text.hi", ["color.window.bg"]),

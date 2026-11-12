@@ -493,6 +493,11 @@ write(user, "chromemid", "[color]\nwindow.bg = \"#777777\"\nsidebar.bg = \"#7777
 check(load("chromemid").theme.app.textChrome.isEmpty, "a blend between stops must read too")
 check(LoadedTheme.chromeSamples([NSColor.black, NSColor.white]).count == 17, "sixteen samples a segment")
 
+// A selected row's text reads on its fill.
+write(user, "selfill", "[color]\nwindow.bg = \"#000000\"\nsidebar.bg = \"#000000\"\nrow.selected = \"#555555\"\ntext.primary = \"#999999\"\n")
+check(load("selfill").theme.color.textPrimary.hex == "#ffffff" && load("selfill").problems.contains { $0.contains("color.text.primary") },
+      "grey that reads on the sidebar but not on its selection is fixed: \(load("selfill").problems)")
+
 // A light window's dark terminal: its text is checked against the terminal's background, not the window's.
 write(user, "dosbox", "appearance = \"light\"\n[color]\nwindow.bg = \"#c0c0c0\"\ntext.terminal = \"#c0c0c0\"\n[ghostty]\nbackground = \"#000000\"\n")
 write(user, "dosdim", "appearance = \"light\"\n[color]\nwindow.bg = \"#c0c0c0\"\ntext.terminal = \"#c0c0c0\"\n")
