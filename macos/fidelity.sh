@@ -79,10 +79,21 @@ p, n = sys.argv[1], int(sys.argv[2])
 _, pw, ph, px, py = map(int, sys.argv[3].split())
 _, mw, mh, mx, my = map(int, sys.argv[4].split())
 im = Image.open(p)
-x, y = (0, 0) if im.width == pw * 2 else ((px - mx) * 2, (py - my) * 2)
-im.crop((x + n, y + n, x + pw * 2 - n, y + ph * 2 - n)).save(p, icc_profile=im.info.get("icc_profile"))
+k = 2 if im.width in (pw * 2, mw * 2) else 1
+x, y = (0, 0) if im.width == pw * k else ((px - mx) * k, (py - my) * k)
+c = n * k // 2
+im.crop((x + c, y + c, x + pw * k - c, y + ph * k - c)).save(p, icc_profile=im.info.get("icc_profile"))
 ' "$OUT/$tag-capture.png" "$inset" "$win" "$main"
       fi
+      # The references are 2x; a capture from a 1x display is scaled up to match them.
+      uv run --quiet --no-project --with pillow python -I -c '
+import sys
+from PIL import Image
+p, ref = sys.argv[1], Image.open(sys.argv[2])
+im = Image.open(p)
+if im.width * 2 == ref.width:
+    im.resize((im.width * 2, im.height * 2), Image.NEAREST).save(p, icc_profile=im.info.get("icc_profile"))
+' "$OUT/$tag-capture.png" "$ROOT/design/reference/$s.png"
       "$ROOT/design/check" "$OUT/$tag-capture.png" "$s" --out "$OUT${HAUNT_INACTIVE:+/inactive}" || status=1
     fi
     if [ -n "$pid" ]; then
