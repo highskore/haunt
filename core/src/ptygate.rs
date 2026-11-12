@@ -58,6 +58,7 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testdir::TempDir;
 
     fn answer(surface: &str, request_id: u64) -> HostRequest {
         HostRequest::PtyAnswer { plugin_id: "p".into(), surface: surface.into(), allow: true, request_id }
@@ -65,7 +66,8 @@ mod tests {
 
     #[test]
     fn only_the_live_key_on_its_own_surface_writes() {
-        let c = Core::new(format!("/tmp/haunt-gate-{}", std::process::id()));
+        let d = TempDir::new("gate");
+        let c = Core::new(&*d);
         let a = c.register_surface("/a").unwrap();
         let b = c.register_surface("/b").unwrap();
         let perm = |env: &crate::SurfaceEnv| {
@@ -90,7 +92,8 @@ mod tests {
     #[test]
     fn refused_answers_are_queued_and_logged_against_the_request_on_screen() {
         use crate::{PluginRefusal, Refusal};
-        let c = Core::new(format!("/tmp/haunt-gate-refusal-{}", std::process::id()));
+        let d = TempDir::new("gate-refusal");
+        let c = Core::new(&*d);
         let a = c.register_surface("/a").unwrap();
         // Two lines: terminal-only, so no answer from haunt, a plugin's included.
         let line = format!(
@@ -122,7 +125,8 @@ mod tests {
 
     #[test]
     fn an_accepted_answer_queues_no_refusal() {
-        let c = Core::new(format!("/tmp/haunt-gate-ok-{}", std::process::id()));
+        let d = TempDir::new("gate-ok");
+        let c = Core::new(&*d);
         let a = c.register_surface("/a").unwrap();
         let line = format!(
             r#"{{"v":1,"surface_id":"{}","nonce":"{}","event":"permission_seen","tool_name":"Bash","tool_input":{{"command":"git push"}}}}"#,
@@ -140,7 +144,8 @@ mod tests {
     #[test]
     fn a_request_the_user_typed_into_is_refused_as_in_the_terminal() {
         use crate::{PluginRefusal, Refusal};
-        let c = Core::new(format!("/tmp/haunt-gate-typed-{}", std::process::id()));
+        let d = TempDir::new("gate-typed");
+        let c = Core::new(&*d);
         let a = c.register_surface("/a").unwrap();
         let line = format!(
             r#"{{"v":1,"surface_id":"{}","nonce":"{}","event":"permission_seen","tool_name":"Bash","tool_input":{{"command":"git push"}}}}"#,
@@ -161,7 +166,8 @@ mod tests {
 
     #[test]
     fn typing_needs_the_selected_tab_with_no_prompt_and_clean_text() {
-        let c = Core::new(format!("/tmp/haunt-gate-type-{}", std::process::id()));
+        let d = TempDir::new("gate-type");
+        let c = Core::new(&*d);
         let a = c.register_surface("/a").unwrap();
         let b = c.register_surface("/b").unwrap();
         c.select_surface(&a.surface_id);
