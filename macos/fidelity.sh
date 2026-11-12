@@ -1,6 +1,6 @@
 #!/bin/bash
 # Launches build/haunt-fixtures.app on a mockup fixture, captures its window and runs design/check.
-# Usage: macos/fidelity.sh [screen...]   (default: ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox nt-07-menu th-01-glass)
+# Usage: macos/fidelity.sh [screen...]   (default: ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox nt-07-menu th-01-glass th-02-sigil)
 # The app opens in the background (open -g -n, HAUNT_INACTIVE=1) on a throwaway home and config, so nothing takes
 # focus or touches ~/.haunt; captures get an -inactive suffix. Each instance is killed after its capture, or on exit.
 set -uo pipefail
@@ -37,7 +37,7 @@ if [ ! -d "$APP" ] || [ "$FBIN" -nt "$APP/Contents/MacOS/haunt" ] || [ "$ROOT/bu
   codesign --force --sign - "$APP" >/dev/null 2>&1
 fi
 status=0
-for screen in "${@:-ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox nt-07-menu th-01-glass}"; do
+for screen in "${@:-ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox nt-07-menu th-01-glass th-02-sigil}"; do
   for s in $screen; do
     tag="$s${HAUNT_INACTIVE:+-inactive}"
     # The palette and the menu bar menu are their own windows; the mockup's crop leaves out their 1 pt border.

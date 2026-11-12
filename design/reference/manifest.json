@@ -7230,7 +7230,99 @@
    1796,
    1116
   ],
-  "anchors": [],
-  "edges": []
+  "anchors": [
+   {
+    "name": "tb.bg",
+    "token": "theme",
+    "expect": "#040405",
+    "tol": 0.5,
+    "mode": "point",
+    "x": 600,
+    "y": 20,
+    "ref": "#040405"
+   },
+   {
+    "name": "pal.bg",
+    "token": "theme",
+    "expect": "#050506",
+    "tol": 0.5,
+    "mode": "point",
+    "x": 1120,
+    "y": 671,
+    "ref": "#050506"
+   },
+   {
+    "name": "row.name",
+    "token": "theme",
+    "expect": "#ececf0",
+    "tol": 1.0,
+    "mode": "text",
+    "rect": [
+     86,
+     176,
+     251,
+     202
+    ],
+    "ref": "#ececf0"
+   }
+  ],
+  "edges": [
+   {
+    "name": "tb.rule",
+    "x": 600,
+    "y": 100,
+    "dir": "up",
+    "expect": 87,
+    "tol": 2
+   },
+   {
+    "name": "side.right",
+    "x": 504,
+    "y": 1076,
+    "dir": "right",
+    "expect": 522,
+    "tol": 2
+   },
+   {
+    "name": "pal.left",
+    "x": 1120,
+    "y": 845,
+    "dir": "left",
+    "expect": 1081,
+    "tol": 2
+   },
+   {
+    "name": "pal.top",
+    "x": 1120,
+    "y": 671,
+    "dir": "up",
+    "expect": 633,
+    "tol": 2
+   },
+   {
+    "name": "pal.sel.top",
+    "x": 1564,
+    "y": 793,
+    "dir": "up",
+    "expect": 790,
+    "tol": 2
+   },
+   {
+    "name": "pal.sel.bottom",
+    "x": 1564,
+    "y": 837,
+    "dir": "down",
+    "expect": 838,
+    "tol": 2
+   },
+   {
+    "name": "pal.sel.left",
+    "x": 1108,
+    "y": 793,
+    "dir": "left",
+    "expect": 1101,
+    "tol": 2
+   }
+  ]
  }
 }

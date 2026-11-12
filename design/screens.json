@@ -3273,8 +3273,104 @@
    "file": "th",
    "index": 2,
    "crop": ".win",
-   "anchors": [],
-   "edges": []
+   "anchors": [
+    {
+     "name": "tb.bg",
+     "sel": ".tb",
+     "at": [
+      "left+300",
+      "top+10"
+     ],
+     "hex": "#040405"
+    },
+    {
+     "name": "pal.bg",
+     "sel": ".pal",
+     "at": [
+      "left+20",
+      "top+20"
+     ],
+     "hex": "#050506"
+    },
+    {
+     "name": "row.name",
+     "sel": ".needs .nm",
+     "text": true,
+     "hex": "#ececf0"
+    }
+   ],
+   "edges": [
+    {
+     "name": "tb.rule",
+     "sel": ".tb",
+     "from": [
+      "left+300",
+      "bottom+6"
+     ],
+     "dir": "up",
+     "expect": "bottom"
+    },
+    {
+     "name": "side.right",
+     "sel": ".side",
+     "from": [
+      "right-10",
+      "bottom-20"
+     ],
+     "dir": "right",
+     "expect": "right-1"
+    },
+    {
+     "name": "pal.left",
+     "sel": ".pal",
+     "from": [
+      "left+20",
+      "50%"
+     ],
+     "dir": "left",
+     "expect": "left+1"
+    },
+    {
+     "name": "pal.top",
+     "sel": ".pal",
+     "from": [
+      "left+20",
+      "top+20"
+     ],
+     "dir": "up",
+     "expect": "top+1"
+    },
+    {
+     "name": "pal.sel.top",
+     "sel": ".pr.sel",
+     "from": [
+      "75%",
+      "top+3"
+     ],
+     "dir": "up",
+     "expect": "top+2"
+    },
+    {
+     "name": "pal.sel.bottom",
+     "sel": ".pr.sel",
+     "from": [
+      "75%",
+      "bottom-3"
+     ],
+     "dir": "down",
+     "expect": "bottom-3"
+    },
+    {
+     "name": "pal.sel.left",
+     "sel": ".pr.sel",
+     "from": [
+      "left+3",
+      "top+3"
+     ],
+     "dir": "left",
+     "expect": "left"
+    }
+   ]
   }
  }
 }
