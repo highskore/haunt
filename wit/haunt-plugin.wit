@@ -309,7 +309,8 @@ interface panel {
   record line { x1: f32, y1: f32, x2: f32, y2: f32, shade: f32, key: option<string> }
   record label { x: f32, y: f32, text: string, tone: tone, key: option<string> }
   variant shape { dot(dot), rect(rect), line(line), label(label) }
-  record canvas-node { width: u32, height: u32, shapes: list<shape> }
+  // `ease-ms`: how long keyed shapes take to move, 100 to 3000 ms (default 600).
+  record canvas-node { width: u32, height: u32, shapes: list<shape>, ease-ms: option<u32> }
 
   variant node {
     // Containers: later nodes name them as `parent`.

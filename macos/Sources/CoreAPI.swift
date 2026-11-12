@@ -478,7 +478,7 @@ enum PanelNodeKind: Equatable, Hashable {
     case button(label: String, action: String, primary: Bool, surface: String?)
     case divider
     case grid(rows: UInt32, columns: UInt32, cell: UInt32, cells: [Float], marked: [UInt32])
-    case canvas(width: UInt32, height: UInt32, shapes: [PanelShape])
+    case canvas(width: UInt32, height: UInt32, shapes: [PanelShape], easeMs: UInt32)
 }
 
 struct PanelNode: Equatable, Hashable {

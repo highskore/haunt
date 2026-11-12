@@ -303,8 +303,9 @@ final class PanelFrame: NSView {
             return b
         case let .grid(rows, columns, cell, cells, marked):
             return GridView(rows: Int(rows), columns: Int(columns), cell: CGFloat(cell), cells: cells, marked: Set(marked.map(Int.init)))
-        case let .canvas(width, height, shapes):
-            return CanvasView(size: NSSize(width: CGFloat(width), height: CGFloat(height)), shapes: shapes, from: previous)
+        case let .canvas(width, height, shapes, easeMs):
+            return CanvasView(size: NSSize(width: CGFloat(width), height: CGFloat(height)), shapes: shapes, from: previous,
+                              ease: CFTimeInterval(easeMs) / 1000)
         }
     }
 
@@ -409,7 +410,6 @@ private final class CanvasView: NSView {
         let kind: Int
         let v: [CGFloat]
     }
-    private static let ease: CFTimeInterval = 0.6
 
     private let size: NSSize
     private let shapes: [PanelShape]
@@ -417,10 +417,13 @@ private final class CanvasView: NSView {
     private var from: [Int: Place] = [:]
     private var start: CFTimeInterval = 0
     private var timer: Timer?
+    /// Seconds a keyed shape takes to move (the canvas's `ease-ms`).
+    private let ease: CFTimeInterval
 
-    init(size: NSSize, shapes: [PanelShape], from previous: [String: Place]) {
+    init(size: NSSize, shapes: [PanelShape], from previous: [String: Place], ease: CFTimeInterval) {
         self.size = size
         self.shapes = shapes
+        self.ease = ease
         super.init(frame: NSRect(origin: .zero, size: size))
         wantsLayer = true
         layer?.masksToBounds = true
@@ -460,7 +463,7 @@ private final class CanvasView: NSView {
     override var isFlipped: Bool { true }
     override var intrinsicContentSize: NSSize { size }
 
-    private var progress: CGFloat { CGFloat(min(1, (CACurrentMediaTime() - start) / Self.ease)) }
+    private var progress: CGFloat { CGFloat(min(1, (CACurrentMediaTime() - start) / ease)) }
 
     private static func geometry(_ s: PanelShape) -> (String?, Place) {
         let f = { (a: [Float]) in a.map { CGFloat($0) } }

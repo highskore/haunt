@@ -14,6 +14,8 @@ pub const MAX_TEXT: usize = 256;
 /// Lines a text node keeps; each is plain and cut like any other string.
 pub const MAX_LINES: usize = 40;
 pub const MAX_SUB: usize = 80;
+pub const EASE_MS: u32 = 600;
+const EASE_RANGE: std::ops::RangeInclusive<u32> = 100..=3000;
 const MAX_KEY: usize = 64;
 pub const SHOWS_PER_SEC: usize = 4;
 pub const MAX_PULSES: usize = 16;
@@ -67,7 +69,8 @@ pub enum PanelNodeKind {
     Divider,
     /// `cells` row by row, each 0 to 1, or -1 for an empty cell.
     Grid { rows: u32, columns: u32, cell: u32, cells: Vec<f32>, marked: Vec<u32> },
-    Canvas { width: u32, height: u32, shapes: Vec<PanelShape> },
+    /// `ease_ms`: how long keyed shapes take to move to a new show's place.
+    Canvas { width: u32, height: u32, shapes: Vec<PanelShape>, ease_ms: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -292,7 +295,8 @@ fn kind(n: wpanel::Node, shapes: &mut usize, pulses: &mut usize) -> Result<Panel
             if keys.windows(2).any(|w| w[0] == w[1]) {
                 return Err("a shape key is used once per canvas".into());
             }
-            PanelNodeKind::Canvas { width: c.width, height: c.height, shapes }
+            let ease_ms = c.ease_ms.map_or(EASE_MS, |ms| ms.clamp(*EASE_RANGE.start(), *EASE_RANGE.end()));
+            PanelNodeKind::Canvas { width: c.width, height: c.height, shapes, ease_ms }
         }
     })
 }
@@ -402,7 +406,7 @@ mod tests {
         assert!(build("g".into(), Placement::Window, String::new(), vec![node(None, grid(u32::MAX, 2, vec![], vec![]))]).is_err(), "no overflow");
 
         let dot = |x: f32, pulse| wpanel::Shape::Dot(wpanel::Dot { x, y: 1.0, r: 2.0, shade: 3.0, warn: false, pulse, key: None });
-        let canvas = |shapes: Vec<wpanel::Shape>| Node::Canvas(wpanel::CanvasNode { width: 100, height: 50, shapes });
+        let canvas = |shapes: Vec<wpanel::Shape>| Node::Canvas(wpanel::CanvasNode { width: 100, height: 50, shapes, ease_ms: None });
         let p = build("c".into(), Placement::Card, String::new(), vec![node(None, canvas(vec![dot(1.0, true)]))]).unwrap();
         let PanelNodeKind::Canvas { shapes, .. } = &p.nodes[0].kind else { panic!() };
         assert!(matches!(shapes[0], PanelShape::Dot { shade, .. } if shade == 1.0));
@@ -420,7 +424,7 @@ mod tests {
             wpanel::Shape::Rect(wpanel::Rect { x: 0.0, y: 0.0, w: 10.0, h: 10.0, shade: 0.5, warn: false, label: Some("src".into()), sub, key: key.map(Into::into) })
         };
         let label = |key: &str| wpanel::Shape::Label(wpanel::Label { x: 0.0, y: 0.0, text: "x".into(), tone: wpanel::Tone::Dim, key: Some(key.into()) });
-        let canvas = |shapes| node(None, Node::Canvas(wpanel::CanvasNode { width: 100, height: 50, shapes }));
+        let canvas = |shapes| node(None, Node::Canvas(wpanel::CanvasNode { width: 100, height: 50, shapes, ease_ms: None }));
         let p = build("c".into(), Placement::Right, String::new(), vec![canvas(vec![rect(Some("src"), Some(format!("24\nedits{}", "x".repeat(99)))), label("lbl"), rect(None, None), rect(None, None)])]).unwrap();
         let PanelNodeKind::Canvas { shapes, .. } = &p.nodes[0].kind else { panic!() };
         let PanelShape::Rect { sub: Some(sub), key: Some(k), .. } = &shapes[0] else { panic!() };
@@ -428,6 +432,14 @@ mod tests {
         let dup = build("c".into(), Placement::Right, String::new(), vec![canvas(vec![rect(Some("a"), None), label("a")])]);
         assert!(dup.unwrap_err().contains("once per canvas"));
         assert!(build("c".into(), Placement::Right, String::new(), vec![canvas(vec![label("a")]), canvas(vec![label("a")])]).is_ok(), "per canvas");
+    }
+
+    #[test]
+    fn a_canvas_eases_for_600_ms_unless_it_asks_for_100_to_3000() {
+        let canvas = |ease_ms| node(None, Node::Canvas(wpanel::CanvasNode { width: 10, height: 10, shapes: vec![], ease_ms }));
+        let p = build("c".into(), Placement::Window, String::new(), vec![canvas(None), canvas(Some(2500)), canvas(Some(0)), canvas(Some(u32::MAX))]).unwrap();
+        let ms: Vec<u32> = p.nodes.iter().map(|n| match n.kind { PanelNodeKind::Canvas { ease_ms, .. } => ease_ms, _ => panic!() }).collect();
+        assert_eq!(ms, [EASE_MS, 2500, 100, 3000]);
     }
 
     #[test]
