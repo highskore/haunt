@@ -207,7 +207,8 @@ enum Layers {
     /// Says whether any of the slot's layers were drawn.
     @discardableResult
     static func draw(_ slot: String, _ bounds: NSRect, within: NSRect? = nil, exclude: NSRect? = nil, textRun: NSRect? = nil,
-                     text: [Run]? = nil, base: [NSColor] = [], state: Set<String> = [], index: Int? = nil, in ctx: CGContext) -> Bool {
+                     text: [Run]? = nil, base: [NSColor] = [], anyBase: [[NSColor]]? = nil, state: Set<String> = [], index: Int? = nil,
+                     in ctx: CGContext) -> Bool {
         // A slot that draws nothing this time is not under the next slot's text.
         drawn[slot] = nil
         guard let layers = current[slot] else { return false }
@@ -233,8 +234,12 @@ enum Layers {
         let runs = Self.text[slot].map { t in text ?? t.fg.compactMap(Theme.colorPath).map { Run(rect: run, ink: Theme.current[keyPath: $0]) } } ?? []
         // Never under 2x: a hairline that 1x would blend away is a solid line on a Retina screen.
         let scale = max(2, abs(ctx.userSpaceToDeviceSpaceTransform.a).rounded(.up))
-        if !runs.isEmpty, let why = verdict(shown, slot: slot, bounds: bounds, clip: clip, exclude: exclude, run: run, runs: runs, base: base,
-                                            state: state, index: index, scale: scale, ctm: ctx.ctm, names: names, context: ctx) {
+        // `anyBase`: the text may sit on any of these (a gradient's stops), and must read on each.
+        let why = runs.isEmpty ? nil : (anyBase ?? [base]).lazy.compactMap { b in
+            verdict(shown, slot: slot, bounds: bounds, clip: clip, exclude: exclude, run: run, runs: runs, base: b,
+                    state: state, index: index, scale: scale, ctm: ctx.ctm, names: names, context: ctx)
+        }.first
+        if let why {
             let said = "layers on \(slot) skipped: \(why)"
             if skipped.insert(said).inserted { report(said) }
             return false

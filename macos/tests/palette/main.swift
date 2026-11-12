@@ -90,6 +90,17 @@ Layers.set(Layers.resolve(faintCap, images: [], theme: Theme.current).0, source:
 _ = snapshot()
 check(view.header != nil && Layers.skipped.contains { $0.hasPrefix("layers on palette.caption ") },
       "a caption layer is skipped where a stop is the header's own ink: \(Layers.skipped)")
+// And on each stop with the layer over it: grey ink reads on white and black alone, not on black under a light veil.
+Theme.current.effects.paletteFrame = "dialog"
+Theme.current.effects.paletteHeader = true
+Theme.current.app.strings = ["palette.header": "Run"]
+Theme.current.app.rowSelectInk = NSColor(themeHex: "#808080")!
+Theme.current.app.titlebarFill = ["#ffffff", "#000000"]
+view.update(chip: nil, query: "", placeholder: "", rows: [row("a")], foot: [], maxRows: 8)
+let veilCap = [LayerSpec(id: "veil", slot: "palette.caption", prims: [PrimSpec(kind: "rect", fill: "#ffffff99")])]
+Layers.set(Layers.resolve(veilCap, images: [], theme: Theme.current).0, source: LayerSource(specs: veilCap))
+_ = snapshot()
+check(Layers.skipped.contains { $0.hasPrefix("layers on palette.caption ") }, "a veil that only fails over the black stop is skipped: \(Layers.skipped)")
 Layers.set([], source: LayerSource())
 Theme.current = Theme()
 Theme.statusCheck = { _ in true }
