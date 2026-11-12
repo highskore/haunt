@@ -838,11 +838,13 @@ fn plain_opt(s: Option<String>, max: usize) -> Option<String> {
     s.map(|s| plain(&s, max)).filter(|s| !s.trim().is_empty())
 }
 
-/// One character of a label as matched: `wild` when it wasn't ASCII, so it stands for any letter.
+/// One character of a label as matched: `wild` when it wasn't ASCII, so it stands for any letter;
+/// `sym` when it wasn't a letter, digit or mark either (`✓`, `℮`, `💤`).
 #[derive(Clone, Copy, PartialEq)]
 struct Glyph {
     c: char,
     wild: bool,
+    sym: bool,
 }
 
 /// A break between words: whitespace, ASCII punctuation and any Unicode punctuation (`—`, `【`, `·`).
@@ -857,12 +859,19 @@ fn status_separator(c: char) -> bool {
 /// A separator becomes one space.
 fn status_fold(s: &str) -> Vec<Glyph> {
     use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
-    let lower = s.nfkc().collect::<String>().to_lowercase();
+    use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
     let mut out: Vec<Glyph> = Vec::new();
-    for c in lower.nfd().filter(|&c| !is_combining_mark(c)) {
+    // Judged on the character as written: NFKC turns ™ into the letters "tm".
+    let chars = s.chars().flat_map(|o| {
+        let sym = !o.is_ascii()
+            && !matches!(o.general_category_group(), GeneralCategoryGroup::Letter | GeneralCategoryGroup::Number | GeneralCategoryGroup::Mark);
+        let lower = o.nfkc().collect::<String>().to_lowercase();
+        lower.nfd().filter(|&c| !is_combining_mark(c)).map(move |c| (c, sym)).collect::<Vec<_>>()
+    });
+    for (c, sym) in chars {
         // | looks like l; it is folded, not a break.
         if c != '|' && status_separator(c) {
-            out.push(Glyph { c: ' ', wild: false });
+            out.push(Glyph { c: ' ', wild: false, sym: false });
             continue;
         }
         let mut buf = [0u8; 4];
@@ -873,10 +882,10 @@ fn status_fold(s: &str) -> Vec<Glyph> {
                 '5' => 's',
                 k => k,
             };
-            let g = Glyph { c: k, wild: !c.is_ascii() };
+            let g = Glyph { c: k, wild: !c.is_ascii(), sym };
             match (out.last().copied(), k) {
-                (Some(Glyph { c: 'r', wild: false }), 'n') if !g.wild => *out.last_mut().unwrap() = Glyph { c: 'm', wild: false },
-                (Some(Glyph { c: 'v', wild: false }), 'v') if !g.wild => *out.last_mut().unwrap() = Glyph { c: 'w', wild: false },
+                (Some(Glyph { c: 'r', wild: false, .. }), 'n') if !g.wild => *out.last_mut().unwrap() = Glyph { c: 'm', wild: false, sym: false },
+                (Some(Glyph { c: 'v', wild: false, .. }), 'v') if !g.wild => *out.last_mut().unwrap() = Glyph { c: 'w', wild: false, sym: false },
                 _ => out.push(g),
             }
         }
@@ -899,7 +908,8 @@ fn status_same(w: &[Glyph], p: &[char]) -> bool {
 /// and "Waiting" alone) and the Allow/Deny buttons. Its words (`status_fold`ed, split at every
 /// `status_separator`) are matched whole: refused when one word, or a run of adjacent words read
 /// together, is a phrase run together ("done", "Do.ne", "d o n e", "needs you", "WaitingForYou"). So
-/// "ok-done-ok" is refused, and "abandoned", "idler", "undone·x" and "allowlist ok" are not.
+/// "ok-done-ok" is refused, and "abandoned", "idler", "undone·x" and "allowlist ok" are not. Words are
+/// split twice: with symbols kept as wildcards (`don℮`) and with symbols as breaks (`done✓`).
 pub(crate) fn says_status(text: &str) -> bool {
     static PHRASES: std::sync::LazyLock<Vec<Vec<char>>> = std::sync::LazyLock::new(|| {
         let waiting = crate::layout::WAITING.split(' ').next();
@@ -908,14 +918,17 @@ pub(crate) fn says_status(text: &str) -> bool {
     });
     let longest = PHRASES.iter().map(Vec::len).max().unwrap_or(0);
     let folded = status_fold(text);
-    let words: Vec<&[Glyph]> = folded.split(|g| !status_kept(g)).filter(|w| !w.is_empty()).collect();
-    (0..words.len()).any(|i| {
-        let mut run: Vec<Glyph> = Vec::new();
-        words[i..].iter().any(|w| {
-            run.extend_from_slice(w);
-            run.len() <= longest && PHRASES.iter().any(|p| status_same(&run, p))
+    let says = |brk: &dyn Fn(&Glyph) -> bool| {
+        let words: Vec<&[Glyph]> = folded.split(|g| brk(g)).filter(|w| !w.is_empty()).collect();
+        (0..words.len()).any(|i| {
+            let mut run: Vec<Glyph> = Vec::new();
+            words[i..].iter().any(|w| {
+                run.extend_from_slice(w);
+                run.len() <= longest && PHRASES.iter().any(|p| status_same(&run, p))
+            })
         })
-    })
+    };
+    says(&|g| !status_kept(g)) || says(&|g| !status_kept(g) || g.sym)
 }
 
 /// Whether a suffix or ticker says what a row needing you says, "needs you" or "waiting for you", anywhere
@@ -3016,6 +3029,7 @@ mod tests {
             "\u{0501}\u{043E}\u{0578}\u{0435}", "\u{0456}\u{0501}\u{04CF}\u{0435}", "R\u{0456}\u{0578}\u{0578}\u{0456}\u{0578}g",
             "done\u{2800}", "\u{2800}done", "do\u{2800}ne", "d\u{2800}o\u{2800}n\u{2800}e", "Allow\u{2800}", "needs\u{2800}you",
             "done\u{1D159}", "idle\u{3000}", "ok\u{A0}deny", "fail\u{3164}ed", "do\u{115F}ne",
+            "done✓", "✔done", "done★", "done™", "done\u{2804}", "done∙", "idle💤", "Allow✓", "needs you❗", "✓✓done✓✓",
         ] {
             assert!(decoration(d(bad, wrows::Tone::Dim)).is_err(), "{bad:?}");
         }
@@ -3023,7 +3037,7 @@ mod tests {
         assert!(says_status("done\u{2800}") && says_needs_you("needs\u{2800}you"));
         for ok in [
             "CI 7/9", "spec 11/18", "3 edits", "✓", "wait 2m", "allowlist", "allowlist ok", "🚀🚀🚀🚀", "dev ✓", "denylisted",
-            "abandoned", "idler", "undone·x", "redone", "doneness", "rerunning", "x—undone",
+            "abandoned", "idler", "undone·x", "redone", "doneness", "rerunning", "x—undone", "abandoned✓", "idler💤", "✓allowlist",
         ] {
             let dec = decoration(d(ok, wrows::Tone::Warn)).unwrap();
             assert_eq!(dec.spark.unwrap().tone, Tone::Text, "the sparkline may keep text");
