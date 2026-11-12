@@ -41,6 +41,8 @@ enum Fixture: String {
     case pasteRisky = "paste-risky"
     /// The Glass card (haunt-themes 01): ui-06 in the glass plugin's theme, the palette open on "p".
     case glass = "th-01-glass"
+    /// The Frutiger Aero card (haunt-themes 03): the same screen in the aero plugin's theme.
+    case aero = "th-03-aero"
     /// The Sigilcore card (haunt-themes 02): the same screen in the sigil plugin's theme.
     case sigil = "th-02-sigil"
     /// The Windows 95 card (haunt-themes 04): the same screen in the win95 plugin's theme.
@@ -59,7 +61,7 @@ enum Fixture: String {
 
     /// Mockup 03 and the Glass card show ⌕ + ⚙; other fixtures keep the default.
     var titlebarButtons: [TitlebarButton] {
-        [.sigil, .win95, .dmg].contains(self) ? [] : self == .iconOnly || self == .glass ? [.search, .newTab, .settings] : TitlebarButton.defaults
+        [.sigil, .win95, .dmg].contains(self) ? [] : self == .iconOnly || self == .glass || self == .aero ? [.search, .newTab, .settings] : TitlebarButton.defaults
     }
 
     var isThemeCard: Bool { themePlugin != nil }
@@ -99,6 +101,7 @@ enum Fixture: String {
     var themePlugin: (id: String, theme: String)? {
         switch self {
         case .glass: ("dev.haunt.theme-glass", "glass")
+        case .aero: ("dev.haunt.theme-aero", "aero")
         case .sigil: ("dev.haunt.theme-sigil", "sigil")
         case .win95: ("dev.haunt.theme-win95", "win95")
         case .dmg: ("dev.haunt.theme-dmg", "dmg")
@@ -200,7 +203,7 @@ enum Fixture: String {
                 SidebarGroup(id: "running", label: "RUNNING", rows: [rows[2]]),
                 SidebarGroup(id: "idle", label: "IDLE", rows: [rows[3]]),
             ], colorStyle: .dot)
-        case .groupedFlat, .palette, .suspicious, .codex, .codexLog, .statusMenu, .glass, .sigil, .win95, .dmg:
+        case .groupedFlat, .palette, .suspicious, .codex, .codexLog, .statusMenu, .glass, .aero, .sigil, .win95, .dmg:
             return SidebarSnapshot(groups: [
                 SidebarGroup(id: "needs-you", label: "NEEDS YOU", rows: [rows[1]]),
                 SidebarGroup(id: "running", label: "RUNNING", rows: [rows[0]]),
