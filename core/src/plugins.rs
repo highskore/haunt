@@ -27,9 +27,11 @@ mod bindings {
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
-    allowlist as wallow, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, sidebar as wside, theme as wtheme, typing as wtyping,
-    types as wit,
+    allowlist as wallow, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows, sidebar as wside,
+    theme as wtheme, typing as wtyping, types as wit,
 };
+use crate::decorate::{self, Decoration, Spark, Tone};
+use crate::model::RowsToken;
 
 pub const MEMORY_CAP: usize = 64 << 20;
 const TICK: Duration = Duration::from_millis(10);
@@ -209,6 +211,8 @@ pub struct HostState {
     core: Option<CoreHandle>,
     /// Set while this instance may arrange the sidebar.
     sidebar: Option<SidebarToken>,
+    /// Set while this instance may decorate rows.
+    rows: Option<RowsToken>,
     theme: Arc<Theme>,
     /// The tab focused when the user ran one of this plugin's commands, while that call runs.
     typing_into: Option<String>,
@@ -217,6 +221,7 @@ pub struct HostState {
 impl Drop for HostState {
     fn drop(&mut self) {
         self.release_sidebar();
+        self.release_rows();
     }
 }
 
@@ -241,6 +246,7 @@ impl HostState {
                 }
                 None => None,
             },
+            rows: core.as_ref().filter(|_| caps.decorate).map(|c| c.attach_rows()),
             core,
             theme: Theme::default_shared(),
             typing_into: None,
@@ -251,6 +257,12 @@ impl HostState {
     fn release_sidebar(&mut self) {
         if let (Some(core), Some(token)) = (&self.core, self.sidebar.take()) {
             core.detach_sidebar(token);
+        }
+    }
+
+    fn release_rows(&mut self) {
+        if let (Some(core), Some(token)) = (&self.core, self.rows.take()) {
+            core.detach_rows(token);
         }
     }
 
@@ -508,6 +520,54 @@ impl wside::Host for HostState {
     }
 }
 
+fn tone(t: wrows::Tone) -> Tone {
+    match t {
+        wrows::Tone::Dim => Tone::Dim,
+        wrows::Tone::Text => Tone::Text,
+        wrows::Tone::Needs => Tone::Needs,
+        wrows::Tone::Kbd => Tone::Kbd,
+    }
+}
+
+/// Plain, capped text; None when nothing visible is left.
+fn plain_opt(s: Option<String>, max: usize) -> Option<String> {
+    s.map(|s| plain(&s, max)).filter(|s| !s.trim().is_empty())
+}
+
+fn decoration(d: wrows::Decoration) -> Result<Decoration, String> {
+    let spark = match d.spark {
+        Some(s) => {
+            decorate::check_spark(&s.points)?;
+            Some(Spark { points: s.points, tone: tone(s.tone) })
+        }
+        None => None,
+    };
+    Ok(Decoration {
+        label: plain_opt(d.label, decorate::LABEL_MAX),
+        label_tone: tone(d.label_tone),
+        suffix: plain_opt(d.suffix, decorate::SUFFIX_MAX),
+        suffix_tone: tone(d.suffix_tone),
+        scroll: d.scroll,
+        bar_permille: d.bar.map(decorate::permille).transpose()?,
+        spark,
+    })
+}
+
+impl wrows::Host for HostState {
+    fn decorate(&mut self, surface: String, d: Option<wrows::Decoration>) -> Result<(), String> {
+        let core = self.core.as_ref().ok_or("no haunt core attached")?;
+        let token = self.rows.ok_or("not loaded with the decorate capability")?;
+        let d = d.map(decoration).transpose()?;
+        core.decorate(token, &surface, d).map_err(|e| e.to_string())
+    }
+
+    fn clear_all(&mut self) {
+        if let (Some(core), Some(token)) = (&self.core, self.rows) {
+            core.detach_rows(token);
+        }
+    }
+}
+
 /// Characters of a command, path or summary a plugin gets.
 pub const EVENT_TEXT: usize = 1024;
 
@@ -688,6 +748,7 @@ impl LoadedPlugin {
             };
             self.disabled = Some(why.clone());
             self.store.data_mut().release_sidebar();
+            self.store.data_mut().release_rows();
             PluginError(why)
         })
     }
@@ -847,6 +908,9 @@ impl PluginHost {
         }
         if caps.sidebar {
             wside::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if caps.decorate {
+            wrows::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.fs_read_granted() || caps.fs_write_granted() {
             let mut fs = l.instance("haunt:plugin/fs@0.5.0")?;
@@ -1193,6 +1257,77 @@ mod tests {
         dropped.arrange(arrangement).unwrap();
         drop(dropped);
         assert_eq!(core.snapshot().groups[1].id, "running", "a removed or reloaded plugin's arrangement goes");
+    }
+
+    fn deco(label: &str) -> wrows::Decoration {
+        wrows::Decoration {
+            label: Some(label.into()),
+            label_tone: wrows::Tone::Needs,
+            suffix: None,
+            suffix_tone: wrows::Tone::Dim,
+            scroll: false,
+            bar: None,
+            spark: None,
+        }
+    }
+
+    #[test]
+    fn the_rows_import_needs_decorate() {
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/rows@0.5.0" (instance (export "clear-all" (func)))))"#).unwrap();
+        let e = host.check_links(&c, &Capabilities { sidebar: true, notifications: true, ..Default::default() }).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/rows"), "{e}");
+        host.check_links(&c, &Capabilities { decorate: true, ..Default::default() }).unwrap();
+    }
+
+    #[test]
+    fn decorations_are_plain_capped_and_the_first_loaded_plugin_wins() {
+        use wrows::Host as _;
+        let core = crate::Core::new(&*tempdir("rows-core"));
+        let a = core.register_surface("/a").unwrap();
+        let caps = Capabilities { decorate: true, ..Default::default() };
+        let decoration_of = |core: &crate::Core| core.snapshot().groups.iter().flat_map(|g| g.rows.clone()).find(|r| r.surface_id == a.surface_id).unwrap().decoration;
+
+        let mut first = HostState::new("dev.x.first", &caps, None, None, Some(core.handle()));
+        let mut second = HostState::new("dev.x.second", &caps, None, None, Some(core.handle()));
+        second.decorate(a.surface_id.clone(), Some(deco("second"))).unwrap();
+        assert_eq!(decoration_of(&core).unwrap().label.as_deref(), Some("second"));
+
+        let long = wrows::Decoration {
+            suffix: Some(format!("a\u{202e}b\n{}", "c".repeat(200))),
+            bar: Some(1.7),
+            spark: Some(wrows::Spark { points: vec![0, 255], tone: wrows::Tone::Text }),
+            ..deco("ab\u{200b}cdefghijklmnopqrstuvwxyz")
+        };
+        first.decorate(a.surface_id.clone(), Some(long)).unwrap();
+        let d = decoration_of(&core).unwrap();
+        assert_eq!(d.label.as_deref(), Some("abcdefghijklmnopqrstuvwx"), "first loaded wins, hidden characters go, cut to 24");
+        assert_eq!(d.suffix.unwrap(), format!("ab {}", "c".repeat(61)));
+        assert_eq!((d.bar_permille, d.label_tone), (Some(1000), Tone::Needs));
+
+        assert!(first.decorate(a.surface_id.clone(), Some(wrows::Decoration { bar: Some(f32::NAN), ..deco("x") })).is_err());
+        let spark = wrows::Spark { points: vec![1; 33], tone: wrows::Tone::Dim };
+        assert!(first.decorate(a.surface_id.clone(), Some(wrows::Decoration { spark: Some(spark), ..deco("x") })).is_err());
+        assert!(first.decorate("no-such-tab".into(), Some(deco("x"))).is_err());
+        let mut no_cap = HostState::new("dev.x.nocap", &Capabilities::default(), None, None, Some(core.handle()));
+        assert!(no_cap.decorate(a.surface_id.clone(), Some(deco("x"))).unwrap_err().contains("decorate capability"));
+
+        first.decorate(a.surface_id.clone(), None).unwrap();
+        assert_eq!(decoration_of(&core).unwrap().label.as_deref(), Some("second"), "removing one shows the next");
+        first.decorate(a.surface_id.clone(), Some(deco("back"))).unwrap();
+        first.release_rows();
+        assert_eq!(decoration_of(&core).unwrap().label.as_deref(), Some("second"), "a disabled instance's decorations go");
+        assert!(first.decorate(a.surface_id.clone(), Some(deco("x"))).is_err());
+        drop(second);
+        assert_eq!(decoration_of(&core), None);
+
+        let mut third = HostState::new("dev.x.third", &caps, None, None, Some(core.handle()));
+        third.decorate(a.surface_id.clone(), Some(deco("x"))).unwrap();
+        core.unregister_surface(&a.surface_id);
+        let b = core.register_surface("/b").unwrap();
+        assert!(core.snapshot().groups.iter().flat_map(|g| &g.rows).all(|r| r.decoration.is_none()), "a closed tab's decorations go");
+        third.clear_all();
+        assert!(third.decorate(b.surface_id, Some(deco("x"))).is_ok());
     }
 
     #[test]

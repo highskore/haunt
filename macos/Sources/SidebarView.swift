@@ -77,7 +77,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     private func rowHeight(_ r: Row) -> CGFloat {
         let gap = Tok.Size.rowGap[0]
         var h = rowLine1 + gap + Tok.Size.rowMeta * lh
-        if bar(r) != nil { h += gap + Tok.Size.barMt + Tok.Size.barH }
+        if bar(r) != nil || r.decoration?.barPermille != nil { h += gap + Tok.Size.barMt + Tok.Size.barH }
         h += CGFloat(r.subagents.count) * (gap + Tok.Size.subMt + Tok.Size.subFont * lh)
         return Tok.Size.rowPad[0] * 2 + h
     }
@@ -379,6 +379,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let hint: CTLine?
         let meta: CTLine
         let subs: [(label: CTLine, meta: CTLine, metaW: CGFloat)]
+        let decor: RowDecor?
     }
 
     private var rowLines: [String: RowLines] = [:]
@@ -409,7 +410,9 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let pill = row.needsYou && Theme.current.effects.needsPill
         let status = pill ? Draw.line(row.statusText, Draw.uiTabular(Tok.Size.rowRight, .semibold), Theme.current.app.pillFg)
             : Draw.line(row.statusText, Fonts.status, row.needsYou ? Tok.Color.needs : Tok.Color.textMeta)
-        let statusW = hovered ? Tok.App.closeSize : Draw.width(status) + (pill ? 2 * Theme.current.app.pillPad[1] : 0)
+        let decor = RowDecor(row.decoration)
+        let statusW = hovered ? Tok.App.closeSize
+            : pill ? Draw.width(status) + 2 * Theme.current.app.pillPad[1] : decor?.rightWidth ?? Draw.width(status)
         let dot = snapshot.colorStyle == .dot ? row.color : nil
         let dotW = dot == nil ? 0 : gapX + Tok.Size.tabDot
         let name = Draw.truncated(Draw.line(row.name, Fonts.name, Tok.Color.textPrimary), right - gapX - statusW - col2 - dotW,
@@ -424,8 +427,11 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             metaRight -= Draw.width(h) + gapX
             hint = h
         }
-        let metaText = row.pending.flatMap { $0.suspicious ? $0.preview : nil } ?? row.meta
-        let meta = Draw.truncated(Draw.line(metaText, Fonts.meta, Tok.Color.textMeta), metaRight - col2, Fonts.meta, Tok.Color.textMeta)
+        let preview = row.pending.flatMap { $0.suspicious ? $0.preview : nil }
+        let metaLine = preview == nil && decor?.suffix != nil
+            ? CTLineCreateWithAttributedString(decor!.meta(row.meta, font: Fonts.meta))
+            : Draw.line(preview ?? row.meta, Fonts.meta, Tok.Color.textMeta)
+        let meta = Draw.truncated(metaLine, metaRight - col2, Fonts.meta, Tok.Color.textMeta)
 
         let subs = row.subagents.map { s in
             let m = Draw.line(s.meta, Fonts.sub, Tok.Color.textSub)
@@ -435,7 +441,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             return (label: label, meta: m, metaW: mw)
         }
         let l = RowLines(row: row, width: contentWidth, hovered: hovered, status: status, statusW: statusW,
-                         name: name, dot: dot, hint: hint, meta: meta, subs: subs)
+                         name: name, dot: dot, hint: hint, meta: meta, subs: subs, decor: decor)
         rowLines[row.surfaceId] = l
         return l
     }
@@ -490,6 +496,8 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             ring.stroke()
             Draw.text(l.status, font: Draw.uiTabular(Tok.Size.rowRight, .semibold), x: r.minX + app.pillPad[1],
                       top: r.minY + app.pillPad[0], lineHeight: textH, in: ctx)
+        } else if let d = l.decor, d.rightWidth != nil {
+            d.drawRight(right: right, top: y, height: rowLine1, lineHeight: Tok.Size.rowRight * lh, ctx: ctx)
         } else {
             Draw.text(l.status, font: Fonts.status, x: right - l.statusW, top: y + (rowLine1 - Tok.Size.rowRight * lh) / 2,
                       lineHeight: Tok.Size.rowRight * lh, in: ctx)
@@ -510,10 +518,9 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         Draw.text(l.meta, font: Fonts.meta, x: col2, top: y, lineHeight: Tok.Size.rowMeta * lh, in: ctx)
         y += Tok.Size.rowMeta * lh
 
-        if let p = bar(row) {
+        if let frac = l.decor?.bar ?? bar(row).map({ $0.total == 0 ? 0 : min(CGFloat($0.done) / CGFloat($0.total), 1) }) {
             y += gapY + Tok.Size.barMt
             let track = NSRect(x: col2, y: y, width: right - col2, height: Tok.Size.barH)
-            let frac = p.total == 0 ? 0 : min(CGFloat(p.done) / CGFloat(p.total), 1)
             drawBar(track, fill: NSRect(x: col2, y: y, width: track.width * frac, height: Tok.Size.barH))
             y += Tok.Size.barH
         }

@@ -1,20 +1,22 @@
-//! A haunt plugin: one palette command, plus a log line for new tasks and tool calls.
+//! A haunt plugin: one palette command, plus a label on the row for new tasks and tool calls.
 
 wit_bindgen::generate!({ path: "wit/haunt-plugin.wit", world: "plugin" });
 
 use haunt::plugin::log::log;
 use haunt::plugin::palette;
+use haunt::plugin::rows::{self, Decoration, Tone};
 use haunt::plugin::theme;
 use haunt::plugin::types::LogLevel;
 
 struct Plugin;
 
-fn describe(event: &AgentEvent) -> Option<String> {
-    match event.kind.as_str() {
-        "task_created" => Some(format!("new task: {}", event.summary.as_deref().unwrap_or(""))),
-        "tool_ran" => Some(format!("ran {}", event.tool.as_deref()?)),
-        _ => None,
-    }
+fn decoration(event: &AgentEvent) -> Option<Decoration> {
+    let (label, tone) = match event.kind.as_str() {
+        "task_created" => ("new task".to_owned(), Tone::Dim),
+        "tool_ran" => (event.tool.clone()?, Tone::Kbd),
+        _ => return None,
+    };
+    Some(Decoration { label: Some(label), label_tone: tone, suffix: None, suffix_tone: Tone::Dim, scroll: false, bar: None, spark: None })
 }
 
 impl Guest for Plugin {
@@ -25,8 +27,9 @@ impl Guest for Plugin {
     fn on_settings_changed(_settings: String) {}
 
     fn on_event(event: AgentEvent) {
-        if let Some(line) = describe(&event) {
-            log(LogLevel::Info, &line);
+        log(LogLevel::Debug, &format!("saw {}", event.kind));
+        if let (Some(surface), Some(d)) = (event.surface.as_deref(), decoration(&event)) {
+            let _ = rows::decorate(surface, Some(&d));
         }
     }
 
@@ -63,7 +66,7 @@ mod tests {
             session_id: None,
             agent_id: None,
             cwd: None,
-            summary: Some("fix it".into()),
+            summary: None,
             verified: true,
             surface: Some("s1".into()),
             tool: tool.map(Into::into),
@@ -75,9 +78,9 @@ mod tests {
     }
 
     #[test]
-    fn describes_tasks_and_tools_only() {
-        assert_eq!(describe(&event("task_created", None)).as_deref(), Some("new task: fix it"));
-        assert_eq!(describe(&event("tool_ran", Some("Bash"))).as_deref(), Some("ran Bash"));
-        assert!(describe(&event("stop", None)).is_none());
+    fn labels_tasks_and_tools_only() {
+        assert_eq!(decoration(&event("task_created", None)).unwrap().label.as_deref(), Some("new task"));
+        assert_eq!(decoration(&event("tool_ran", Some("Bash"))).unwrap().label.as_deref(), Some("Bash"));
+        assert!(decoration(&event("stop", None)).is_none());
     }
 }

@@ -4,6 +4,7 @@ pub mod allowlist;
 pub mod arrange;
 pub mod ctl;
 pub mod decisions;
+pub mod decorate;
 pub mod event;
 mod wire;
 pub mod git;

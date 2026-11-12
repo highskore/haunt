@@ -54,6 +54,7 @@ pub struct Capabilities {
     pub decisions_read: bool,
     pub allowlist_suggest: bool,
     pub sidebar: bool,
+    pub decorate: bool,
     pub fs_read: Vec<String>,
     pub fs_write: Vec<String>,
     pub net: Vec<String>,
@@ -179,6 +180,9 @@ impl Capabilities {
         if self.sidebar {
             out.push(("can see your tabs' names and states, and reorder, pin, group and colour them (rows needing you stay on top)".into(), false));
         }
+        if self.decorate {
+            out.push(("can add a label, a bar or a sparkline to your tabs' rows".into(), false));
+        }
         if self.pty_write {
             out.push(("can answer permission prompts in your terminal (Allow or Deny, nothing else)".into(), true));
         }
@@ -205,6 +209,7 @@ impl Capabilities {
             allowlist_suggest: self.allowlist_suggest && !old.allowlist_suggest,
             sidebar: self.sidebar && !old.sidebar,
             theme: self.theme && !old.theme,
+            decorate: self.decorate && !old.decorate,
             fs_read: self.fs_read.iter().filter(|g| !old.fs_read.contains(g)).cloned().collect(),
             fs_write: self.fs_write.iter().filter(|g| !old.fs_write.contains(g)).cloned().collect(),
             ..Default::default()

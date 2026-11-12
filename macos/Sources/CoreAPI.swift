@@ -258,6 +258,26 @@ struct Row: Equatable, Hashable {
     var selected: Bool
     var pending: PendingRequest?
     var color: TabColor?
+    var decoration: Decoration? = nil
+}
+
+enum Tone: Equatable, Hashable {
+    case dim, text, needs, kbd
+}
+
+struct Spark: Equatable, Hashable {
+    var points: [UInt8]
+    var tone: Tone
+}
+
+struct Decoration: Equatable, Hashable {
+    var label: String?
+    var labelTone: Tone
+    var suffix: String?
+    var suffixTone: Tone
+    var scroll: Bool
+    var barPermille: UInt16?
+    var spark: Spark?
 }
 
 enum TabColor: Equatable, Hashable {

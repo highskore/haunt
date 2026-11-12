@@ -58,6 +58,9 @@ pub struct Row {
     pub pending: Option<PendingRequest>,
     /// A colour the user picked for the tab, drawn as `SidebarSnapshot.color_style` says.
     pub color: Option<TabColor>,
+    /// A plugin's label, suffix, bar or sparkline; the first loaded plugin's wins.
+    #[cfg_attr(feature = "ffi", uniffi(default = None))]
+    pub decoration: Option<crate::decorate::Decoration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -166,6 +169,7 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
             selected: s.selected,
             pending: None,
             color: None,
+            decoration: None,
         };
     }
 
@@ -215,6 +219,7 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
             .filter(|p| p.agent.answer_bytes(true).is_some())
             .map(|p| PendingRequest { key: p.key(), tool: p.tool.clone(), preview: p.preview(), suspicious: session.terminal_only(p) }),
         color: None,
+        decoration: None,
     }
 }
 

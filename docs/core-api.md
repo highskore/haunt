@@ -37,8 +37,12 @@ record SidebarGroup { id: string, label: string, rows: sequence<Row> }   // id: 
 record Row {
   surface_id: string, kind: RowKind, name: string, meta: string, task: string, status_text: string,
   needs_you: bool, progress: Option<Progress>, subagents: sequence<Subrow>, selected: bool,
-  pending: Option<PendingRequest>, color: Option<TabColor>
+  pending: Option<PendingRequest>, color: Option<TabColor>, decoration: Option<Decoration>
 }
+record Decoration { label: Option<string>, label_tone: Tone, suffix: Option<string>, suffix_tone: Tone, scroll: bool,
+                    bar_permille: Option<u16>, spark: Option<Spark> }   // a plugin's, see rows below
+record Spark { points: sequence<u8>, tone: Tone }
+enum   Tone { Dim, Text, Needs, Kbd }
 enum   TabColor { Red, Orange, Yellow, Green, Blue, Purple, Gray }
 enum   ColorStyle { Dot, Tint }
 record PendingRequest { key: u64, tool: string, preview: string, suspicious: bool }
@@ -251,6 +255,8 @@ Events reach plugins on the thread that delivered them (usually the socket threa
 - `rows()` returns the rows in the core's order with surface id, name, kind (`shell`, `claude`, `codex`), state group and selection. It includes no meta, task, prompt or command text.
 - `arrange(arrangement)` sets this plugin's arrangement, merged as described under Arrangement, and `clear()` gives the sidebar back.
 - Surface ids last as long as their tab and are new after a restart, so per-tab state keyed by them starts over with every launch.
+
+**rows** (`decorate`, consent line "can add a label, a bar or a sparkline to your tabs' rows"): `decorate(surface, some(decoration))` sets this plugin's decoration of an open tab's row and `decorate(surface, none)` removes it; `clear-all()` removes all of them. The core keeps one per row and plugin instance, as `Row.decoration` (`core/src/decorate.rs`), and the row shows the one from the plugin loaded first (lockfile order, which is install order). A plugin that is disabled, reloaded or removed loses its decorations, and a closed tab's go with it. Every string goes through `plugins::plain` (whitespace to a space, hidden characters removed): `label` at most 24 characters (`LABEL_MAX`), `suffix` 64 (`SUFFIX_MAX`); one with nothing visible left becomes none. `bar` is clamped to 0..1 and kept as `bar_permille`; NaN or an infinity is refused. A `spark` has at most 32 points (`SPARK_MAX`), each 0 (bottom) to 255 (top). The app draws the spark (56×14) or else the label (mono, at the status size; `kbd` boxed) in the status slot, the suffix after the meta line behind " · " in its tone, and the bar in place of the task bar. Tones: `dim` the meta colour, `text` the primary, `needs` the needs colour, `kbd` a key cap. `scroll` is passed through; the app doesn't animate it yet.
 
 **decisions** (`decisions_read`): `query(text, limit)` returns the same records as `HauntCore.decisions`, at most 1000, without the raw `command` (the preview shows it with nothing hidden). It is read only: nothing a plugin can call adds, changes or removes a decision.
 

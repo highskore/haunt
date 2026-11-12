@@ -12,6 +12,7 @@ use crate::allowlist::{self, AllowError, AllowSuggestion, Approval};
 use crate::arrange::{self, Arrangement, RowInfo};
 use crate::ctl::{self, Ctl};
 use crate::decisions::{Decision, DecisionLog};
+use crate::decorate::Decoration;
 use crate::git::Branches;
 use crate::event::{AgentEvent, parse_osc};
 use crate::ids::{hex, random, uuid_v4};
@@ -143,6 +144,9 @@ pub(crate) struct State {
     next_sidebar_token: u64,
     /// The time every change and snapshot sees instead of the clock; set only to replay a trace.
     clock: Option<Instant>,
+    /// (plugin instance token, surface, decoration); a lower token loaded first and wins the row.
+    decorations: Vec<(u64, String, Decoration)>,
+    next_rows_token: u64,
 }
 
 impl State {
@@ -300,10 +304,16 @@ impl State {
 
     pub(crate) fn snapshot(&self, now: Instant) -> SidebarSnapshot {
         let snap = self.core_snapshot(now);
-        match &self.arrangement {
+        let mut snap = match &self.arrangement {
             Some((_, t, a)) if self.sidebar_live.contains(t) => arrange::arrange(snap, a),
             _ => snap,
+        };
+        if !self.decorations.is_empty() {
+            for r in snap.groups.iter_mut().flat_map(|g| g.rows.iter_mut()) {
+                r.decoration = self.decorations.iter().filter(|(_, s, _)| *s == r.surface_id).min_by_key(|(t, _, _)| *t).map(|(_, _, d)| d.clone());
+            }
         }
+        snap
     }
 
     /// Before any plugin arrangement.
@@ -583,6 +593,7 @@ impl Core {
             let before = st.surfaces.len();
             st.with_surface(surface_id, |s| s.session.close());
             st.surfaces.retain(|s| s.id != surface_id);
+            st.decorations.retain(|(_, s, _)| s != surface_id);
             if st.selected.as_deref() == Some(surface_id) {
                 st.selected = None;
             }
@@ -827,6 +838,10 @@ impl Core {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SidebarToken(u64);
 
+/// One plugin instance's claim on row decorations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowsToken(u64);
+
 #[derive(Clone)]
 pub struct CoreHandle {
     state: Arc<Mutex<State>>,
@@ -915,6 +930,51 @@ impl CoreHandle {
         update_state(&self.state, |st, _| {
             st.sidebar_live.remove(&token.0);
             st.drop_arrangement(token.0)
+        });
+    }
+
+    /// Marks a plugin instance loaded with the decorate capability; earlier instances win a row.
+    pub fn attach_rows(&self) -> RowsToken {
+        let mut st = lock(&self.state);
+        st.next_rows_token += 1;
+        RowsToken(st.next_rows_token)
+    }
+
+    /// Sets or, with None, removes this instance's decoration of an open tab's row.
+    pub fn decorate(&self, token: RowsToken, surface: &str, d: Option<Decoration>) -> Result<(), CoreError> {
+        let mut res = Ok(());
+        update_state(&self.state, |st, _| {
+            if !st.surfaces.iter().any(|s| s.id == surface) {
+                res = Err(CoreError::Invalid { reason: "no such tab".into() });
+                return false;
+            }
+            let i = st.decorations.iter().position(|(t, s, _)| *t == token.0 && s == surface);
+            match (i, d) {
+                (Some(i), Some(d)) if st.decorations[i].2 == d => false,
+                (Some(i), Some(d)) => {
+                    st.decorations[i].2 = d;
+                    true
+                }
+                (None, Some(d)) => {
+                    st.decorations.push((token.0, surface.to_owned(), d));
+                    true
+                }
+                (Some(i), None) => {
+                    st.decorations.remove(i);
+                    true
+                }
+                (None, None) => false,
+            }
+        });
+        res
+    }
+
+    /// The instance cleared, was disabled, reloaded or dropped: its decorations go with it.
+    pub fn detach_rows(&self, token: RowsToken) {
+        update_state(&self.state, |st, _| {
+            let before = st.decorations.len();
+            st.decorations.retain(|(t, _, _)| *t != token.0);
+            st.decorations.len() != before
         });
     }
 

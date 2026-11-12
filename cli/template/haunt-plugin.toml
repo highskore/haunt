@@ -9,6 +9,7 @@ license = "MIT"
 
 [capabilities]
 events = ["agent.task", "agent.tool"]
+decorate = true
 
 [contributes]
 commands = [{ id = "say-hello", title = "Say hello", key = "cmd+shift+h" }]

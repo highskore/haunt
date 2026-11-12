@@ -217,6 +217,7 @@ mod tests {
             selected: false,
             pending: None,
             color: None,
+            decoration: None,
         }
     }
 
