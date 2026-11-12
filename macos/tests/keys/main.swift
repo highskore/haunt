@@ -15,11 +15,11 @@ func check(_ ok: Bool, _ what: String, line: Int = #line) {
 }
 
 // core/hidden-chars.json, the table the core is tested against too.
-func hiddenTable() -> (format: [ClosedRange<UInt32>], ignorable: [ClosedRange<UInt32>], shown: [Unicode.Scalar]) {
+func hiddenTable() -> (format: [ClosedRange<UInt32>], ignorable: [ClosedRange<UInt32>], blank: [ClosedRange<UInt32>], shown: [Unicode.Scalar]) {
     let json = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "core/hidden-chars.json"))) as! [String: Any]
     let hex = { (s: Any) in UInt32(s as! String, radix: 16)! }
     let ranges = { (k: String) in (json[k] as! [[Any]]).map { hex($0[0])...hex($0[1]) } }
-    return (ranges("format"), ranges("default_ignorable"), (json["shown"] as! [Any]).map { Unicode.Scalar(hex($0))! })
+    return (ranges("format"), ranges("default_ignorable"), ranges("blank"), (json["shown"] as! [Any]).map { Unicode.Scalar(hex($0))! })
 }
 let hiddenChars = hiddenTable()
 
@@ -125,6 +125,8 @@ for v in UInt32(0)...0x10FFFF {
     check(TitleFormat.hidden(c) == want, "TitleFormat.hidden(\(String(v, radix: 16))) matches core/hidden-chars.json")
 }
 check(!hiddenChars.shown.contains(where: TitleFormat.hidden), "TitleFormat.hidden keeps the table's shown characters")
+for r in hiddenChars.blank { for v in r { check(title("{tab}", "a\(Unicode.Scalar(v)!)b", "") == "[a b]", "blank \(String(v, radix: 16)) in a title shows as a space") } }
+check(title("{tab}", "done\u{2800}x\u{1D159}y", "") == "[done x y]", "braille blank and null notehead become spaces")
 check(title("{tab} — {meta}", "pawr", "agent-sidebar · Writing tests") == "[pawr] — agent-sidebar", "name and the meta's first part")
 check(title("{tab} — {meta}", "vibes", "") == "[vibes]", "an empty meta takes its separator with it")
 check(title("~ {meta} {x} {tab}", "a", "b") == "~ b {x} [a]", "unknown braces stay text")

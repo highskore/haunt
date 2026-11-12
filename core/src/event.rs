@@ -175,7 +175,7 @@ pub fn clean(s: &str) -> String {
         .filter_map(|c| {
             if (c.is_control() && !c.is_whitespace()) || is_format(c) || is_default_ignorable(c) {
                 None
-            } else if c.is_whitespace() {
+            } else if c.is_whitespace() || is_blank(c) {
                 Some(' ')
             } else {
                 Some(c)
@@ -192,7 +192,12 @@ pub fn clean_lines(s: &str) -> String {
 /// Characters a terminal shows as nothing or as layout: anything but a plain space that is a
 /// control, a format (Cf) character, whitespace (Zl and Zp included) or default-ignorable.
 pub fn is_hidden(c: char) -> bool {
-    c != ' ' && (c.is_control() || is_format(c) || c.is_whitespace() || is_default_ignorable(c))
+    c != ' ' && (c.is_control() || is_format(c) || c.is_whitespace() || is_default_ignorable(c) || is_blank(c))
+}
+
+/// Drawn as a gap like a space, though not default-ignorable, so `done\u{2800}` looks like `done `.
+pub fn is_blank(c: char) -> bool {
+    matches!(c as u32, 0xA0 | 0x1680 | 0x2000..=0x200A | 0x202F | 0x205F | 0x2800 | 0x3000 | 0x1D159)
 }
 
 /// Unicode Default_Ignorable_Code_Point (Unicode 16): fonts draw these as nothing, so `ls` and
@@ -434,12 +439,23 @@ mod tests {
     fn hidden_characters_match_the_shared_table() {
         // macos/tests/keys.sh and paste.sh check the app's side against the same file.
         let table: serde_json::Value = serde_json::from_str(include_str!("../hidden-chars.json")).unwrap();
-        let (format, ignorable) = (table_ranges(&table, "format"), table_ranges(&table, "default_ignorable"));
+        let (format, ignorable, blank) =
+            (table_ranges(&table, "format"), table_ranges(&table, "default_ignorable"), table_ranges(&table, "blank"));
         let within = |ranges: &[(u32, u32)], c: char| ranges.iter().any(|&(lo, hi)| (lo..=hi).contains(&(c as u32)));
         for c in (0..=char::MAX as u32).filter_map(char::from_u32) {
             let (f, di) = (within(&format, c), within(&ignorable, c));
             assert_eq!(is_format(c), f, "format {:x}", c as u32);
             assert_eq!(is_default_ignorable(c), di, "default ignorable {:x}", c as u32);
+            assert_eq!(is_blank(c), within(&blank, c), "blank {:x}", c as u32);
+            if is_blank(c) {
+                assert!(is_hidden(c) && !f && !di && !c.is_control(), "{:x}", c as u32);
+                assert_eq!(clean(&format!("l{c}s")), "l s", "{:x}", c as u32);
+                assert_eq!(crate::plugins::plain(&format!("l{c}s"), 10), "l s", "{:x}", c as u32);
+            }
+            // Every space separator is blank; line and paragraph separators stay hidden.
+            if c.is_whitespace() && !c.is_control() && c != ' ' && !matches!(c, '\u{2028}' | '\u{2029}') {
+                assert!(is_blank(c), "{:x}", c as u32);
+            }
             if f || di {
                 let s = format!("l{c}s");
                 assert!(is_hidden(c), "{:x}", c as u32);

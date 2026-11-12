@@ -11,7 +11,7 @@ use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Config, Engine, EngineWeak, Store, StoreContextMut, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxView, WasiView};
 
-use crate::event::{EventKind, is_hidden, visible};
+use crate::event::{EventKind, is_blank, is_hidden, visible};
 use crate::plugin_cache::{CacheError, CwasmCache, cache_name};
 use crate::plugin_fs::FsScope;
 use crate::arrange::{Arrangement, ColorStyle, Section, StateGroup, TabColor};
@@ -849,7 +849,7 @@ struct Glyph {
 /// Other symbols (`○`, `∨`, `✓`) stay, as wildcards.
 fn status_separator(c: char) -> bool {
     use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
-    c.is_whitespace() || (c.is_ascii() && !c.is_ascii_alphanumeric()) || c.general_category_group() == GeneralCategoryGroup::Punctuation
+    c.is_whitespace() || is_blank(c) || (c.is_ascii() && !c.is_ascii_alphanumeric()) || c.general_category_group() == GeneralCategoryGroup::Punctuation
 }
 
 /// `s` as compared: NFKC, lowercased, combining marks dropped, each character mapped to its TR39
@@ -1476,7 +1476,7 @@ pub const PLAN_LINES: usize = 200;
 
 /// One line of plain text: whitespace becomes a space, other hidden characters go, at most `max` characters.
 pub fn plain(s: &str, max: usize) -> String {
-    s.chars().map(|c| if c.is_whitespace() { ' ' } else { c }).filter(|&c| !is_hidden(c)).take(max).collect()
+    s.chars().map(|c| if c.is_whitespace() || is_blank(c) { ' ' } else { c }).filter(|&c| !is_hidden(c)).take(max).collect()
 }
 
 /// Text kept as lines: CR goes, then each line is `plain` and cut to `line_max`; at most `max_lines`.
@@ -3014,9 +3014,13 @@ mod tests {
             "don\u{212E}", "\u{2373}dle", "d\u{25CB}ne", "D\u{2228}NE", "ok-done-ok", "a.done.b", "[x]done[x]", "x—done—x",
             "d\u{043E}ne", "\u{FF44}one", "\u{3010}done\u{3011}", "a\u{2026}done", "ok \u{2022} De\u{2010}ny",
             "\u{0501}\u{043E}\u{0578}\u{0435}", "\u{0456}\u{0501}\u{04CF}\u{0435}", "R\u{0456}\u{0578}\u{0578}\u{0456}\u{0578}g",
+            "done\u{2800}", "\u{2800}done", "do\u{2800}ne", "d\u{2800}o\u{2800}n\u{2800}e", "Allow\u{2800}", "needs\u{2800}you",
+            "done\u{1D159}", "idle\u{3000}", "ok\u{A0}deny", "fail\u{3164}ed", "do\u{115F}ne",
         ] {
             assert!(decoration(d(bad, wrows::Tone::Dim)).is_err(), "{bad:?}");
         }
+        // Also without plain(): the fold itself splits at a blank.
+        assert!(says_status("done\u{2800}") && says_needs_you("needs\u{2800}you"));
         for ok in [
             "CI 7/9", "spec 11/18", "3 edits", "✓", "wait 2m", "allowlist", "allowlist ok", "🚀🚀🚀🚀", "dev ✓", "denylisted",
             "abandoned", "idler", "undone·x", "redone", "doneness", "rerunning", "x—undone",
@@ -3027,7 +3031,8 @@ mod tests {
         let s = |suffix: &str, scroll: bool| wrows::Decoration {
             label: None, label_tone: wrows::Tone::Dim, suffix: Some(suffix.into()), suffix_tone: wrows::Tone::Dim, scroll, bar: None, spark: None,
         };
-        for bad in ["api needs you", "n\u{0435}eds-you", "Waiting for you", "x·NEEDS·YOU·x", "w a i t i n g for you"] {
+        for bad in ["api needs you", "n\u{0435}eds-you", "Waiting for you", "x·NEEDS·YOU·x", "w a i t i n g for you", "api needs\u{2800}you",
+                    "waiting\u{2800}for\u{2800}you", "needs\u{1D159}you"] {
             assert!(decoration(s(bad, false)).is_err() && decoration(s(bad, true)).is_err(), "{bad:?}");
         }
         for ok in ["#142 · checks running", "failed 2m ago", "held 3m · a failed turn", "echo done", "CI 7/9 · 3 edits", "waiting 2m"] {

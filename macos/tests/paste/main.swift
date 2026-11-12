@@ -49,16 +49,22 @@ for (c, what) in [("\u{2028}", "line separator"), ("\u{2029}", "paragraph separa
 }
 
 // core/hidden-chars.json, the table the core is tested against too.
-func hiddenTable() -> (format: [ClosedRange<UInt32>], ignorable: [ClosedRange<UInt32>], shown: [Unicode.Scalar]) {
+func hiddenTable() -> (format: [ClosedRange<UInt32>], ignorable: [ClosedRange<UInt32>], blank: [ClosedRange<UInt32>], shown: [Unicode.Scalar]) {
     let json = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "core/hidden-chars.json"))) as! [String: Any]
     let hex = { (s: Any) in UInt32(s as! String, radix: 16)! }
     let ranges = { (k: String) in (json[k] as! [[Any]]).map { hex($0[0])...hex($0[1]) } }
-    return (ranges("format"), ranges("default_ignorable"), (json["shown"] as! [Any]).map { Unicode.Scalar(hex($0))! })
+    return (ranges("format"), ranges("default_ignorable"), ranges("blank"), (json["shown"] as! [Any]).map { Unicode.Scalar(hex($0))! })
 }
 let hiddenChars = hiddenTable()
 for v in UInt32(0)...0x10FFFF where (hiddenChars.format + hiddenChars.ignorable).contains(where: { $0.contains(v) }) {
     check(PastePreview.hidden(Unicode.Scalar(v)!), "PastePreview.hidden(\(String(v, radix: 16))) per core/hidden-chars.json")
 }
+for v in UInt32(0)...0x10FFFF {
+    guard let c = Unicode.Scalar(v) else { continue }
+    check(c.drawsBlank == hiddenChars.blank.contains { $0.contains(v) }, "drawsBlank(\(String(v, radix: 16))) per core/hidden-chars.json")
+    if c.drawsBlank { check(PastePreview.hidden(c), "PastePreview.hidden(\(String(v, radix: 16))), a blank") }
+}
+check(PastePreview("done\u{2800}").needsConfirmation, "a braille blank is held")
 check(!hiddenChars.shown.contains(where: PastePreview.hidden), "PastePreview keeps the table's shown characters")
 
 // A plugin's copy (clipboard.write): a multi-line one is always shown, naming the plugin.

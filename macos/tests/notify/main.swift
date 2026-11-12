@@ -212,6 +212,7 @@ do {
     check(h.noteFor("s2")?.title == "a⇥b · needs you" && h.noteFor("s2")?.body == "line⏎break", "s2 \(String(describing: h.noteFor("s2")))")
     check(AgentNotifier.visible("a\r\u{00AD}\u{FEFF} b") == "a\\u{d}\\u{ad}\\u{feff} b", "controls and invisibles")
     check(AgentNotifier.visible("ls \\u{200b}") == "ls \\u{200b}", "already shown text stays as it is")
+    check(AgentNotifier.visible("done\u{2800}") == "done\\u{2800}", "a braille blank is spelled out")
 }
 
 // The tool's name isn't repeated when the core's preview starts with it.

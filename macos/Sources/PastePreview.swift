@@ -79,6 +79,6 @@ struct PastePreview: Equatable {
         let p = c.properties
         return c != " " && (p.generalCategory == .control || p.generalCategory == .format || p.isWhitespace
             || p.generalCategory == .lineSeparator || p.generalCategory == .paragraphSeparator
-            || p.isDefaultIgnorableCodePoint)
+            || p.isDefaultIgnorableCodePoint || c.drawsBlank)
     }
 }

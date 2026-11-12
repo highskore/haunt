@@ -573,7 +573,8 @@ enum TitleFormat {
                 rest = rest[next...]
             }
         }
-        return out.map { (String(String.UnicodeScalarView($0.0.unicodeScalars.filter { !hidden($0) })), $0.1) }.filter { !$0.0.isEmpty }
+        return out.map { (String(String.UnicodeScalarView($0.0.unicodeScalars.map { $0.drawsBlank ? " " : $0 }.filter { !hidden($0) })), $0.1) }
+            .filter { !$0.0.isEmpty }
     }
 
     /// The core's `plain_line` test, character for character: a control, format (bidi, zero-width, BOM),

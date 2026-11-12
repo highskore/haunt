@@ -200,7 +200,7 @@ final class AgentNotifier {
     static func isHidden(_ c: Unicode.Scalar) -> Bool {
         let p = c.properties
         return c != " " && (p.generalCategory == .control || p.generalCategory == .format || p.isWhitespace
-            || p.isDefaultIgnorableCodePoint)
+            || p.isDefaultIgnorableCodePoint || c.drawsBlank)
     }
 
     static func doneNote(_ row: Row) -> AgentNote {
