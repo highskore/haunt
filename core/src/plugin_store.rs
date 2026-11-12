@@ -809,6 +809,10 @@ pub struct PluginSet {
     themes: Vec<ThemeContribution>,
     /// The (plugin, panel) that has the right pane.
     right_pane: Option<(String, String)>,
+    /// config.toml's `away_after`, in minutes; None: the default.
+    away_after_min: Option<u32>,
+    /// When the user's last input was, while they are away.
+    away_since: Option<std::time::Instant>,
     core: Option<CoreHandle>,
 }
 
@@ -967,6 +971,31 @@ impl PluginSet {
         }
     }
 
+    /// The app's periodic look at the user: the screen `locked` (or asleep) and seconds since their last
+    /// input. Crossing into or out of away calls `on-away-changed` on the plugins granted `away`; coming
+    /// back is a user call, so a sheet may show then. Returns the change as `on-away-changed` gets it.
+    pub fn presence(&mut self, locked: bool, idle_secs: u64, now: std::time::Instant) -> Option<(bool, u64)> {
+        let after = u64::from(self.away_after_min.unwrap_or(crate::plugin_settings::AWAY_AFTER_DEFAULT_MIN)) * 60;
+        let away = locked || idle_secs >= after;
+        let back_ms = match (away, self.away_since) {
+            (true, None) => {
+                self.away_since = Some(now.checked_sub(std::time::Duration::from_secs(idle_secs)).unwrap_or(now));
+                None
+            }
+            (false, Some(since)) => {
+                self.away_since = None;
+                Some(now.saturating_duration_since(since).as_millis() as u64)
+            }
+            _ => return None,
+        };
+        for (caps, p) in &mut self.plugins {
+            if caps.away && p.disabled().is_none() {
+                let _ = p.away_changed(back_ms);
+            }
+        }
+        Some((back_ms.is_none(), back_ms.unwrap_or(0)))
+    }
+
     /// What was wrong with the user's plugin settings at the last load or `set_config`.
     pub fn settings_problems(&self) -> &[String] {
         &self.settings_problems
@@ -976,8 +1005,11 @@ impl PluginSet {
     /// its palette commands are cleared for it to register again. Returns whether `[plugins]` changed;
     /// a file that doesn't parse keeps the settings, and the next good one is applied in full.
     pub fn set_config(&mut self, config: &PluginConfig) -> bool {
-        if config.parsed && let Some(core) = &self.core {
-            core.set_row_labels(config.row_labels.clone());
+        if config.parsed {
+            self.away_after_min = config.away_after_min;
+            if let Some(core) = &self.core {
+                core.set_row_labels(config.row_labels.clone());
+            }
         }
         if !config.parsed {
             self.config_tables = None;
@@ -1213,6 +1245,20 @@ mod tests {
         assert_eq!(owner, Some(("b".into(), "map".into())));
         let (_, lost) = own_right_pane(&mut owner, vec![show("a", "x")]);
         assert_eq!((lost.len(), owner), (1, Some(("a".into(), "x".into()))), "in a later drain the newcomer takes it");
+    }
+
+    #[test]
+    fn away_is_a_lock_or_idle_past_away_after_and_back_reports_the_time_since_the_last_input() {
+        let mut set = PluginSet::default();
+        let t = std::time::Instant::now() + std::time::Duration::from_secs(3600);
+        let secs = std::time::Duration::from_secs;
+        assert_eq!(set.presence(false, 599, t), None, "10 minutes by default");
+        set.set_config(&PluginConfig::parse("away_after = 5\n"));
+        assert_eq!(set.presence(false, 300, t), Some((true, 0)));
+        assert_eq!(set.presence(true, 400, t + secs(100)), None, "already away");
+        assert_eq!(set.presence(false, 1, t + secs(200)), Some((false, 500_000)));
+        assert_eq!(set.presence(true, 0, t + secs(201)), Some((true, 0)), "a lock is away at once");
+        assert_eq!(set.presence(false, 0, t + secs(261)), Some((false, 60_000)));
     }
 
     #[test]

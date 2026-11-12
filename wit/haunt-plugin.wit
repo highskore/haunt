@@ -4,8 +4,8 @@
 // 0.4: `theme` and `typing` imports; `on-theme-changed` export.
 // 0.5: surface, tool, command, file path, task id and request key on agent-event; `rows`, `timer`,
 //      `clock` and `panel` imports; `on-tick` export; `on-event` returns nothing.
-//      `hold`, `top-row`, `keys`, `exec` and `terminal` imports; `on-exec` and `on-hover-hold` exports.
-//      Draft, not linked yet: `sound`, `speech`, `dock`, `glow` and `title` imports; `on-away-changed`.
+//      `hold`, `top-row`, `keys`, `exec` and `terminal` imports; `on-exec`, `on-away-changed` and
+//      `on-hover-hold` exports. Draft, not linked yet: `sound`, `speech`, `dock`, `glow` and `title` imports.
 package haunt:plugin@0.5.0;
 
 interface types {
@@ -508,9 +508,9 @@ world plugin {
   export on-tick: func(now-ms: u64);
   // A job from `exec.run` finished. Only plugins granted `exec` get it.
   export on-exec: func(job: u64, outcome: result<output, string>);
-  // Draft. The user stepped away (screen locked or asleep, or idle for the `away_after` setting) or
-  // came back; `away-ms` is how long they were gone, set when `away` is false. Only plugins granted
-  // `away` get it.
+  // Capability `away`. The user stepped away (screen locked or asleep, or no input for config.toml's
+  // `away_after` minutes, 10 by default) or came back; `away-ms` is how long since their last input,
+  // set when `away` is false. Coming back counts as something the user did: a sheet may show then.
   export on-away-changed: func(away: bool, away-ms: u64);
   // See `keys.hover-hold`. Only the plugin holding it gets it.
   export on-hover-hold: func(held: bool, surface: string);

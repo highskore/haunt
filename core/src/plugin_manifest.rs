@@ -61,6 +61,7 @@ pub struct Capabilities {
     pub notify_hold: bool,
     pub sidebar_top: bool,
     pub keys: bool,
+    pub away: bool,
     pub fs_read: Vec<String>,
     pub fs_write: Vec<String>,
     pub net: Vec<String>,
@@ -202,6 +203,9 @@ impl Capabilities {
         }
         if self.keys {
             out.push(("can bind keyboard shortcuts of its own and tell when you press and release them".into(), false));
+        }
+        if self.away {
+            out.push(("can tell when you step away from your Mac (locked, asleep or idle) and come back".into(), false));
         }
         if self.timer {
             out.push(("can run on its own every 15 seconds or more, not only when an agent event arrives".into(), false));

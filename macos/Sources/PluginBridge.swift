@@ -7,6 +7,7 @@ final class PluginBridge {
     let panels = PluginPanels()
     let hold = NotificationHold()
     let hover = HoverHold()
+    let presence = Presence()
     /// Brings tab `surfaceId` up, for a notification bound to it.
     var openTab: ((String) -> Void)?
     /// A plugin bound or unbound a key.
@@ -17,6 +18,7 @@ final class PluginBridge {
             panels.closeAll()
             hold.release()
             hover.owner = nil
+            if plugins == nil { presence.stop() } else { presence.start() }
         }
     }
     private let core: CoreAPI
@@ -36,6 +38,9 @@ final class PluginBridge {
             }
         }
         hold.onRelease = NotificationHold.post
+        presence.report = { [weak self] locked, idle in
+            self?.run("plugins presence") { $0.presence(locked: locked, idleSecs: idle) }
+        }
         hover.onHold = { [weak self] plugin, held, surface in
             self?.run("plugin \(plugin) hover-hold") { try $0.hoverHold(pluginId: plugin, held: held, surfaceId: surface) }
         }

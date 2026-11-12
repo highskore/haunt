@@ -36,6 +36,7 @@ protocol PluginsAPI: AnyObject {
     func keys() -> [PluginKey]
     func keyAction(pluginId: String, id: String, down: Bool, terminalShown: Bool) throws
     func hoverHolder() -> String?
+    func presence(locked: Bool, idleSecs: UInt64)
     func hoverHold(pluginId: String, held: Bool, surfaceId: String) throws
     func notifyAction(pluginId: String, actionId: String, binding: String) throws
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws
@@ -142,6 +143,7 @@ final class NoPlugins: PluginsAPI {
     func keys() -> [PluginKey] { [] }
     func keyAction(pluginId: String, id: String, down: Bool, terminalShown: Bool) throws {}
     func hoverHolder() -> String? { nil }
+    func presence(locked: Bool, idleSecs: UInt64) {}
     func hoverHold(pluginId: String, held: Bool, surfaceId: String) throws {}
     func notifyAction(pluginId: String, actionId: String, binding: String) throws {}
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}
@@ -170,6 +172,7 @@ final class FixturePlugins: PluginsAPI {
     func keys() -> [PluginKey] { [] }
     func keyAction(pluginId: String, id: String, down: Bool, terminalShown: Bool) throws {}
     func hoverHolder() -> String? { nil }
+    func presence(locked: Bool, idleSecs: UInt64) {}
     func hoverHold(pluginId: String, held: Bool, surfaceId: String) throws {}
     func notifyAction(pluginId: String, actionId: String, binding: String) throws {}
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}

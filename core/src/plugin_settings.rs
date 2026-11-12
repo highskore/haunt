@@ -13,9 +13,13 @@ pub struct PluginConfig {
     pub parsed: bool,
     /// `[layout] row_labels`: plugin ids or short names whose row decoration wins, first first.
     pub row_labels: Vec<String>,
+    /// Top-level `away_after`, in minutes: idle this long counts as away for plugins granted `away`.
+    pub away_after_min: Option<u32>,
 }
 
 const MAX_ROW_LABELS: usize = 64;
+pub const AWAY_AFTER_MAX_MIN: u32 = 240;
+pub const AWAY_AFTER_DEFAULT_MIN: u32 = 10;
 
 impl PluginConfig {
     /// A `plugins` entry that isn't a table sets nothing. A config.toml that doesn't parse sets nothing at
@@ -54,7 +58,15 @@ impl PluginConfig {
                 Vec::new()
             }
         };
-        Self { tables, problems, parsed: true, row_labels }
+        let away_after_min = match doc.get("away_after") {
+            None => None,
+            Some(toml::Value::Integer(m)) if (1..=i64::from(AWAY_AFTER_MAX_MIN)).contains(m) => Some(*m as u32),
+            Some(_) => {
+                problems.push(format!("away_after: minutes from 1 to {AWAY_AFTER_MAX_MIN}, ignored"));
+                None
+            }
+        };
+        Self { tables, problems, parsed: true, row_labels, away_after_min }
     }
 
     /// The JSON `init` and `on-settings-changed` get: the defaults in `schema` (the manifest's
@@ -122,6 +134,15 @@ mod tests {
         assert_eq!(p.len(), 3, "{p:?}");
         assert!(p.iter().any(|l| l.contains("shell: not a setting")));
         assert!(p.iter().any(|l| l.contains("pins: a string, but this setting is a boolean")));
+    }
+
+    #[test]
+    fn away_after_is_minutes_in_range() {
+        assert_eq!(PluginConfig::parse("away_after = 5\n").away_after_min, Some(5));
+        for bad in ["away_after = 0", "away_after = \"5m\"", "away_after = 999"] {
+            let c = PluginConfig::parse(bad);
+            assert!(c.away_after_min.is_none() && c.problems[0].contains("away_after"), "{bad}");
+        }
     }
 
     #[test]

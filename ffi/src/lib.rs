@@ -290,6 +290,11 @@ impl HauntPlugins {
         Ok(haunt_core::sync::lock(&self.set).key_action(&plugin_id, &id, down, terminal_shown)?)
     }
 
+    /// The app's periodic look at the user (see `PluginSet::presence`).
+    pub fn presence(&self, locked: bool, idle_secs: u64) {
+        haunt_core::sync::lock(&self.set).presence(locked, idle_secs, std::time::Instant::now());
+    }
+
     /// The plugin that has `keys.hover-hold`, if any.
     pub fn hover_holder(&self) -> Option<String> {
         haunt_core::sync::lock(&self.set).hover_holder()

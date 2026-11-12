@@ -1216,6 +1216,15 @@ impl LoadedPlugin {
         self.call(|b, s| b.call_on_tick(s, ms)).map(|()| true)
     }
 
+    /// The user stepped away (`back_ms` None) or came back after `back_ms`: `on-away-changed`. Coming
+    /// back counts as a user call, so the plugin may show a sheet then.
+    pub fn away_changed(&mut self, back_ms: Option<u64>) -> Result<(), PluginError> {
+        match back_ms {
+            None => self.call(|b, s| b.call_on_away_changed(s, true, 0)),
+            Some(ms) => self.user_call(|p| p.call(|b, s| b.call_on_away_changed(s, false, ms))),
+        }
+    }
+
     /// A job this instance started finished: `on-exec(job, outcome)`. Another instance's job is dropped.
     pub fn exec_done(&mut self, job: u64, outcome: Result<crate::plugin_exec::ExecOutput, String>) -> Result<(), PluginError> {
         let jobs = &mut self.store.data_mut().exec_jobs;
