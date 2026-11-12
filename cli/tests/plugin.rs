@@ -190,7 +190,7 @@ fn terminal_read_installs_behind_its_consent_line() {
     std::fs::write(bad.join("haunt-plugin.toml"), manifest).unwrap();
 
     let o = haunt(&home, &["plugin", "install", bad.to_str().unwrap(), "--yes"], "");
-    assert!(o.status.success() && text(&o).contains("any tab's screen"), "{}", text(&o));
+    assert!(o.status.success() && text(&o).contains("hold ⌥ over that tab's row"), "{}", text(&o));
     assert!(home.join("plugins/dev.haunt.hello").exists());
     std::fs::remove_dir_all(home).unwrap();
 }

@@ -202,7 +202,7 @@ impl Capabilities {
             out.push(("can show one row of its own at the top of the sidebar".into(), false));
         }
         if self.keys {
-            out.push(("can bind keyboard shortcuts of its own and tell when you press and release them".into(), false));
+            out.push(("can bind keyboard shortcuts of its own, tell when you press and release them, and notice when you hold ⌥ over a tab's row".into(), false));
         }
         if self.away {
             out.push(("can tell when you step away from your Mac (locked, asleep or idle) and come back".into(), false));
@@ -230,7 +230,7 @@ impl Capabilities {
             out.push(("can type text into the current tab when you run one of its commands".into(), true));
         }
         if self.terminal_read {
-            out.push(("can read the text on any tab's screen when you use one of its commands or keys; this can contain secrets".into(), true));
+            out.push(("can read the visible lines of a tab when you use one of its commands or keys, or hold ⌥ over that tab's row; this can contain secrets".into(), true));
         }
         for g in &self.fs_read {
             out.push((format!("can read files matching {}, which can contain secrets", plain_glob(g)), true));
@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn terminal_read_is_a_red_consent_line() {
         let m = Manifest::parse(&manifest("terminal_read = true")).unwrap();
-        assert!(m.capabilities.describe().iter().any(|(l, red)| *red && l.contains("any tab's screen")));
+        assert!(m.capabilities.describe().iter().any(|(l, red)| *red && l.contains("hold ⌥ over that tab's row")));
     }
 
     #[test]
