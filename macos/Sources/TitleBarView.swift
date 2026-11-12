@@ -124,7 +124,7 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
                 // An outlined diamond on the window's colour, so no layer shows through; the close light's carries an ×.
                 // Drawn by Haunt: layers never paint inside a light.
                 Tok.App.ornament.setStroke()
-                Draw.diamond(center: NSPoint(x: r.midX, y: r.midY), size: r.width * 0.61, stroke: 1, fill: Tok.Color.windowBg)
+                Draw.diamond(center: NSPoint(x: r.midX, y: r.midY), size: r.width * 0.61, stroke: 1, fill: Tok.Color.windowBg.withAlphaComponent(1))
                 if i == 0 {
                     let k = r.width / 6, p = NSBezierPath()
                     p.move(to: NSPoint(x: r.midX - k, y: r.midY - k)); p.line(to: NSPoint(x: r.midX + k, y: r.midY + k))
