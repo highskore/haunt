@@ -360,29 +360,7 @@ impl FsScope {
             return Err(denied(path));
         }
         let dir = open_dir_nofollow(&full).map_err(|e| io_err(path, e))?;
-        let mut out = Vec::new();
-        for (i, e) in std::fs::read_dir(&full).map_err(|e| io_err(path, e))?.enumerate() {
-            if i == LIST_SCAN {
-                return Err(format!("{path}: more than {LIST_SCAN} entries"));
-            }
-            let name = e.map_err(|e| io_err(path, e))?.file_name();
-            if name.as_bytes().starts_with(b".") {
-                continue;
-            }
-            let Ok(c) = CString::new(name.as_bytes()) else { continue };
-            let Ok(st) = stat_at(&dir, &c) else { continue };
-            let (size, is_dir) = match st.st_mode & libc::S_IFMT {
-                libc::S_IFREG => (st.st_size as u64, false),
-                libc::S_IFDIR => (0, true),
-                _ => continue,
-            };
-            if out.len() == LIST_CAP {
-                return Err(format!("{path}: more than {LIST_CAP} entries"));
-            }
-            out.push(Entry { name: name.to_string_lossy().into_owned(), size, dir: is_dir });
-        }
-        out.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(out)
+        list(dir, path, LIST_SCAN, LIST_CAP)
     }
 }
 
@@ -419,12 +397,13 @@ fn walk(root: &Path, depth: u8, scan: usize, deadline: std::time::Instant) -> io
     tree.folders.push(Folder { path: String::new(), files: 0, bytes: 0 });
     while let Some((rel, level, owner)) = queue.pop_front() {
         let Ok(fd) = open_dir_nofollow(&root.join(&rel)) else { continue };
-        let stop = each_entry(fd, |name, st| {
+        let stop = each_entry(fd, |e| {
             seen += 1;
             if seen > scan || std::time::Instant::now() > deadline {
                 tree.truncated = true;
                 return false;
             }
+            let Some((name, st)) = e else { return true };
             match st.st_mode & libc::S_IFMT {
                 libc::S_IFREG => {
                     let f = &mut tree.folders[owner];
@@ -455,11 +434,16 @@ fn walk(root: &Path, depth: u8, scan: usize, deadline: std::time::Instant) -> io
 
 /// Calls `f(name, stat)` for each entry of the open folder `fd` but `.`, `..` and dot names, without
 /// following a symlink, until `f` returns false; returns whether it went through them all.
-fn each_entry(fd: OwnedFd, mut f: impl FnMut(&[u8], &libc::stat) -> bool) -> io::Result<bool> {
+/// Calls `f` for every entry of the folder `fd` but `.` and `..`, with its name and lstat, or `None` for
+/// a dot entry or one that can't be stat'ed, so a caller's caps count those too. Whether `f` never stopped.
+fn each_entry(fd: OwnedFd, mut f: impl FnMut(Option<(&[u8], &libc::stat)>) -> bool) -> io::Result<bool> {
     use std::os::fd::IntoRawFd;
-    let dir = unsafe { libc::fdopendir(fd.into_raw_fd()) };
+    let raw = fd.into_raw_fd();
+    let dir = unsafe { libc::fdopendir(raw) };
     if dir.is_null() {
-        return Err(io::Error::last_os_error());
+        let e = io::Error::last_os_error();
+        unsafe { libc::close(raw) };
+        return Err(e);
     }
     let dfd = unsafe { libc::dirfd(dir) };
     let mut all = true;
@@ -469,20 +453,50 @@ fn each_entry(fd: OwnedFd, mut f: impl FnMut(&[u8], &libc::stat) -> bool) -> io:
             break;
         }
         let name = unsafe { std::ffi::CStr::from_ptr((*e).d_name.as_ptr()) };
-        if name.to_bytes().starts_with(b".") {
+        let bytes = name.to_bytes();
+        if bytes == b"." || bytes == b".." {
             continue;
         }
         let mut st: libc::stat = unsafe { std::mem::zeroed() };
-        if unsafe { libc::fstatat(dfd, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
-            continue;
-        }
-        if !f(name.to_bytes(), &st) {
+        let shown = !bytes.starts_with(b".") && unsafe { libc::fstatat(dfd, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } == 0;
+        if !f(shown.then_some((bytes, &st))) {
             all = false;
             break;
         }
     }
     unsafe { libc::closedir(dir) };
     Ok(all)
+}
+
+/// The regular files and folders in `dir`, read through that fd: an error past `scan` entries (dot ones
+/// included) or `cap` listed ones.
+fn list(dir: OwnedFd, path: &str, scan: usize, cap: usize) -> Result<Vec<Entry>, String> {
+    let (mut out, mut seen, mut over) = (Vec::new(), 0usize, None);
+    each_entry(dir, |e| {
+        seen += 1;
+        if seen > scan {
+            over = Some(format!("{path}: more than {scan} entries"));
+            return false;
+        }
+        let Some((name, st)) = e else { return true };
+        let (size, dir) = match st.st_mode & libc::S_IFMT {
+            libc::S_IFREG => (st.st_size as u64, false),
+            libc::S_IFDIR => (0, true),
+            _ => return true,
+        };
+        if out.len() == cap {
+            over = Some(format!("{path}: more than {cap} entries"));
+            return false;
+        }
+        out.push(Entry { name: String::from_utf8_lossy(name).into_owned(), size, dir });
+        true
+    })
+    .map_err(|e| io_err(path, e))?;
+    if let Some(e) = over {
+        return Err(e);
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
 }
 
 fn denied(path: &str) -> String {
@@ -708,7 +722,9 @@ mod tests {
     #[test]
     fn a_tree_past_its_scan_cap_is_truncated() {
         let root = tempdir("tree-cap");
-        let proj = root.join("proj");
+        // Its own folder: the fixture's .claude and .git would count toward the cap too.
+        let proj = root.join("proj/flat");
+        std::fs::create_dir_all(&proj).unwrap();
         for i in 0..30 {
             std::fs::write(proj.join(format!("f{i}")), "x").unwrap();
         }
@@ -716,6 +732,39 @@ mod tests {
         assert!(t.truncated && t.folders[0].files == 10, "{t:?}");
         let t = walk(&proj.canonicalize().unwrap(), 3, 10, std::time::Instant::now()).unwrap();
         assert!(t.truncated && t.folders[0].files == 0, "past the deadline: {t:?}");
+    }
+
+    #[test]
+    fn dot_entries_count_toward_the_tree_cap() {
+        let root = tempdir("tree-dots");
+        let proj = root.join("proj");
+        for i in 0..30 {
+            std::fs::write(proj.join(format!(".d{i}")), "x").unwrap();
+        }
+        let t = walk(&proj.canonicalize().unwrap(), 3, 10, std::time::Instant::now() + TREE_TIME).unwrap();
+        assert!(t.truncated && t.folders[0].files == 0, "a folder of dotfiles can't keep the walk going: {t:?}");
+        let t = walk(&proj.canonicalize().unwrap(), 3, 10, std::time::Instant::now()).unwrap();
+        assert!(t.truncated, "nor run past the deadline: {t:?}");
+    }
+
+    #[test]
+    fn a_listing_reads_the_folder_it_opened() {
+        let root = tempdir("list-fd");
+        let src = root.join("proj/src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("a.rs"), "a").unwrap();
+        let fd = open_dir_nofollow(&src.canonicalize().unwrap()).unwrap();
+        std::fs::rename(&src, root.join("proj/old")).unwrap();
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("swapped.rs"), "b").unwrap();
+        assert_eq!(list(fd, "src", LIST_SCAN, LIST_CAP).unwrap(), [Entry { name: "a.rs".into(), size: 1, dir: false }], "the folder swapped in after the open is not listed");
+
+        for i in 0..5 {
+            std::fs::write(src.join(format!(".h{i}")), "").unwrap();
+        }
+        let fd = || open_dir_nofollow(&src.canonicalize().unwrap()).unwrap();
+        assert!(list(fd(), "src", 4, LIST_CAP).unwrap_err().contains("more than 4 entries"), "dot entries count toward the scan cap");
+        assert!(list(fd(), "src", LIST_SCAN, 0).unwrap_err().contains("more than 0 entries"));
     }
 
     #[test]
