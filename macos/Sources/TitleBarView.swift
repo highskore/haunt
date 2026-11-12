@@ -121,9 +121,10 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
                 Layers.draw("lights", r, within: bounds, exclude: r, state: Layers.state(self, hover: lightsHover), index: i, in: ctx)
             }
             if Theme.current.effects.lightsShape == "diamond" && !lightsHover {
-                // An outlined diamond; the close light's carries an ×. Drawn by Haunt: layers never paint inside a light.
+                // An outlined diamond on the window's colour, so no layer shows through; the close light's carries an ×.
+                // Drawn by Haunt: layers never paint inside a light.
                 Tok.App.ornament.setStroke()
-                Draw.diamond(center: NSPoint(x: r.midX, y: r.midY), size: r.width * 0.61, stroke: 1)
+                Draw.diamond(center: NSPoint(x: r.midX, y: r.midY), size: r.width * 0.61, stroke: 1, fill: Tok.Color.windowBg)
                 if i == 0 {
                     let k = r.width / 6, p = NSBezierPath()
                     p.move(to: NSPoint(x: r.midX - k, y: r.midY - k)); p.line(to: NSPoint(x: r.midX + k, y: r.midY + k))
@@ -389,6 +390,12 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
 
     /// The bar's text, in the colours it's drawn in.
     private func titleRuns() -> [Layers.Run] {
+        // Diamond lights are drawn in the ornament's colour over the bar's layers, so they're held to it like text.
+        let lights = Theme.current.effects.lightsShape == "diamond" && !boxes ? (0..<3).map { Layers.Run(rect: lightRect($0), ink: Tok.App.ornament) } : []
+        return lights + titleTextRuns()
+    }
+
+    private func titleTextRuns() -> [Layers.Run] {
         func runs(_ r: NSRect, _ inks: [NSColor]) -> [Layers.Run] { inks.map { Layers.Run(rect: r, ink: $0) } }
         if zen { return hintLayout().parts.flatMap { runs($0.2, [Tok.Color.textLabel]) } }
         if caption {

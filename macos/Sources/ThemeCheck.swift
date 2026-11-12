@@ -42,12 +42,13 @@ enum ThemeCheck {
             Layers.draw("pane.backdrop", pane, within: pane, state: state, in: ctx)
             Layers.draw("pane.frame", pane.insetBy(dx: -4, dy: -4), exclude: pane, state: state, in: ctx)
             let bar = CGRect(x: 0, y: 0, width: 1100, height: top)
-            Layers.draw("titlebar", bar, text: Theme.current.effects.titlebarStyle == "caption"
+            let d = Tok.Size.lightsD
+            let lights = (0..<3).map { i in CGRect(x: Tok.Size.titlebarPadx + CGFloat(i) * (d + Tok.Size.lightsGap), y: (top - d) / 2, width: d, height: d) }
+            let lightRuns = Theme.current.effects.lightsShape == "diamond" ? lights.flatMap { runs($0, Tok.App.ornament) } : []
+            Layers.draw("titlebar", bar, text: lightRuns + (Theme.current.effects.titlebarStyle == "caption"
                             ? runs(CGRect(x: 24, y: 0, width: 300, height: Tok.Size.titlebarH), Theme.current.app.rowSelectInk)
-                            : runs(CGRect(x: 400, y: 0, width: 300, height: top), Tok.App.titleFg, Tok.App.titleMeta), state: state, in: ctx)
-            for i in 0..<3 {
-                let d = Tok.Size.lightsD
-                let light = CGRect(x: Tok.Size.titlebarPadx + CGFloat(i) * (d + Tok.Size.lightsGap), y: (top - d) / 2, width: d, height: d)
+                            : runs(CGRect(x: 400, y: 0, width: 300, height: top), Tok.App.titleFg, Tok.App.titleMeta)), state: state, in: ctx)
+            for (i, light) in lights.enumerated() {
                 Layers.draw("lights", light, within: bar, exclude: light, state: state, index: i, in: ctx)
             }
             let side = CGRect(x: 0, y: top, width: w, height: 700 - top), cw = w - 1
@@ -70,12 +71,15 @@ enum ThemeCheck {
                     Layers.draw(slot, box, within: box, text: text, base: slot == "row.selected" ? base : [], state: state, in: ctx)
                 }
                 let icon = CGRect(x: inset + pad[1], y: y + pad[0], width: Tok.Size.iconSize, height: Tok.Size.iconSize)
-                Layers.draw("icon", icon, state: state, index: r, in: ctx)
+                let col2 = icon.maxX + Tok.Size.rowGap[1]
+                Layers.draw("icon", icon, within: CGRect(x: box.minX, y: line1.minY, width: col2 - box.minX, height: line1.height).intersection(box),
+                            state: state, index: r, in: ctx)
                 let run = CGRect(x: cw - inset - pad[1] - 50, y: y + pad[0], width: 50, height: Tok.Size.rowRight * Tok.Font.baseLine)
                 let needs = fx.needsPill ? [Layers.Run(rect: run, ink: app.pillFg, on: app.pillBg)] : runs(run, Tok.Color.needs)
                 Layers.draw("status.needs", run, within: side, textRun: run, text: needs, state: state, in: ctx)
-                Layers.draw("bar.track", CGRect(x: 44, y: y + 40, width: 180, height: Tok.Size.barH), state: state, in: ctx)
-                Layers.draw("bar.fill", CGRect(x: 44, y: y + 40, width: 90, height: Tok.Size.barH), state: state, in: ctx)
+                let barBand = CGRect(x: box.minX, y: y + 36, width: box.width, height: box.maxY - (y + 36))
+                Layers.draw("bar.track", CGRect(x: 44, y: y + 40, width: 180, height: Tok.Size.barH), within: barBand, state: state, in: ctx)
+                Layers.draw("bar.fill", CGRect(x: 44, y: y + 40, width: 90, height: Tok.Size.barH), within: barBand, state: state, in: ctx)
             }
             let pal = CGRect(x: 700, y: 300, width: 380, height: 380)
             Layers.draw("palette", pal, state: state, in: ctx)

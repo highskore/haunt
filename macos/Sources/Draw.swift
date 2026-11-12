@@ -160,11 +160,15 @@ enum Draw {
     }
 
     /// A square turned 45°, `size` across its sides, stroked or filled in the current colour.
-    static func diamond(center c: NSPoint, size: CGFloat, stroke: CGFloat? = nil) {
+    static func diamond(center c: NSPoint, size: CGFloat, stroke: CGFloat? = nil, fill: NSColor? = nil) {
         let k = size / 2 * 2.squareRoot()
         let p = NSBezierPath()
         p.move(to: NSPoint(x: c.x, y: c.y - k)); p.line(to: NSPoint(x: c.x + k, y: c.y))
         p.line(to: NSPoint(x: c.x, y: c.y + k)); p.line(to: NSPoint(x: c.x - k, y: c.y)); p.close()
+        if let fill, stroke != nil {
+            fill.setFill()
+            p.fill()
+        }
         if let stroke { p.lineWidth = stroke; p.stroke() } else { p.fill() }
     }
 
