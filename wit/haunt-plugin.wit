@@ -446,7 +446,7 @@ interface sound {
   ambient: func(sound: name, level: f32) -> result<_, string>;
 }
 
-// Capability `speech`. Speaks in the system voice. Text is plain and cut to 200 characters; one
+// Capability `speech`. Speaks in the system voice. Text is plain, cut to 200 characters, without `[` or `]`; one
 // utterance at a time, at most 1 every 2 s.
 interface speech {
   say: func(text: string) -> result<_, string>;

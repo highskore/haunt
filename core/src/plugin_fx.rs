@@ -330,12 +330,12 @@ impl wsound::Host for HostState {
 
 impl wspeech::Host for HostState {
     fn say(&mut self, text: String) -> Result<(), String> {
-        // `[[` opens an embedded speech command (rate, voice, volume) in the system synthesiser.
-        let mut text: String = text.chars().take(SAY_MAX * 4).collect();
-        while text.contains("[[") {
-            text = text.replace("[[", "[ [");
+        // `[[` opens an embedded speech command (rate, voice, volume) in the system synthesiser. Brackets go
+        // after `plain`, which drops hidden characters and so could join two of them.
+        let text: String = super::plain(&text, SAY_MAX).chars().filter(|c| !matches!(c, '[' | ']')).collect();
+        if text.trim().is_empty() {
+            return Err("nothing to say".into());
         }
-        let text = super::plain_opt(Some(text), SAY_MAX).ok_or("nothing to say")?;
         if !self.fx.say_rate.ok() {
             return Err("at most one utterance every 2 seconds".into());
         }
@@ -672,14 +672,15 @@ mod sound_tests {
         assert!(wspeech::Host::say(&mut a, " \u{200b}\u{202e}\n".into()).unwrap_err().contains("nothing"));
         wspeech::Host::say(&mut a, format!("tests\u{202e} passed\u{1b}]0;x\u{7}\n{}", "z".repeat(300))).unwrap();
         let [HostRequest::Say { text, .. }] = &a.outbox[..] else { panic!("{:?}", a.outbox) };
-        assert_eq!(text.chars().count(), SAY_MAX);
-        assert!(text.starts_with("tests passed]0;x z"), "{text}");
+        assert_eq!(text.chars().count(), SAY_MAX - 1, "the cut comes first, then the bracket goes");
+        assert!(text.starts_with("tests passed0;x z"), "{text}");
         assert!(wspeech::Host::say(&mut a, "again".into()).unwrap_err().contains("2 seconds"));
         a.fx.say_rate = Rate::new(1, SAY_EVERY);
         a.outbox.clear();
-        wspeech::Host::say(&mut a, "[[[rate 900]][[volm 1]]hi".into()).unwrap();
-        assert!(matches!(&a.outbox[..], [HostRequest::Say { text, .. }] if !text.contains("[[")), "{:?}", a.outbox);
-        assert!(matches!(&a.outbox[..], [HostRequest::Say { text, .. }] if text == "[ [ [rate 900]][ [volm 1]]hi"), "{:?}", a.outbox);
+        wspeech::Host::say(&mut a, "[\u{200B}[rate 900]][\u{AD}[volm 1]]hi".into()).unwrap();
+        assert!(matches!(&a.outbox[..], [HostRequest::Say { text, .. }] if text == "rate 900volm 1hi"), "{:?}", a.outbox);
+        a.fx.say_rate = Rate::new(1, SAY_EVERY);
+        assert!(wspeech::Host::say(&mut a, "[[]] [\u{200B}]".into()).unwrap_err().contains("nothing"));
         wspeech::Host::stop(&mut a);
         wspeech::Host::stop(&mut a);
         assert_eq!(a.outbox.iter().filter(|r| matches!(r, HostRequest::SayStop { .. })).count(), 1);
