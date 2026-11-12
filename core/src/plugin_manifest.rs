@@ -243,26 +243,36 @@ impl Capabilities {
 
     /// Lines for capabilities `self` has that `old` did not.
     pub fn added_since(&self, old: &Capabilities) -> Vec<(String, bool)> {
+        // No `..`: a new capability doesn't build until it is handled here, so an update can't gain it unasked.
+        let Capabilities {
+            events, event_details, pty_write, pty_type, notifications, decisions_read, allowlist_suggest, sidebar, theme, decorate, timer,
+            panel, notify_hold, sidebar_top, keys, away, fs_read, fs_write, net, hid, exec, terminal_read, clipboard,
+        } = self;
+        let new = |v: &[String], o: &[String]| v.iter().filter(|x| !o.contains(x)).cloned().collect::<Vec<_>>();
         let grown = Capabilities {
-            events: self.events.iter().filter(|e| !old.events.contains(e)).cloned().collect(),
-            event_details: self.event_details && !old.event_details,
-            pty_write: self.pty_write && !old.pty_write,
-            pty_type: self.pty_type && !old.pty_type,
-            notifications: self.notifications && !old.notifications,
-            decisions_read: self.decisions_read && !old.decisions_read,
-            allowlist_suggest: self.allowlist_suggest && !old.allowlist_suggest,
-            sidebar: self.sidebar && !old.sidebar,
-            theme: self.theme && !old.theme,
-            decorate: self.decorate && !old.decorate,
-            timer: self.timer && !old.timer,
-            panel: self.panel && !old.panel,
-            notify_hold: self.notify_hold && !old.notify_hold,
-            sidebar_top: self.sidebar_top && !old.sidebar_top,
-            keys: self.keys && !old.keys,
-            fs_read: self.fs_read.iter().filter(|g| !old.fs_read.contains(g)).cloned().collect(),
-            fs_write: self.fs_write.iter().filter(|g| !old.fs_write.contains(g)).cloned().collect(),
-            exec: self.exec.iter().filter(|x| !old.exec.contains(x)).cloned().collect(),
-            ..Default::default()
+            events: new(events, &old.events),
+            event_details: *event_details && !old.event_details,
+            pty_write: *pty_write && !old.pty_write,
+            pty_type: *pty_type && !old.pty_type,
+            notifications: *notifications && !old.notifications,
+            decisions_read: *decisions_read && !old.decisions_read,
+            allowlist_suggest: *allowlist_suggest && !old.allowlist_suggest,
+            sidebar: *sidebar && !old.sidebar,
+            theme: *theme && !old.theme,
+            decorate: *decorate && !old.decorate,
+            timer: *timer && !old.timer,
+            panel: *panel && !old.panel,
+            notify_hold: *notify_hold && !old.notify_hold,
+            sidebar_top: *sidebar_top && !old.sidebar_top,
+            keys: *keys && !old.keys,
+            away: *away && !old.away,
+            fs_read: new(fs_read, &old.fs_read),
+            fs_write: new(fs_write, &old.fs_write),
+            net: new(net, &old.net),
+            hid: hid.iter().filter(|x| !old.hid.contains(x)).cloned().collect(),
+            exec: new(exec, &old.exec),
+            terminal_read: *terminal_read && !old.terminal_read,
+            clipboard: clipboard.clone().filter(|c| old.clipboard.as_ref() != Some(c)),
         };
         grown.describe()
     }
@@ -530,6 +540,23 @@ mod tests {
         assert!(Manifest::parse(&m.replace("plugin.wasm", "../x.wasm")).is_err());
         assert!(Manifest::parse(&m.replace("plugin.wasm", "/tmp/x.wasm")).is_err());
         assert!(Manifest::parse(&m.replace("api = \"0.5\"", "api = \"0.5.3\"")).is_ok());
+    }
+
+    #[test]
+    fn every_capability_gained_by_an_update_asks_again() {
+        let none = Capabilities::default();
+        for line in [
+            "events = [\"agent.tool\"]", "event_details = true", "pty_write = true", "pty_type = true", "notifications = true",
+            "decisions_read = true", "allowlist_suggest = true", "sidebar = true", "decorate = true", "timer = true", "panel = true",
+            "notify_hold = true", "sidebar_top = true", "keys = true", "away = true", "fs_read = [\"${cwd}/a\"]",
+            "fs_write = [\"${cwd}/a\"]", "exec = [\"git-status\"]", "terminal_read = true",
+        ] {
+            let m = Manifest::parse(&manifest(line)).unwrap_or_else(|e| panic!("{line}: {e}"));
+            assert!(!m.capabilities.added_since(&none).is_empty(), "{line} added with no consent line");
+        }
+        for refused in ["net = [\"a.example\"]", "hid = [1]", "clipboard = \"read\""] {
+            assert!(Manifest::parse(&manifest(refused)).is_err(), "{refused}");
+        }
     }
 
     #[test]
