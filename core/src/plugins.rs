@@ -69,13 +69,13 @@ pub struct AuditLine {
     pub plugin: String,
     /// `terminal.read`, `pty.answer`, `pty.type`, `exec`, `fs.read`, `fs.list`, `fs.write`,
     /// `decisions.query`, `clipboard.write`, `link.open-url`, `sidebar.focus`, `fs-list.entries`,
-    /// `fs-list.tree`, or `audit.dropped` for lines past `MAX_AUDIT`.
+    /// `fs-list.tree`, `speech.say`, or `audit.dropped` for lines past `MAX_AUDIT`.
     pub kind: String,
     pub surface: String,
     /// The command's name, the path inside the project folder, or the query's text.
     pub detail: String,
     /// Lines read, the request answered, bytes typed or moved, the job started, names listed, rows
-    /// returned, or lines dropped; summed over `count`.
+    /// returned, characters spoken, or lines dropped; summed over `count`.
     pub n: u64,
     /// Calls this line stands for: repeats of one path of a cheap kind (`FOLDED_AUDIT`) in one plugin
     /// call fold into one line, at the first call's place and time, so a flood can't rotate older lines out.

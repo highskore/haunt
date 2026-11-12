@@ -479,7 +479,10 @@ impl wspeech::Host for HostState {
         if !self.fx.say_rate.ok() {
             return Err("at most one utterance every 2 seconds".into());
         }
+        let n = text.chars().count() as u64;
         self.request(HostRequest::Say { plugin_id: self.id.clone(), text })?;
+        // The length only: what a plugin says aloud may be anything it read.
+        self.audit("speech.say", "", "", n);
         self.fx.spoke = true;
         Ok(())
     }
@@ -977,6 +980,9 @@ mod sound_tests {
         a.outbox.clear();
         wspeech::Host::say(&mut a, "[\u{200B}[rate 900]][\u{AD}[volm 1]]hi".into()).unwrap();
         assert!(matches!(&a.outbox[..], [HostRequest::Say { text, .. }] if text == "rate 900volm 1hi"), "{:?}", a.outbox);
+        let lines: Vec<_> = a.take_audit().into_iter().map(|l| (l.kind, l.surface, l.detail, l.n)).collect();
+        let said = |n| ("speech.say".to_string(), String::new(), String::new(), n);
+        assert_eq!(lines, [said(SAY_MAX as u64 - 1), said(16)], "spoken lengths only, never the text");
         a.fx.say_rate = Rate::new(1, SAY_EVERY);
         assert!(wspeech::Host::say(&mut a, "[[]] [\u{200B}]".into()).unwrap_err().contains("nothing"));
         wspeech::Host::stop(&mut a);
