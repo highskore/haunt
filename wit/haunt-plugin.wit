@@ -367,9 +367,9 @@ interface top-row {
 // Capability `keys`. `chord` is written as in config.toml (`"cmd+shift+p"`) and needs cmd, since any
 // other chord is terminal input. Pressing it calls `on-action(id, "key-down")`; releasing it, lifting
 // one of its modifiers or haunt losing focus calls `on-action(id, "key-up")`. Repeats are dropped.
-// Refused for a chord haunt or macOS reserves, or one already bound, and for an id one of its palette commands
-// has; `[keys] "<plugin id>/<id>"` moves
-// it. At most 8 per plugin. Both calls may type into the tab like a palette command (`pty_type`).
+// Refused for a chord haunt or macOS reserves, or one already bound, and for an id one of its palette
+// commands has; `[keys] "<plugin id>/<id>"` moves it. At most 8 per plugin. Both calls may type into
+// the tab like a palette command (`pty_type`).
 interface keys {
   bind: func(id: string, chord: string) -> result<_, string>;
   unbind: func(id: string);
