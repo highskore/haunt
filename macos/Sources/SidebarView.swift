@@ -624,7 +624,11 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         if let c = row.color, snapshot.colorStyle == .tint { base.append(Tok.Color.tab(c).withAlphaComponent(Tok.Color.tabTintAlpha)) }
         let rowClip = box.intersection(bounds)
         Layers.draw("row", box, within: rowClip, text: text, base: base, state: state, in: ctx)
-        if row.selected { Layers.draw("row.selected", box, within: rowClip, text: text, base: base, state: state, in: ctx) }
+        if row.selected && !Layers.draw("row.selected", box, within: rowClip, text: text, base: base, state: state, in: ctx) && fx.rowSelect == "none" {
+            // The theme's layers were the selection; with them off or skipped, Haunt's fill stands in.
+            Tok.Color.rowSelected.setFill()
+            shape.fill()
+        }
         if hover && !row.selected { Layers.draw("row.hover", box, within: rowClip, text: text, base: base, state: state, in: ctx) }
         let gapY = Tok.Size.rowGap[0], gapX = Tok.Size.rowGap[1]
         let left = padX, right = contentWidth - padX
@@ -640,8 +644,8 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             let ink = fx.needsPill ? Layers.Run(rect: run, ink: Theme.current.app.pillFg, on: Theme.current.app.pillBg) : Layers.Run(rect: run, ink: Tok.Color.needs)
             Layers.draw("status.needs", run, within: bounds, textRun: run, text: [ink], base: base, state: state, in: ctx)
         }
-        // After the row's last layer: the icon's glyph is text.
-        drawIcon(row.kind, in: icon, ctx: ctx)
+        // After the row's last layer: the icon's glyph is text. Its layers stay left of the name, on line 1.
+        drawIcon(row.kind, in: icon, band: NSRect(x: box.minX, y: y, width: col2 - box.minX, height: rowLine1).intersection(rowClip), ctx: ctx)
 
         if l.hovered {
             let r = closeRect(top: top)
@@ -701,9 +705,13 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         y += Tok.Size.rowMeta * lh
 
         if let frac = l.decor?.bar ?? bar(row).map({ $0.total == 0 ? 0 : min(CGFloat($0.done) / CGFloat($0.total), 1) }) {
+            let metaBottom = y
             y += gapY + Tok.Size.barMt
             let track = NSRect(x: col2, y: y, width: right - col2, height: Tok.Size.barH)
-            drawBar(track, fill: NSRect(x: col2, y: y, width: track.width * frac, height: Tok.Size.barH))
+            // The bar's layers stay between the meta line and the next line (or the row's end).
+            let next = l.subs.isEmpty ? box.maxY : y + Tok.Size.barH + gapY + Tok.Size.subMt
+            let band = NSRect(x: box.minX, y: metaBottom, width: box.width, height: max(next - metaBottom, 0)).intersection(rowClip)
+            drawBar(track, fill: NSRect(x: col2, y: y, width: track.width * frac, height: Tok.Size.barH), band: band)
             y += Tok.Size.barH
         }
 
@@ -716,14 +724,14 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     }
 
     /// The progress bar, with `[effects] bar.radius` and `bar.glow`.
-    private func drawBar(_ track: NSRect, fill: NSRect) {
+    private func drawBar(_ track: NSRect, fill: NSRect, band: NSRect) {
         let fx = Theme.current.effects, r = min(fx.barRadius, track.height / 2)
         let ctx = NSGraphicsContext.current?.cgContext
-        defer { if let ctx, fill.width > 0 { Layers.draw("bar.fill", fill, in: ctx) } }
-        if fx.progressStyle == "none" {
-            if let ctx { Layers.draw("bar.track", track, in: ctx) }
-            return
+        if fx.progressStyle == "none", let ctx {
+            // The theme's layers are the bar; if they don't draw, Haunt's plain bar stands in.
+            if Layers.draw("bar.track", track, within: band, in: ctx) && (fill.width == 0 || Layers.draw("bar.fill", fill, within: band, in: ctx)) { return }
         }
+        defer { if let ctx, fill.width > 0 { Layers.draw("bar.fill", fill, within: band, in: ctx) } }
         if fx.progressStyle == "segments" {
             // A sunken (or `app.bar.frame`d) track, 2 pt in, filled with `app.bar.segment` blocks.
             let app = Theme.current.app, seg = app.barSegment
@@ -746,13 +754,13 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         }
         guard r > 0 || fx.barGlow else {
             Draw.fill(track, Tok.Color.barTrack)
-            if let ctx { Layers.draw("bar.track", track, in: ctx) }
+            if let ctx { Layers.draw("bar.track", track, within: band, in: ctx) }
             Draw.fill(fill, Tok.Color.barFill)
             return
         }
         Tok.Color.barTrack.setFill()
         NSBezierPath(roundedRect: track, xRadius: r, yRadius: r).fill()
-        if let ctx { Layers.draw("bar.track", track, in: ctx) }
+        if let ctx { Layers.draw("bar.track", track, within: band, in: ctx) }
         guard fill.width > 0 else { return }
         NSGraphicsContext.saveGraphicsState()
         if fx.barGlow {
@@ -771,7 +779,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         ["row", "row.selected", "row.hover"].contains(where: Layers.has) ? Layers.bleed["row"] ?? 0 : 0
     }
 
-    private func drawIcon(_ kind: RowKind, in r: NSRect, ctx: CGContext) {
+    private func drawIcon(_ kind: RowKind, in r: NSRect, band: NSRect, ctx: CGContext) {
         let fx = Theme.current.effects
         // The plain shell's tile is the icon's background, so its layers go over it; every layer before the glyphs.
         // `index` tells the kinds apart: 0 Claude, 1 Codex, 2 a shell.
@@ -781,7 +789,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             Tok.Color.iconBg.setFill()
             NSBezierPath(roundedRect: r, xRadius: Tok.Size.iconRadius, yRadius: Tok.Size.iconRadius).fill()
         }
-        if kind != .shell || shellTile { Layers.draw("icon", r, state: Layers.state(self), index: index, in: ctx) }
+        if kind != .shell || shellTile { Layers.draw("icon", r, within: band, state: Layers.state(self), index: index, in: ctx) }
         if kind != .codex, Draw.pixelIcon(claude: kind == .claude, in: r) { return }
         switch kind {
         case .claude:

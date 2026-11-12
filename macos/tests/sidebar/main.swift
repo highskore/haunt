@@ -73,5 +73,56 @@ check(SidebarView.subText("builder", room: 5) == "↳ builder", "and the theme's
 Theme.current = Theme()
 Theme.statusCheck = { _ in true }
 
+// A row's icon and bar layers stay in their own bands; a selection or bar left to the layers falls back to Haunt's.
+func render(_ v: SidebarView) -> NSBitmapImageRep {
+    let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds)!
+    v.cacheDisplay(in: v.bounds, to: rep)
+    Layers.endFrame()
+    return rep
+}
+func changed(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> Int {
+    var n = 0
+    for y in 0..<a.pixelsHigh { for x in 0..<a.pixelsWide where a.colorAt(x: x, y: y) != b.colorAt(x: x, y: y) { n += 1 } }
+    return n
+}
+var busy = row("agent")
+busy.kind = .claude
+busy.meta = "main · Writing tests"
+busy.progress = Progress(done: 1, total: 2)
+busy.selected = true
+let rows = SidebarView(frame: NSRect(x: 0, y: 0, width: 250, height: 200))
+rows.snapshot = SidebarSnapshot(groups: [SidebarGroup(id: "g", label: "", rows: [busy, row("next")])], colorStyle: .dot)
+do {
+    // Tight, so a 6 pt glow would reach the meta line.
+    Theme.current.size.barMt = 0
+    Theme.current.size.rowGap[0] = 2
+    let far = PrimSpec(kind: "rect", x: SpanSpec(a: -20, b: -20), y: SpanSpec(a: -20, b: -20), fill: "#000000")
+    let specs = ["row", "icon", "bar.track", "bar.fill"].map { LayerSpec(id: $0, slot: $0, prims: [$0 == "row" ? PrimSpec(kind: "rect", fill: "#00000001") : far]) }
+    Layers.set(Layers.resolve(specs, images: [], theme: Theme.current).0, source: LayerSource(specs: specs))
+    var clips: [String: [CGRect]] = [:]
+    Layers.recorder = { clips[$0, default: []].append($1) }
+    _ = render(rows)
+    Layers.recorder = nil
+    Layers.set([], source: LayerSource())
+    let lh = Tok.Font.baseLine, gapY = Tok.Size.rowGap[0], line1 = max(Tok.Size.iconSize, Tok.Size.rowName * lh, Tok.Size.rowRight * lh)
+    if let box = clips["row"]?.first, let icon = clips["icon"]?.first, let bar = clips["bar.fill"]?.first {
+        let col2 = Theme.current.effects.rowInset + Tok.Size.rowPad[1] + Tok.Size.iconSize + Tok.Size.rowGap[1], top = box.minY + Tok.Size.rowPad[0]
+        check(icon.maxX <= col2 + 0.01 && icon.minY >= top - 0.01 && icon.maxY <= top + line1 + 0.01, "the icon's layers stay left of the name on line 1: \(icon)")
+        check(bar.minY >= top + line1 + gapY + Tok.Size.rowMeta * lh - 0.01 && bar.maxY <= box.maxY + 0.01, "the bar's stay under the meta line, in the row: \(bar)")
+    } else {
+        check(false, "drew the row, icon and bar: \(clips.keys.sorted())")
+    }
+    Theme.current = Theme()
+}
+do {
+    Theme.current.effects.rowSelect = "fill"
+    Theme.current.effects.progressStyle = "bar"
+    let haunt = render(rows)
+    Theme.current.effects.rowSelect = "none"
+    Theme.current.effects.progressStyle = "none"
+    check(changed(render(rows), haunt) == 0, "with no layers, a theme's \"none\" selection and bar are drawn as Haunt's")
+    Theme.current = Theme()
+}
+
 print(failures == 0 ? "sidebar: all passed" : "sidebar: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -204,19 +204,21 @@ enum Layers {
     /// draws after, each run in its own colour, and `base` what it fills under the layers beyond the slot's own
     /// background (a tint). Without `text` the text run (or the whole slot) is checked in every colour the slot's
     /// text may take. If the layers, as painted, leave any run unreadable, none of the slot's layers are drawn.
+    /// Says whether any of the slot's layers were drawn.
+    @discardableResult
     static func draw(_ slot: String, _ bounds: NSRect, within: NSRect? = nil, exclude: NSRect? = nil, textRun: NSRect? = nil,
-                     text: [Run]? = nil, base: [NSColor] = [], state: Set<String> = [], index: Int? = nil, in ctx: CGContext) {
+                     text: [Run]? = nil, base: [NSColor] = [], state: Set<String> = [], index: Int? = nil, in ctx: CGContext) -> Bool {
         // A slot that draws nothing this time is not under the next slot's text.
         drawn[slot] = nil
-        guard let layers = current[slot] else { return }
-        if slot == "pane.backdrop" && !terminalSeeThrough { return }
+        guard let layers = current[slot] else { return false }
+        if slot == "pane.backdrop" && !terminalSeeThrough { return false }
         let b = bleed[slot] ?? 0
         var clip = bounds.insetBy(dx: -b, dy: -b)
         if let within { clip = clip.intersection(within) }
-        guard !clip.isEmpty else { return }
+        guard !clip.isEmpty else { return false }
         recorder?(slot, clip)
         let picked = layers.indices.filter { layers[$0].when.isSubset(of: state) && (layers[$0].index == nil || layers[$0].index == index) }
-        guard !picked.isEmpty else { return }
+        guard !picked.isEmpty else { return false }
         let shown = picked.map { layers[$0] }, names = picked.map { layers[$0].id ?? "#\($0)" }
         if !frame.open {
             frame.open = true
@@ -233,12 +235,13 @@ enum Layers {
                                             state: state, index: index, scale: scale, ctm: ctx.ctm, names: names, context: ObjectIdentifier(ctx)) {
             let said = "layers on \(slot) skipped: \(why)"
             if skipped.insert(said).inserted { report(said) }
-            return
+            return false
         }
         let d = Drawn(shown: shown, names: names, bounds: bounds, clip: clip, exclude: exclude, run: run, state: state, index: index,
                       ctm: ctx.ctm, context: ObjectIdentifier(ctx))
         drawn[slot] = d
         paint(d, slot: slot, in: ctx)
+        return true
     }
 
     /// A slot's layers as last drawn in this redraw, for the checks of the slots drawn over it.
