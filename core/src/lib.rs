@@ -43,7 +43,7 @@ pub use arrange::{Arrangement, ColorStyle, TabColor};
 pub use decisions::Decision;
 pub use event::{Agent, AgentEvent, EventKind, ParseError, ToolCall, parse_body, parse_osc};
 pub use layout::{PendingRequest, Progress, Row, RowKind, SidebarGroup, SidebarSnapshot, Subrow};
-pub use model::{Core, CoreError, CoreHandle, EventTap, Listener, PluginRefusal, SurfaceEnv};
+pub use model::{Core, CoreError, CoreHandle, EventTap, LineResult, Listener, PluginRefusal, SurfaceEnv};
 pub use session::{Outcome, Refusal};
 pub use turn::{CommandOutcome, ReviewTurn, TurnCommand, TurnSubagent, TurnTask};
 

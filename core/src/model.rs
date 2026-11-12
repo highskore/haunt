@@ -77,6 +77,16 @@ pub struct SurfaceEnv {
 }
 
 pub type Listener = Arc<dyn Fn() + Send + Sync>;
+
+/// What `Core::replay_line` did with a line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineResult {
+    /// It carried the surface's nonce: only such events may create a request.
+    pub verified: bool,
+    pub changed: bool,
+    /// Why the line was rejected whole, if it was.
+    pub error: Option<String>,
+}
 /// Sees every event for a registered surface, with whether it was verified; called outside the lock.
 /// Returns whether host requests are waiting, so the UI is told to drain them.
 pub type EventTap = Arc<dyn Fn(&AgentEvent, bool) -> bool + Send + Sync>;
@@ -119,9 +129,23 @@ pub(crate) struct State {
     /// Tokens of plugin instances loaded with the sidebar capability and not disabled.
     sidebar_live: HashSet<u64>,
     next_sidebar_token: u64,
+    /// The time every change and snapshot sees instead of the clock; set only to replay a trace.
+    clock: Option<Instant>,
 }
 
 impl State {
+    fn now(&self) -> Instant {
+        self.clock.unwrap_or_else(Instant::now)
+    }
+
+    /// Why an answer to `request_key` would be refused now, or None if the gate would take it.
+    fn answer_refusal(&self, surface_id: &str, request_key: u64, allow: bool) -> Option<Refusal> {
+        match self.surfaces.iter().find(|s| s.id == surface_id) {
+            None => Some(Refusal::NoTab),
+            Some(s) => s.session.refusal(request_key, allow),
+        }
+    }
+
     /// Whether an arrangement set by `token` was dropped.
     fn drop_arrangement(&mut self, token: u64) -> bool {
         let owned = self.arrangement.as_ref().is_some_and(|(_, t, _)| *t == token);
@@ -398,7 +422,8 @@ fn deliver(state: &Mutex<State>, offload: &Offload, d: Delivery) -> bool {
 /// until the next `Core::snapshot`.
 fn update_state(state: &Mutex<State>, f: impl FnOnce(&mut State, Instant) -> bool) -> bool {
     let mut st = lock(state);
-    let changed = f(&mut st, Instant::now());
+    let now = st.now();
+    let changed = f(&mut st, now);
     st.version += changed as u64;
     let fire = changed && !std::mem::replace(&mut st.notified, true);
     let listener = if fire { st.listener.clone() } else { None };
@@ -419,7 +444,9 @@ fn ctl_request(state: &Mutex<State>, offload: &Offload, line: &str) -> String {
     let Ok(req) = serde_json::from_str::<Value>(line) else { return ctl::error("invalid json") };
     match req.get("cmd").and_then(Value::as_str) {
         Some("dump") => {
-            let snapshot = lock(state).snapshot(Instant::now());
+            let st = lock(state);
+            let snapshot = st.snapshot(st.now());
+            drop(st);
             let pending: Vec<Value> = snapshot
                 .groups
                 .iter()
@@ -589,14 +616,17 @@ impl Core {
     }
 
     pub fn snapshot(&self) -> SidebarSnapshot {
-        lock(&self.state).take_snapshot(Instant::now())
+        let mut st = lock(&self.state);
+        let now = st.now();
+        st.take_snapshot(now)
     }
 
     /// None while nothing changed since the snapshot with `version`. Elapsed times still move on
     /// their own, so a `next_tick_ms` redraw takes a full `snapshot`.
     pub fn snapshot_if_newer(&self, version: u64) -> Option<SidebarSnapshot> {
         let mut st = lock(&self.state);
-        (st.version != version).then(|| st.take_snapshot(Instant::now()))
+        let now = st.now();
+        (st.version != version).then(|| st.take_snapshot(now))
     }
 
     /// The listener fires once per change burst: after it fires, it waits for the next `snapshot`.
@@ -643,10 +673,9 @@ impl Core {
         let mut bytes = None;
         // One lock decides refusal or answer, so the request can't change between the two.
         self.update(|st, now| {
-            let why = match st.surface(surface_id).map(|s| s.session.refusal(request_key, allow)) {
-                None => Refusal::NoTab,
-                Some(Some(why)) => why,
-                Some(None) => {
+            let why = match st.answer_refusal(surface_id, request_key, allow) {
+                Some(why) => why,
+                None => {
                     bytes = st
                         .with_surface(surface_id, |s| {
                             let b = s.session.live_permission()?.agent.answer_bytes(allow)?;
@@ -668,6 +697,38 @@ impl Core {
             true
         });
         bytes.map(<[u8]>::to_vec)
+    }
+
+    /// Why `answer_permission` would refuse this answer now, or None if it would take it.
+    pub fn answer_refusal(&self, surface_id: &str, request_key: u64, allow: bool) -> Option<Refusal> {
+        lock(&self.state).answer_refusal(surface_id, request_key, allow)
+    }
+
+    /// Pins the time every change and snapshot sees; None goes back to the clock. Lets a recorded
+    /// trace be replayed with its own times.
+    #[doc(hidden)]
+    pub fn set_clock(&self, now: Option<Instant>) {
+        lock(&self.state).clock = now;
+    }
+
+    /// Sets the home dir rows abbreviate to `~` and the shell named on shell rows, which `new` reads
+    /// from the environment, so a replay doesn't depend on it.
+    #[doc(hidden)]
+    pub fn set_home_and_shell(&self, home: Option<String>, shell: Option<String>) {
+        let mut st = lock(&self.state);
+        st.home = home;
+        st.shell = shell;
+    }
+
+    /// One hook line delivered as the socket intake would, with the same decoding and nonce check, but
+    /// no rate limit, branch lookup or plugin tap. None if no registered surface has its id.
+    #[doc(hidden)]
+    pub fn replay_line(&self, line: &str) -> Option<LineResult> {
+        let nonces = lock(&self.state).nonces.clone();
+        let d = crate::intake::decode(line, &nonces)?;
+        let (verified, error) = (d.verified, d.error.clone());
+        let changed = self.update(|st, now| st.deliver(&d, now));
+        Some(LineResult { verified, changed, error })
     }
 
     /// Plugin answers refused since the last call, oldest first.
@@ -784,7 +845,8 @@ impl CoreHandle {
 
     /// The rows in the core's own order, without meta or task text.
     pub fn sidebar_rows(&self) -> Vec<RowInfo> {
-        arrange::row_infos(&lock(&self.state).core_snapshot(Instant::now()))
+        let st = lock(&self.state);
+        arrange::row_infos(&st.core_snapshot(st.now()))
     }
 
     /// The first live plugin to arrange owns the sidebar until it clears or goes away.
@@ -1355,6 +1417,43 @@ mod tests {
             assert_eq!(answer(&c, &env.surface_id, false).as_deref(), Some(deny.as_slice()), "{agent}");
         }
         assert_eq!(c.decisions("", 4).iter().map(|d| d.agent.id()).collect::<Vec<_>>(), ["codex", "codex", "claude", "claude"]);
+    }
+
+    #[test]
+    fn a_pinned_clock_drives_replayed_lines() {
+        let c = core();
+        let t0 = Instant::now();
+        c.set_clock(Some(t0));
+        let env = c.register_surface("/w").unwrap();
+        let forged = c.replay_line(&line(&env, None, PERM)).unwrap();
+        assert!(!forged.verified && forged.changed && forged.error.is_none());
+        assert!(only_row(&c).needs_you && pending(&c).is_none(), "status only");
+        assert!(c.replay_line(&line(&env, None, r#""agent":"BAD","event":"stop""#)).unwrap().error.is_some(), "rejected whole");
+        let unknown = SurfaceEnv { surface_id: "nobody".into(), ..env.clone() };
+        assert_eq!(c.replay_line(&line(&unknown, None, PERM)), None);
+
+        c.set_clock(Some(t0 + Duration::from_secs(90)));
+        assert!(c.replay_line(&line(&env, Some(&env.nonce), PERM)).unwrap().verified);
+        assert!(c.replay_line(&line(&env, Some(&env.nonce), r#""event":"stop""#)).unwrap().changed);
+        let s = c.with_state(|st| st.surface(&env.surface_id).unwrap().session.status_changed);
+        assert_eq!(s, t0 + Duration::from_secs(90), "time came from the pinned clock");
+        c.set_clock(None);
+        c.on_user_input(&env.surface_id);
+        assert!(c.snapshot().version > 0);
+    }
+
+    #[test]
+    fn answer_refusal_says_what_answer_permission_would_do() {
+        let c = core();
+        let env = c.register_surface("/w").unwrap();
+        assert_eq!(c.answer_refusal("nobody", 1, true), Some(Refusal::NoTab));
+        assert_eq!(c.answer_refusal(&env.surface_id, 1, true), Some(Refusal::NoRequest));
+        c.with_state(|st| st.handle_line(&line(&env, Some(&env.nonce), PERM), Instant::now()));
+        let key = pending(&c).unwrap().key;
+        assert_eq!(c.answer_refusal(&env.surface_id, key + 1, true), Some(Refusal::NotOnScreen));
+        assert_eq!(c.answer_refusal(&env.surface_id, key, true), None);
+        assert!(answer(&c, &env.surface_id, true).is_some());
+        assert_eq!(c.answer_refusal(&env.surface_id, key, true), Some(Refusal::NoRequest), "consumed");
     }
 
     #[test]
