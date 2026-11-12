@@ -30,6 +30,8 @@ use bindings::haunt::plugin::{
     allowlist as wallow, clock as wclock, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
     sidebar as wside, theme as wtheme, timer as wtimer, typing as wtyping, types as wit,
 };
+pub(crate) use bindings::haunt::plugin::panel as wpanel;
+use crate::plugin_panel::{Panel, Panels};
 use crate::decorate::{self, Decoration, Spark, Tone};
 use crate::model::RowsToken;
 
@@ -108,6 +110,9 @@ pub enum HostRequest {
     Notify { plugin_id: String, title: String, body: String, actions: Vec<NotifyAction>, binding: Option<String> },
     PtyAnswer { plugin_id: String, surface: String, allow: bool, request_id: u64 },
     PtyType { plugin_id: String, surface: String, text: String, enter: bool },
+    /// Show `panel`, or replace the one this plugin showed with its id.
+    ShowPanel { plugin_id: String, panel: Panel },
+    ClosePanel { plugin_id: String, id: String },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -215,6 +220,7 @@ pub struct HostState {
     rows: Option<RowsToken>,
     /// The `timer.every` interval and when `on-tick` is next due.
     timer: Option<(Duration, Instant)>,
+    panels: Panels,
     theme: Arc<Theme>,
     /// The tab focused when the user ran one of this plugin's commands, while that call runs.
     typing_into: Option<String>,
@@ -250,6 +256,7 @@ impl HostState {
             },
             rows: core.as_ref().filter(|_| caps.decorate).map(|c| c.attach_rows()),
             timer: None,
+            panels: Panels::default(),
             core,
             theme: Theme::default_shared(),
             typing_into: None,
@@ -576,6 +583,32 @@ fn cwd_globs(globs: &[String]) -> Vec<String> {
     globs.iter().filter(|g| g.starts_with(crate::plugin_manifest::FS_READ_PREFIX)).cloned().collect()
 }
 
+impl wpanel::Host for HostState {
+    fn show(&mut self, id: String, placement: wpanel::Placement, title: String, nodes: Vec<wpanel::PanelNode>) -> Result<(), String> {
+        let panel = crate::plugin_panel::build(id, placement, title, nodes)?;
+        if self.outbox.len() >= MAX_OUTBOX {
+            return Err("too many pending requests".into());
+        }
+        self.panels.show(&panel)?;
+        self.request(HostRequest::ShowPanel { plugin_id: self.id.clone(), panel })
+    }
+
+    fn close(&mut self, id: String) {
+        if self.panels.close(&id) {
+            let _ = self.request(HostRequest::ClosePanel { plugin_id: self.id.clone(), id });
+        }
+    }
+}
+
+impl HostState {
+    /// A disabled plugin's panels close, since nothing can answer their buttons.
+    fn close_panels(&mut self) {
+        for id in std::mem::take(&mut self.panels).ids() {
+            self.outbox.push(HostRequest::ClosePanel { plugin_id: self.id.clone(), id });
+        }
+    }
+}
+
 pub const TICK_MIN_SECS: u32 = 15;
 const TICK_MAX_SECS: u32 = 86_400;
 
@@ -790,8 +823,10 @@ impl LoadedPlugin {
                 format!("plugin {} trapped and was disabled: {e:#}", self.id())
             };
             self.disabled = Some(why.clone());
-            self.store.data_mut().release_sidebar();
-            self.store.data_mut().release_rows();
+            let data = self.store.data_mut();
+            data.release_sidebar();
+            data.release_rows();
+            data.close_panels();
             PluginError(why)
         })
     }
@@ -819,6 +854,19 @@ impl LoadedPlugin {
         }
         let ms = CoarseWall.now().as_millis() as u64;
         self.call(|b, s| b.call_on_tick(s, ms)).map(|()| true)
+    }
+
+    /// The user pressed a button on panel `id`, or closed it (`action` empty): `on-action(action, "panel:<id>")`.
+    /// Anything but an open panel's own button is refused.
+    pub fn panel_action(&mut self, id: &str, action: &str) -> Result<(), PluginError> {
+        let panels = &mut self.store.data_mut().panels;
+        if !panels.has_action(id, action) {
+            return Err(PluginError(format!("panel {id} has no action {action:?}")));
+        }
+        if action.is_empty() {
+            panels.close(id);
+        }
+        self.on_action(action, &format!("panel:{id}"))
     }
 
     /// Commands and modes the plugin registered through `palette`.
@@ -969,6 +1017,9 @@ impl PluginHost {
         }
         if caps.decorate {
             wrows::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if caps.panel {
+            wpanel::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.fs_read_granted() || caps.fs_write_granted() {
             let mut fs = l.instance("haunt:plugin/fs@0.5.0")?;
@@ -1415,6 +1466,27 @@ mod tests {
         assert!(due >= before + every);
         st.stop();
         assert!(st.timer.is_none());
+    }
+
+    #[test]
+    fn panels_need_their_capability_and_queue_show_and_close() {
+        use wpanel::Host as _;
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/panel@0.5.0" (instance (export "close" (func (param "id" string))))))"#).unwrap();
+        let e = host.check_links(&c, &Capabilities { decorate: true, notifications: true, ..Default::default() }).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/panel"), "{e}");
+        host.check_links(&c, &Capabilities { panel: true, ..Default::default() }).unwrap();
+
+        let mut st = HostState::new("dev.x.p", &Capabilities { panel: true, ..Default::default() }, None, None, None);
+        st.close("never-shown".into());
+        assert!(st.outbox.is_empty());
+        st.show("w".into(), wpanel::Placement::Sheet, "Welcome back".into(), vec![]).unwrap();
+        assert!(st.show("bad id".into(), wpanel::Placement::Sheet, String::new(), vec![]).is_err());
+        st.close("w".into());
+        assert!(matches!(&st.outbox[..], [
+            HostRequest::ShowPanel { plugin_id, panel },
+            HostRequest::ClosePanel { id, .. },
+        ] if plugin_id == "dev.x.p" && panel.title == "Welcome back" && id == "w"));
     }
 
     #[test]

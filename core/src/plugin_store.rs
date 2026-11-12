@@ -889,6 +889,11 @@ impl PluginSet {
         }
     }
 
+    /// A button on one of `plugin_id`'s panels, or the user closing it (`action` empty).
+    pub fn panel_action(&mut self, plugin_id: &str, panel_id: &str, action: &str) -> Result<(), PluginError> {
+        self.plugin(plugin_id)?.panel_action(panel_id, action)
+    }
+
     /// Ticks the plugins granted `timer` whose interval has passed.
     pub fn tick(&mut self, now: std::time::Instant) {
         for (caps, p) in &mut self.plugins {

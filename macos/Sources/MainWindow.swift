@@ -57,6 +57,15 @@ private final class RootView: NSView {
         }
     }
 
+    /// A plugin's right-hand panel, beside the terminal (`PluginPanels`).
+    var rightPane: NSView? {
+        didSet {
+            oldValue?.removeFromSuperview()
+            if let rightPane { addSubview(rightPane, positioned: .below, relativeTo: scrim) }
+            needsLayout = true
+        }
+    }
+
     var sidebarHidden = false {
         didSet {
             titleBar.zen = sidebarHidden
@@ -123,13 +132,15 @@ private final class RootView: NSView {
         toast.frame = sidebarHidden
             ? toast.frame(in: NSRect(x: bounds.width / 2, y: 0, width: bounds.width / 2, height: top))
             : toast.frame(in: sidebar.frame)
-        pane.frame = NSRect(x: w, y: top, width: bounds.width - w, height: bounds.height - top)
+        let rightW = rightPane == nil ? 0 : min(PluginPanels.rightWidth, max(bounds.width - w - Tok.App.minPaneW, 0))
+        pane.frame = NSRect(x: w, y: top, width: bounds.width - w - rightW, height: bounds.height - top)
+        rightPane?.frame = NSRect(x: bounds.width - rightW, y: top, width: rightW, height: bounds.height - top)
         review?.frame = reviewCoversSidebar ? NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top) : pane.frame
         scrim.frame = NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top)
     }
 }
 
-final class MainWindowController: NSWindowController, NSWindowDelegate {
+final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHost {
     private let core: CoreAPI
     private let ghostty: Ghostty.App
     private let fixture: Fixture?
@@ -204,6 +215,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         win.contentView = root
         super.init(window: win)
         win.delegate = self
+        bridge.panels.host = self
 
         #if HAUNT_FIXTURES
         if fixture != nil, let path = ProcessInfo.processInfo.environment["HAUNT_BACKDROP"], let image = NSImage(contentsOfFile: path) {
@@ -589,6 +601,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     /// Plugin requests waiting since the last core event; the app delegate drains once at launch.
     func drainPluginRequests() { bridge.drain() }
+
+    func setRightPane(_ view: NSView?) { root.rightPane = view }
 
     // MARK: Title bar
 

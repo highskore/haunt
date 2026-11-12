@@ -56,6 +56,7 @@ pub struct Capabilities {
     pub sidebar: bool,
     pub decorate: bool,
     pub timer: bool,
+    pub panel: bool,
     pub fs_read: Vec<String>,
     pub fs_write: Vec<String>,
     pub net: Vec<String>,
@@ -190,6 +191,9 @@ impl Capabilities {
         if self.timer {
             out.push(("can run on its own every 15 seconds or more, not only when an agent event arrives".into(), false));
         }
+        if self.panel {
+            out.push(("can show its own panels: a sheet, a side pane, a small card or a window".into(), false));
+        }
         if self.pty_write {
             out.push(("can answer permission prompts in your terminal (Allow or Deny, nothing else)".into(), true));
         }
@@ -218,6 +222,7 @@ impl Capabilities {
             theme: self.theme && !old.theme,
             decorate: self.decorate && !old.decorate,
             timer: self.timer && !old.timer,
+            panel: self.panel && !old.panel,
             fs_read: self.fs_read.iter().filter(|g| !old.fs_read.contains(g)).cloned().collect(),
             fs_write: self.fs_write.iter().filter(|g| !old.fs_write.contains(g)).cloned().collect(),
             ..Default::default()

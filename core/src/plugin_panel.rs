@@ -1,0 +1,325 @@
+//! `panel` import: a plugin describes a small tree of nodes and the app draws it natively. The tree is
+//! checked and capped here, and every string made plain, before it leaves the host.
+
+use std::collections::{BTreeMap, VecDeque};
+use std::time::{Duration, Instant};
+
+use crate::plugins::{plain, wpanel};
+
+pub const MAX_NODES: usize = 512;
+pub const MAX_DEPTH: usize = 8;
+pub const MAX_SHAPES: usize = 4096;
+pub const MAX_PANELS: usize = 4;
+pub const MAX_TEXT: usize = 256;
+pub const SHOWS_PER_SEC: usize = 4;
+const MAX_ID: usize = 64;
+const MAX_GRID_CELLS: u32 = 4096;
+const MAX_CELL: u32 = 64;
+const MAX_CANVAS: u32 = 2048;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
+pub enum PanelPlacement {
+    Sheet,
+    Right,
+    Card,
+    Window,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
+pub enum PanelTone {
+    Text,
+    Dim,
+    Faint,
+    Accent,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
+pub enum PanelShape {
+    Dot { x: f32, y: f32, r: f32, shade: f32, accent: bool, pulse: bool },
+    Rect { x: f32, y: f32, w: f32, h: f32, shade: f32, accent: bool, label: Option<String> },
+    Line { x1: f32, y1: f32, x2: f32, y2: f32, shade: f32 },
+    Label { x: f32, y: f32, text: String, tone: PanelTone },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
+pub enum PanelNodeKind {
+    VStack,
+    HStack,
+    Text { text: String, tone: PanelTone, mono: bool, bold: bool },
+    Row { label: String, sub: Option<String>, right: Option<String>, tone: PanelTone },
+    Button { label: String, action: String, primary: bool },
+    Divider,
+    /// `cells` row by row, each 0 to 1, or -1 for an empty cell.
+    Grid { rows: u32, columns: u32, cell: u32, cells: Vec<f32>, marked: Vec<u32> },
+    Canvas { width: u32, height: u32, shapes: Vec<PanelShape> },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
+pub struct PanelNode {
+    /// An earlier stack's index; None: the panel itself.
+    pub parent: Option<u32>,
+    pub kind: PanelNodeKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
+pub struct Panel {
+    pub id: String,
+    pub placement: PanelPlacement,
+    pub title: String,
+    pub nodes: Vec<PanelNode>,
+}
+
+/// One plugin instance's open panels (id to their buttons' actions) and its recent shows.
+#[derive(Debug, Default)]
+pub struct Panels {
+    open: BTreeMap<String, Vec<String>>,
+    shows: VecDeque<Instant>,
+}
+
+impl Panels {
+    /// Checks the rate and the open-panel cap for a show of `p`, then records it as open.
+    pub fn show(&mut self, p: &Panel) -> Result<(), String> {
+        if !self.open.contains_key(&p.id) && self.open.len() >= MAX_PANELS {
+            return Err(format!("at most {MAX_PANELS} panels open"));
+        }
+        let now = Instant::now();
+        while self.shows.front().is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(1)) {
+            self.shows.pop_front();
+        }
+        if self.shows.len() >= SHOWS_PER_SEC {
+            return Err(format!("panel rate limit ({SHOWS_PER_SEC}/s)"));
+        }
+        self.shows.push_back(now);
+        let actions = p.nodes.iter().filter_map(|n| if let PanelNodeKind::Button { action, .. } = &n.kind { Some(action.clone()) } else { None });
+        self.open.insert(p.id.clone(), actions.collect());
+        Ok(())
+    }
+
+    /// Whether `id` was open.
+    pub fn close(&mut self, id: &str) -> bool {
+        self.open.remove(id).is_some()
+    }
+
+    pub fn ids(&self) -> Vec<String> {
+        self.open.keys().cloned().collect()
+    }
+
+    /// Whether panel `id` is open with a button for `action`; the empty action (closed by the user) for any open one.
+    pub fn has_action(&self, id: &str, action: &str) -> bool {
+        self.open.get(id).is_some_and(|a| action.is_empty() || a.iter().any(|x| x == action))
+    }
+}
+
+fn text(s: String) -> String {
+    plain(&s, MAX_TEXT)
+}
+
+fn tone(t: wpanel::Tone) -> PanelTone {
+    match t {
+        wpanel::Tone::Text => PanelTone::Text,
+        wpanel::Tone::Dim => PanelTone::Dim,
+        wpanel::Tone::Faint => PanelTone::Faint,
+        wpanel::Tone::Accent => PanelTone::Accent,
+    }
+}
+
+fn num(v: f32) -> Result<f32, String> {
+    if v.is_finite() { Ok(v) } else { Err("panel numbers must be finite".into()) }
+}
+
+fn shade(v: f32) -> Result<f32, String> {
+    Ok(num(v)?.clamp(0.0, 1.0))
+}
+
+/// A canvas coordinate, kept within a canvas-sized margin so nothing draws far off it.
+fn coord(v: f32) -> Result<f32, String> {
+    Ok(num(v)?.clamp(-(MAX_CANVAS as f32), 2.0 * MAX_CANVAS as f32))
+}
+
+fn shape(s: wpanel::Shape) -> Result<PanelShape, String> {
+    Ok(match s {
+        wpanel::Shape::Dot(d) => PanelShape::Dot {
+            x: coord(d.x)?,
+            y: coord(d.y)?,
+            r: num(d.r)?.clamp(0.0, MAX_CANVAS as f32),
+            shade: shade(d.shade)?,
+            accent: d.accent,
+            pulse: d.pulse,
+        },
+        wpanel::Shape::Rect(r) => PanelShape::Rect {
+            x: coord(r.x)?,
+            y: coord(r.y)?,
+            w: num(r.w)?.clamp(0.0, MAX_CANVAS as f32),
+            h: num(r.h)?.clamp(0.0, MAX_CANVAS as f32),
+            shade: shade(r.shade)?,
+            accent: r.accent,
+            label: r.label.map(text),
+        },
+        wpanel::Shape::Line(l) => PanelShape::Line { x1: coord(l.x1)?, y1: coord(l.y1)?, x2: coord(l.x2)?, y2: coord(l.y2)?, shade: shade(l.shade)? },
+        wpanel::Shape::Label(l) => PanelShape::Label { x: coord(l.x)?, y: coord(l.y)?, text: text(l.text), tone: tone(l.tone) },
+    })
+}
+
+fn kind(n: wpanel::Node, shapes: &mut usize) -> Result<PanelNodeKind, String> {
+    Ok(match n {
+        wpanel::Node::Vstack => PanelNodeKind::VStack,
+        wpanel::Node::Hstack => PanelNodeKind::HStack,
+        wpanel::Node::Divider => PanelNodeKind::Divider,
+        wpanel::Node::Text(t) => PanelNodeKind::Text { text: text(t.text), tone: tone(t.tone), mono: t.mono, bold: t.bold },
+        wpanel::Node::Row(r) => PanelNodeKind::Row { label: text(r.label), sub: r.sub.map(text), right: r.right.map(text), tone: tone(r.tone) },
+        wpanel::Node::Button(b) => {
+            let action = text(b.action);
+            if action.is_empty() {
+                return Err("a button needs an action".into());
+            }
+            PanelNodeKind::Button { label: text(b.label), action, primary: b.primary }
+        }
+        wpanel::Node::Grid(g) => {
+            let n = g.rows.checked_mul(g.columns).filter(|&n| n <= MAX_GRID_CELLS).ok_or(format!("a grid has at most {MAX_GRID_CELLS} cells"))?;
+            if g.cells.len() != n as usize {
+                return Err("a grid needs rows × columns cells".into());
+            }
+            if !(2..=MAX_CELL).contains(&g.cell) {
+                return Err(format!("a grid cell is 2 to {MAX_CELL} points"));
+            }
+            if g.marked.iter().any(|&m| m >= n) || g.marked.len() > n as usize {
+                return Err("a marked cell is outside the grid".into());
+            }
+            let cells = g.cells.into_iter().map(|c| num(c).map(|c| if c < 0.0 { -1.0 } else { c.min(1.0) })).collect::<Result<_, _>>()?;
+            PanelNodeKind::Grid { rows: g.rows, columns: g.columns, cell: g.cell, cells, marked: g.marked }
+        }
+        wpanel::Node::Canvas(c) => {
+            if !(1..=MAX_CANVAS).contains(&c.width) || !(1..=MAX_CANVAS).contains(&c.height) {
+                return Err(format!("a canvas is 1 to {MAX_CANVAS} points each way"));
+            }
+            *shapes += c.shapes.len();
+            if *shapes > MAX_SHAPES {
+                return Err(format!("at most {MAX_SHAPES} shapes in a panel"));
+            }
+            PanelNodeKind::Canvas { width: c.width, height: c.height, shapes: c.shapes.into_iter().map(shape).collect::<Result<_, _>>()? }
+        }
+    })
+}
+
+/// The panel a `show` call describes, or why it is refused: too many nodes, too deep, a parent that
+/// isn't an earlier stack, a number that isn't finite. Strings are made plain and cut to 256.
+pub fn build(id: String, placement: wpanel::Placement, title: String, nodes: Vec<wpanel::PanelNode>) -> Result<Panel, String> {
+    let id_ok = (1..=MAX_ID).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b));
+    if !id_ok {
+        return Err(format!("a panel id is 1 to {MAX_ID} of letters, digits, '-', '_' and '.'"));
+    }
+    if nodes.len() > MAX_NODES {
+        return Err(format!("at most {MAX_NODES} nodes"));
+    }
+    let mut out: Vec<PanelNode> = Vec::with_capacity(nodes.len());
+    let mut depth = Vec::with_capacity(nodes.len());
+    let mut shapes = 0;
+    for (i, n) in nodes.into_iter().enumerate() {
+        let d = match n.parent {
+            None => 1,
+            Some(p) => {
+                let parent = out.get(p as usize).filter(|_| (p as usize) < i);
+                if !parent.is_some_and(|p| matches!(p.kind, PanelNodeKind::VStack | PanelNodeKind::HStack)) {
+                    return Err(format!("node {i}: parent {p} is not an earlier stack"));
+                }
+                depth[p as usize] + 1
+            }
+        };
+        if d > MAX_DEPTH {
+            return Err(format!("at most {MAX_DEPTH} levels"));
+        }
+        depth.push(d);
+        out.push(PanelNode { parent: n.parent, kind: kind(n.node, &mut shapes)? });
+    }
+    let placement = match placement {
+        wpanel::Placement::Sheet => PanelPlacement::Sheet,
+        wpanel::Placement::Right => PanelPlacement::Right,
+        wpanel::Placement::Card => PanelPlacement::Card,
+        wpanel::Placement::Window => PanelPlacement::Window,
+    };
+    Ok(Panel { id, placement, title: text(title), nodes: out })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wpanel::{Node, PanelNode as N, Placement};
+
+    fn node(parent: Option<u32>, node: Node) -> N {
+        N { parent, node }
+    }
+
+    fn txt(s: &str) -> Node {
+        Node::Text(wpanel::TextNode { text: s.into(), tone: wpanel::Tone::Dim, mono: false, bold: false })
+    }
+
+    fn button(action: &str) -> Node {
+        Node::Button(wpanel::ButtonNode { label: "Go".into(), action: action.into(), primary: true })
+    }
+
+    #[test]
+    fn strings_are_plain_and_capped() {
+        let p = build("welcome".into(), Placement::Sheet, "Hi\u{202e}there".into(), vec![node(None, txt(&format!("a\nb{}", "c".repeat(300))))]).unwrap();
+        assert_eq!(p.title, "Hithere");
+        let PanelNodeKind::Text { text, .. } = &p.nodes[0].kind else { panic!() };
+        assert!(text.starts_with("a b") && text.chars().count() == MAX_TEXT);
+        for bad in ["", "a b", "x\u{200b}", &"a".repeat(65)] {
+            assert!(build(bad.into(), Placement::Card, String::new(), vec![]).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_tree_is_checked() {
+        let stack = || node(None, Node::Vstack);
+        assert!(build("p".into(), Placement::Right, String::new(), vec![stack(), node(Some(0), txt("x"))]).is_ok());
+        assert!(build("p".into(), Placement::Right, String::new(), vec![node(Some(0), txt("x"))]).is_err(), "parent must be earlier");
+        assert!(build("p".into(), Placement::Right, String::new(), vec![node(None, txt("x")), node(Some(0), txt("y"))]).is_err(), "parent must be a stack");
+        let deep: Vec<N> = (0..=MAX_DEPTH as u32).map(|i| node(i.checked_sub(1), Node::Hstack)).collect();
+        assert!(build("p".into(), Placement::Right, String::new(), deep[..MAX_DEPTH].to_vec()).is_ok());
+        assert!(build("p".into(), Placement::Right, String::new(), deep).unwrap_err().contains("levels"));
+        let many = vec![node(None, Node::Divider); MAX_NODES + 1];
+        assert!(build("p".into(), Placement::Right, String::new(), many).is_err());
+        assert!(build("p".into(), Placement::Right, String::new(), vec![node(None, button(""))]).is_err(), "a button needs an action");
+    }
+
+    #[test]
+    fn grids_and_canvases_are_capped_and_finite() {
+        let grid = |rows, columns, cells: Vec<f32>, marked| Node::Grid(wpanel::GridNode { rows, columns, cell: 10, cells, marked });
+        let p = build("g".into(), Placement::Window, String::new(), vec![node(None, grid(1, 3, vec![-5.0, 0.5, 9.0], vec![2]))]).unwrap();
+        let PanelNodeKind::Grid { cells, .. } = &p.nodes[0].kind else { panic!() };
+        assert_eq!(cells, &[-1.0, 0.5, 1.0]);
+        for bad in [grid(1, 2, vec![0.0], vec![]), grid(1, 1, vec![f32::NAN], vec![]), grid(1, 1, vec![0.0], vec![1]), grid(65, 64, vec![0.0; 65 * 64], vec![])] {
+            assert!(build("g".into(), Placement::Window, String::new(), vec![node(None, bad)]).is_err());
+        }
+        assert!(build("g".into(), Placement::Window, String::new(), vec![node(None, grid(u32::MAX, 2, vec![], vec![]))]).is_err(), "no overflow");
+
+        let dot = |x: f32| wpanel::Shape::Dot(wpanel::Dot { x, y: 1.0, r: 2.0, shade: 3.0, accent: false, pulse: true });
+        let canvas = |shapes: Vec<wpanel::Shape>| Node::Canvas(wpanel::CanvasNode { width: 100, height: 50, shapes });
+        let p = build("c".into(), Placement::Card, String::new(), vec![node(None, canvas(vec![dot(1.0)]))]).unwrap();
+        let PanelNodeKind::Canvas { shapes, .. } = &p.nodes[0].kind else { panic!() };
+        assert!(matches!(shapes[0], PanelShape::Dot { shade, .. } if shade == 1.0));
+        assert!(build("c".into(), Placement::Card, String::new(), vec![node(None, canvas(vec![dot(f32::INFINITY)]))]).is_err());
+        let half = || node(None, canvas((0..MAX_SHAPES / 2 + 1).map(|_| dot(0.0)).collect()));
+        assert!(build("c".into(), Placement::Card, String::new(), vec![half(), half()]).unwrap_err().contains("shapes"));
+    }
+
+    #[test]
+    fn open_panels_and_shows_are_limited() {
+        let mut panels = Panels::default();
+        let p = |id: &str| build(id.into(), Placement::Card, String::new(), vec![node(None, button("go"))]).unwrap();
+        for i in 0..MAX_PANELS {
+            panels.show(&p(&i.to_string())).unwrap();
+        }
+        assert!(panels.show(&p("extra")).unwrap_err().contains("panels open"));
+        assert!(panels.show(&p("0")).unwrap_err().contains("rate"), "replacing is fine, but not a fifth show this second");
+        assert!(panels.has_action("0", "go") && panels.has_action("0", "") && !panels.has_action("0", "other") && !panels.has_action("x", ""));
+        assert!(panels.close("0") && !panels.close("0"));
+        assert!(!panels.has_action("0", ""));
+    }
+}

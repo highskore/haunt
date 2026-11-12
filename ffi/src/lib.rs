@@ -262,6 +262,11 @@ impl HauntPlugins {
         Ok(haunt_core::sync::lock(&self.set).invoke_row_item(&plugin_id, &item_id, &surface_id)?)
     }
 
+    /// A button on a plugin's panel, or the user closing it (`action` empty); see `HostRequest::ShowPanel`.
+    pub fn panel_action(&self, plugin_id: String, panel_id: String, action: String) -> Result<(), HostError> {
+        Ok(haunt_core::sync::lock(&self.set).panel_action(&plugin_id, &panel_id, &action)?)
+    }
+
     /// A drag dropped `surface_id` into `SidebarGroup.id` `group_id`, above `before_surface_id` (nil: at the end).
     pub fn row_moved(&self, surface_id: String, group_id: String, before_surface_id: Option<String>) {
         haunt_core::sync::lock(&self.set).row_moved(&surface_id, &group_id, before_surface_id.as_deref());

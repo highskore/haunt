@@ -50,7 +50,7 @@ impl Core {
                 }
                 Some(PtyWrite { surface_id: surface.clone(), bytes: text.as_bytes().to_vec(), enter: *enter })
             }
-            HostRequest::Notify { .. } => None,
+            HostRequest::Notify { .. } | HostRequest::ShowPanel { .. } | HostRequest::ClosePanel { .. } => None,
         }
     }
 }
