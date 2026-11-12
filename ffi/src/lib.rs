@@ -262,6 +262,11 @@ impl HauntPlugins {
         Ok(haunt_core::sync::lock(&self.set).invoke_row_item(&plugin_id, &item_id, &surface_id)?)
     }
 
+    /// The user clicked the sidebar's top row, which `plugin_id` set.
+    pub fn top_row_clicked(&self, plugin_id: String) -> Result<(), HostError> {
+        Ok(haunt_core::sync::lock(&self.set).top_row_clicked(&plugin_id)?)
+    }
+
     /// The user chose action `action_id` on a plugin's notification bound to `binding` ("" for none).
     pub fn notify_action(&self, plugin_id: String, action_id: String, binding: String) -> Result<(), HostError> {
         Ok(haunt_core::sync::lock(&self.set).notify_action(&plugin_id, &action_id, &binding)?)

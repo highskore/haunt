@@ -34,6 +34,10 @@ final class PluginBridge {
         hold.onRelease = { holder, titles in NotificationHold.postSummary(holder: holder, titles: titles) }
     }
 
+    func topRowClicked(pluginId: String) {
+        run("plugin \(pluginId) top row") { try $0.topRowClicked(pluginId: pluginId) }
+    }
+
     /// The user chose a plugin notification (`action` empty) or one of its actions. A binding naming an open
     /// tab brings it up; an action reaches the plugin as `on-action(action, binding)`.
     func notificationChosen(pluginId: String, action: String, binding: String) {

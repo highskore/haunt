@@ -27,6 +27,7 @@ final class RingView: NSView {
 private final class RootView: NSView {
     let titleBar = TitleBarView()
     let sidebar = SidebarView()
+    let topRow = TopRowView()
     let pane = NSView()
     /// The palette mockup's scrim over everything below the title bar.
     let scrim = NSView()
@@ -97,7 +98,7 @@ private final class RootView: NSView {
         material.material = .hudWindow
         material.blendingMode = .behindWindow
         material.state = .active
-        for v in [material, titleBar, sidebar, pane, scrim, agents, toast, ring] { addSubview(v) }
+        for v in [material, titleBar, sidebar, topRow, pane, scrim, agents, toast, ring] { addSubview(v) }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -127,7 +128,10 @@ private final class RootView: NSView {
         }
         let top = TitleBarView.height(zen: sidebarHidden), w = sidebarHidden ? 0 : sidebarW
         titleBar.frame = NSRect(x: 0, y: 0, width: bounds.width, height: top)
-        sidebar.frame = NSRect(x: 0, y: top, width: sidebarW, height: bounds.height - top)
+        let topH = sidebarHidden ? 0 : topRow.height
+        topRow.isHidden = topH == 0
+        topRow.frame = NSRect(x: 0, y: top, width: sidebarW, height: topH)
+        sidebar.frame = NSRect(x: 0, y: top + topH, width: sidebarW, height: bounds.height - top - topH)
         // Without the sidebar, the title bar's right half: its title sits on the left.
         toast.frame = sidebarHidden
             ? toast.frame(in: NSRect(x: bounds.width / 2, y: 0, width: bounds.width / 2, height: top))
@@ -218,6 +222,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
         win.delegate = self
         bridge.panels.host = self
         bridge.openTab = { [weak self] id in self?.open(id) }
+        root.topRow.onClick = { [weak self] plugin in self?.bridge.topRowClicked(pluginId: plugin) }
 
         #if HAUNT_FIXTURES
         if fixture != nil, let path = ProcessInfo.processInfo.environment["HAUNT_BACKDROP"], let image = NSImage(contentsOfFile: path) {
@@ -475,6 +480,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
         scheduleTick(in: raw.nextTickMs)
         let snap = store.named(raw)
         if snap != root.sidebar.snapshot { root.sidebar.snapshot = snap }
+        root.topRow.row = snap.top
         if root.agentsOn { root.agents.update(snap) }
         let sel = snap.groups.lazy.flatMap(\.rows).first { $0.selected }
         root.titleBar.progress = sel?.progress.map { $0.total == 0 ? 0 : CGFloat($0.done) / CGFloat($0.total) }

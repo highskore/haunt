@@ -30,6 +30,7 @@ protocol PluginsAPI: AnyObject {
     func takeRequests() -> [HostRequest]
     func rowMenuItems(surfaceId: String) -> [RowMenuItem]
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws
+    func topRowClicked(pluginId: String) throws
     func notifyAction(pluginId: String, actionId: String, binding: String) throws
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?)
@@ -131,6 +132,7 @@ final class NoPlugins: PluginsAPI {
     func takeRequests() -> [HostRequest] { [] }
     func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
+    func topRowClicked(pluginId: String) throws {}
     func notifyAction(pluginId: String, actionId: String, binding: String) throws {}
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?) {}
@@ -154,6 +156,7 @@ final class FixturePlugins: PluginsAPI {
     func takeRequests() -> [HostRequest] { [] }
     func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
+    func topRowClicked(pluginId: String) throws {}
     func notifyAction(pluginId: String, actionId: String, binding: String) throws {}
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?) {}
@@ -221,6 +224,17 @@ struct SidebarSnapshot: Equatable, Hashable {
     var colorStyle: ColorStyle
     var version: UInt64 = 0
     var nextTickMs: UInt64?
+    var top: TopRow? = nil
+}
+
+struct TopRow: Equatable, Hashable {
+    var pluginId: String
+    var title: String
+    var sub: String?
+    var right: String?
+    var tone: Tone
+    var barPermille: UInt16?
+    var clickable: Bool
 }
 
 struct SidebarGroup: Equatable, Hashable {

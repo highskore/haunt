@@ -19,6 +19,9 @@ pub struct SidebarSnapshot {
     /// depends on the clock, so nothing needs to redraw until the listener fires.
     #[cfg_attr(feature = "ffi", uniffi(default = None))]
     pub next_tick_ms: Option<u64>,
+    /// A plugin's row above every group (`top-row`).
+    #[cfg_attr(feature = "ffi", uniffi(default = None))]
+    pub top: Option<crate::decorate::TopRow>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -132,7 +135,7 @@ pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, shell: Option<&str
     {
         g.label.clear();
     }
-    SidebarSnapshot { groups, color_style: ColorStyle::Dot, version: 0, next_tick_ms: next_tick(surfaces, now) }
+    SidebarSnapshot { groups, color_style: ColorStyle::Dot, version: 0, next_tick_ms: next_tick(surfaces, now), top: None }
 }
 
 /// `precise` changes every second below an hour, every minute after.

@@ -910,6 +910,11 @@ impl PluginSet {
         }
     }
 
+    /// The user clicked `plugin_id`'s top row.
+    pub fn top_row_clicked(&mut self, plugin_id: &str) -> Result<(), PluginError> {
+        self.plugin(plugin_id)?.top_row_clicked()
+    }
+
     /// The user chose an action on one of `plugin_id`'s notifications.
     pub fn notify_action(&mut self, plugin_id: &str, action_id: &str, binding: &str) -> Result<(), PluginError> {
         self.plugin(plugin_id)?.notify_action(action_id, binding)

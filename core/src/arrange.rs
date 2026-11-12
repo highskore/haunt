@@ -233,6 +233,7 @@ mod tests {
             color_style: ColorStyle::Dot,
             version: 0,
             next_tick_ms: None,
+            top: None,
         }
     }
 

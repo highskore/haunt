@@ -59,6 +59,7 @@ pub struct Capabilities {
     pub timer: bool,
     pub panel: bool,
     pub notify_hold: bool,
+    pub sidebar_top: bool,
     pub fs_read: Vec<String>,
     pub fs_write: Vec<String>,
     pub net: Vec<String>,
@@ -196,6 +197,9 @@ impl Capabilities {
         if self.decorate {
             out.push(("can add a label, a bar or a sparkline to your tabs' rows".into(), false));
         }
+        if self.sidebar_top {
+            out.push(("can show one row of its own at the top of the sidebar".into(), false));
+        }
         if self.timer {
             out.push(("can run on its own every 15 seconds or more, not only when an agent event arrives".into(), false));
         }
@@ -233,6 +237,7 @@ impl Capabilities {
             timer: self.timer && !old.timer,
             panel: self.panel && !old.panel,
             notify_hold: self.notify_hold && !old.notify_hold,
+            sidebar_top: self.sidebar_top && !old.sidebar_top,
             fs_read: self.fs_read.iter().filter(|g| !old.fs_read.contains(g)).cloned().collect(),
             fs_write: self.fs_write.iter().filter(|g| !old.fs_write.contains(g)).cloned().collect(),
             ..Default::default()

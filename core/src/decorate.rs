@@ -39,6 +39,26 @@ pub struct Decoration {
     pub spark: Option<Spark>,
 }
 
+pub const TOP_TITLE_MAX: usize = 32;
+pub const TOP_TEXT_MAX: usize = 24;
+pub const TOP_SUB_MAX: usize = 48;
+
+/// The one plugin row above every sidebar group (`top-row.set`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
+pub struct TopRow {
+    /// The plugin that set it; a click goes back to it.
+    pub plugin_id: String,
+    pub title: String,
+    pub sub: Option<String>,
+    /// The right-hand text, in `tone`.
+    pub right: Option<String>,
+    pub tone: Tone,
+    pub bar_permille: Option<u16>,
+    /// Whether clicking it calls the plugin.
+    pub clickable: bool,
+}
+
 /// A bar fraction as permille; NaN and infinities are refused, the rest clamped to 0..=1.
 pub fn permille(f: f32) -> Result<u16, String> {
     if !f.is_finite() {

@@ -12,7 +12,7 @@ use crate::allowlist::{self, AllowError, AllowSuggestion, Approval};
 use crate::arrange::{self, Arrangement, RowInfo};
 use crate::ctl::{self, Ctl};
 use crate::decisions::{Decision, DecisionLog};
-use crate::decorate::Decoration;
+use crate::decorate::{Decoration, TopRow};
 use crate::git::Branches;
 use crate::event::{AgentEvent, parse_osc};
 use crate::ids::{hex, random, uuid_v4};
@@ -157,6 +157,7 @@ pub(crate) struct State {
     row_labels: Vec<String>,
     /// The plugin holding notifications, until when.
     notify_hold: Option<(String, Instant)>,
+    top_row: Option<TopRow>,
 }
 
 impl State {
@@ -337,6 +338,7 @@ impl State {
                 r.decoration = d;
             }
         }
+        snap.top.clone_from(&self.top_row);
         snap
     }
 
@@ -984,6 +986,23 @@ impl CoreHandle {
         let t = st.next_rows_token;
         st.rows_plugins.insert(t, plugin_id.to_owned());
         RowsToken(t)
+    }
+
+    /// Sets or, with None, clears the top row. The first plugin to set it owns it until it clears it.
+    pub fn set_top_row(&self, plugin_id: &str, row: Option<TopRow>) -> Result<(), String> {
+        let mut res = Ok(());
+        update_state(&self.state, |st, _| {
+            if let Some(cur) = st.top_row.as_ref().filter(|t| t.plugin_id != plugin_id) {
+                if row.is_some() {
+                    res = Err(format!("{} has the top row", cur.plugin_id));
+                }
+                return false;
+            }
+            let changed = st.top_row != row;
+            st.top_row = row;
+            changed
+        });
+        res
     }
 
     /// `plugin_id` holds notifications until `until`; refused while another plugin's hold runs.

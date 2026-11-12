@@ -4,7 +4,7 @@
 // 0.4: `theme` and `typing` imports; `on-theme-changed` export.
 // 0.5: surface, tool, command, file path, task id and request key on agent-event; `rows`, `timer`,
 //      `clock` and `panel` imports; `on-tick` export; `on-event` returns nothing.
-//      `hold` import. Draft, not linked yet: `top-row`, `keys`, `exec`, `sound`, `speech`, `dock`, `glow`,
+//      `hold` and `top-row` imports. Draft, not linked yet: `keys`, `exec`, `sound`, `speech`, `dock`, `glow`,
 //      `title` and `terminal` imports; `on-exec` and `on-away-changed` exports.
 package haunt:plugin@0.5.0;
 
@@ -330,11 +330,8 @@ interface hold {
   release: func();
 }
 
-// --- Draft: C, D and 5-10. The shapes are settled for plugins to build against; the host doesn't link
-// --- these imports yet, and a manifest asking for their capabilities doesn't install yet.
-
 // Capability `sidebar_top`. One row above every group in the sidebar, drawn like a tab row; the first
-// plugin to set it owns it until it sets `none`. Text is plain; title cut to 32, sub and right to 24.
+// plugin to set it owns it until it sets `none`. Text is plain; title cut to 32, sub to 48, right to 24.
 // Clicking it calls `on-action(action, "top")` when `action` is set.
 interface top-row {
   use rows.{tone};
@@ -349,6 +346,9 @@ interface top-row {
   }
   set: func(row: option<top>) -> result<_, string>;
 }
+
+// --- Draft: D and 5-10. The shapes are settled for plugins to build against; the host doesn't link
+// --- these imports yet, and a manifest asking for their capabilities doesn't install yet.
 
 // Capability `keys`. `chord` is written as in config.toml (`"ctrl+shift+p"`). Pressing it calls
 // `on-action(id, "key-down")`, releasing it `on-action(id, "key-up")`. Refused for a chord haunt or

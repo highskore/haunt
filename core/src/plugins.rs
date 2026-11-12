@@ -27,12 +27,12 @@ mod bindings {
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
-    allowlist as wallow, clock as wclock, hold as whold, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
+    allowlist as wallow, clock as wclock, hold as whold, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
     sidebar as wside, theme as wtheme, timer as wtimer, typing as wtyping, types as wit,
 };
 pub(crate) use bindings::haunt::plugin::panel as wpanel;
 use crate::plugin_panel::{Panel, Panels};
-use crate::decorate::{self, Decoration, Spark, Tone};
+use crate::decorate::{self, Decoration, Spark, Tone, TopRow};
 use crate::model::RowsToken;
 
 pub const MEMORY_CAP: usize = 64 << 20;
@@ -230,6 +230,8 @@ pub struct HostState {
     /// The `timer.every` interval and when `on-tick` is next due.
     timer: Option<(Duration, Instant)>,
     panels: Panels,
+    /// The action of the top row this plugin set, while it is up.
+    top_action: Option<String>,
     /// (action id, binding) of this run's recent notifications: the only replies `notify_action` takes.
     notified: VecDeque<(String, String)>,
     theme: Arc<Theme>,
@@ -243,6 +245,7 @@ impl Drop for HostState {
         self.release_rows();
         if let Some(c) = &self.core {
             c.release_notifications(&self.id);
+            let _ = c.set_top_row(&self.id, None);
         }
     }
 }
@@ -273,6 +276,7 @@ impl HostState {
             timer: None,
             panels: Panels::default(),
             notified: VecDeque::new(),
+            top_action: None,
             core,
             theme: Theme::default_shared(),
             typing_into: None,
@@ -643,11 +647,43 @@ impl HostState {
         }
     }
 
+    /// A disabled plugin's top row goes, since nothing can answer a click on it.
+    fn clear_top_row(&mut self) {
+        self.top_action = None;
+        if let Some(c) = &self.core {
+            let _ = c.set_top_row(&self.id, None);
+        }
+    }
+
     /// A disabled plugin's hold ends, so it can't keep notifications away.
     fn release_hold(&mut self) {
         if self.core.as_ref().is_some_and(|c| c.release_notifications(&self.id)) {
             self.outbox.push(HostRequest::ReleaseNotifications { plugin_id: self.id.clone() });
         }
+    }
+}
+
+impl wtop::Host for HostState {
+    fn set(&mut self, row: Option<wtop::Top>) -> Result<(), String> {
+        let core = self.core.clone().ok_or("no haunt core")?;
+        let Some(r) = row else {
+            self.clear_top_row();
+            return Ok(());
+        };
+        let title = plain_opt(Some(r.title), decorate::TOP_TITLE_MAX).ok_or("the top row needs a title")?;
+        let action = r.action.map(clip).filter(|a| !a.is_empty());
+        let top = TopRow {
+            plugin_id: self.id.clone(),
+            title,
+            sub: plain_opt(r.sub, decorate::TOP_SUB_MAX),
+            right: plain_opt(r.right, decorate::TOP_TEXT_MAX),
+            tone: tone(r.tone),
+            bar_permille: r.bar.map(decorate::permille).transpose()?,
+            clickable: action.is_some(),
+        };
+        core.set_top_row(&self.id, Some(top))?;
+        self.top_action = action;
+        Ok(())
     }
 }
 
@@ -901,6 +937,7 @@ impl LoadedPlugin {
             data.release_rows();
             data.close_panels();
             data.release_hold();
+            data.clear_top_row();
             PluginError(why)
         })
     }
@@ -981,6 +1018,12 @@ impl LoadedPlugin {
 
     pub fn on_action(&mut self, action_id: &str, payload: &str) -> Result<(), PluginError> {
         self.call(|b, s| b.call_on_action(s, action_id, payload))
+    }
+
+    /// The user clicked this plugin's top row: `on-action(<its action>, "top")`.
+    pub fn top_row_clicked(&mut self) -> Result<(), PluginError> {
+        let action = self.store.data().top_action.clone().ok_or_else(|| PluginError("no top row to click".into()))?;
+        self.on_action(&action, "top")
     }
 
     /// The user chose action `action_id` on a notification bound to `binding` (empty: none):
@@ -1086,6 +1129,9 @@ impl PluginHost {
         }
         if caps.notify_hold {
             whold::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if caps.sidebar_top {
+            wtop::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.pty_write {
             wpty::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
@@ -1542,6 +1588,37 @@ mod tests {
         other.start(5).unwrap();
         drop(other);
         focus.start(5).unwrap();
+    }
+
+    #[test]
+    fn the_top_row_is_plain_capped_and_owned_by_one_plugin() {
+        use wtop::Host as _;
+        let core = crate::Core::new(&*tempdir("top"));
+        let caps = Capabilities { sidebar_top: true, ..Default::default() };
+        let top = |title: &str, action: Option<&str>| wtop::Top {
+            title: title.into(),
+            sub: Some(format!("3 held\u{202e} · {}", "x".repeat(40))),
+            right: Some("17:42 left".into()),
+            tone: wrows::Tone::Dim,
+            bar: Some(0.29),
+            action: action.map(Into::into),
+        };
+        let mut focus = HostState::new("dev.haunt.focus-block", &caps, None, None, Some(core.handle()));
+        let mut other = HostState::new("dev.x.other", &caps, None, None, Some(core.handle()));
+        assert!(focus.set(Some(top("\u{200b} ", None))).is_err(), "a title is needed");
+        assert!(focus.set(Some(wtop::Top { bar: Some(f32::NAN), ..top("focus", None) })).is_err());
+        focus.set(Some(top("focus", Some("open")))).unwrap();
+        let t = core.snapshot().top.unwrap();
+        assert_eq!((t.plugin_id.as_str(), t.title.as_str(), t.bar_permille, t.clickable), ("dev.haunt.focus-block", "focus", Some(290), true));
+        assert_eq!(t.sub.unwrap().chars().count(), decorate::TOP_SUB_MAX);
+        assert!(other.set(Some(top("mine", None))).unwrap_err().contains("dev.haunt.focus-block"));
+        other.set(None).unwrap();
+        assert!(core.snapshot().top.is_some(), "only the owner clears it");
+        assert_eq!(focus.top_action.as_deref(), Some("open"));
+        drop(focus);
+        assert!(core.snapshot().top.is_none(), "a dropped plugin's row goes");
+        other.set(Some(top("mine", None))).unwrap();
+        assert!(!core.snapshot().top.unwrap().clickable && other.top_action.is_none());
     }
 
     #[test]
