@@ -156,7 +156,7 @@ fn binary(name: &str) -> Result<PathBuf, String> {
 /// run on a changed file; reading config runs nothing. Unknown counts as yes.
 fn defines_filters(git: &Path, repo: &Repo) -> bool {
     let args = ["config", "--show-scope", "-z", "--get-regexp", r"^filter\."].map(String::from);
-    match run_argv(git, &args, Some(repo), &repo.work_tree, TIMEOUT) {
+    match run_argv("git", git, &[], &args, Some(repo), &repo.work_tree, TIMEOUT) {
         Ok(o) if o.status == 1 => false,
         Ok(o) if o.status == 0 && !o.truncated => {
             let f: Vec<&str> = o.stdout.split('\0').collect();
@@ -170,22 +170,37 @@ fn defines_filters(git: &Path, repo: &Repo) -> bool {
 #[cfg(target_os = "macos")]
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
-/// A command that runs `bin`. On macOS git runs under `sandbox-exec` with a profile that lets it start no
-/// process but itself, so no filter, hook, pager, fsmonitor, signing or other program a repository could
-/// name runs, whatever its config or attributes say and whenever they change. Elsewhere (tests) as is.
-fn command(bin: &Path) -> Result<Command, String> {
+/// A command that runs `bin`, which may start only `children`. On macOS every command runs under
+/// `sandbox-exec`: exec is allowed only for the canonical paths of `bin` and `children`, and fork only when
+/// there are children, so no filter, hook, pager, fsmonitor, signing or other program a repository could name
+/// runs, whatever its config or attributes say and whenever they change. Profiles inherit, so gh's git is
+/// held the same way. Elsewhere as is.
+fn command(bin: &Path, children: &[&Path]) -> Result<Command, String> {
     #[cfg(target_os = "macos")]
-    if bin.file_name().is_some_and(|n| n == "git") {
-        let path = bin.to_str().filter(|p| !p.contains(['"', '\\'])).ok_or("git's path can't go in a sandbox profile")?;
-        if !Path::new(SANDBOX_EXEC).is_file() {
-            return Err(format!("{SANDBOX_EXEC} is missing, and Haunt runs git only inside it"));
+    {
+        let mut allowed = String::new();
+        let mut real = PathBuf::new();
+        for (i, p) in std::iter::once(&bin).chain(children).enumerate() {
+            let canon = p.canonicalize().map_err(|e| format!("{}: {e}", p.display()))?;
+            let path = canon.to_str().filter(|p| !p.contains(['"', '\\'])).ok_or("a path that can't go in a sandbox profile")?;
+            allowed += &format!(" (literal \"{path}\")");
+            if i == 0 {
+                real = canon;
+            }
         }
+        if !Path::new(SANDBOX_EXEC).is_file() {
+            return Err(format!("{SANDBOX_EXEC} is missing, and Haunt runs nothing outside it"));
+        }
+        let fork = if children.is_empty() { "(deny process-fork)" } else { "" };
         let mut c = Command::new(SANDBOX_EXEC);
-        let profile = format!("(version 1)(allow default)(deny process-fork)(deny process-exec)(allow process-exec (literal \"{path}\"))");
-        c.arg("-p").arg(profile).arg(bin);
-        return Ok(c);
+        c.arg("-p").arg(format!("(version 1)(allow default){fork}(deny process-exec)(allow process-exec{allowed})")).arg(real);
+        Ok(c)
     }
-    Ok(Command::new(bin))
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = children;
+        Ok(Command::new(bin))
+    }
 }
 
 /// Reads at most `OUTPUT_MAX` and drains the rest, so the child never blocks on a full pipe.
@@ -211,12 +226,14 @@ pub fn run(cmd: &ExecCommand, repo: &Repo) -> Result<ExecOutput, String> {
     if *cmd == ExecCommand::GitStatus && defines_filters(&bin, repo) {
         return Err("this repository's config defines git filters, which git status could run; Haunt won't".into());
     }
-    run_argv(&bin, &args, Some(repo), &repo.work_tree, TIMEOUT)
+    // gh starts git itself (remote, config, symbolic-ref); nothing else.
+    let git = if prog == "gh" { Some(binary("git")?) } else { None };
+    run_argv(prog, &bin, git.as_slice(), &args, Some(repo), &repo.work_tree, TIMEOUT)
 }
 
-fn run_argv(bin: &Path, args: &[String], repo: Option<&Repo>, dir: &Path, timeout: Duration) -> Result<ExecOutput, String> {
-    let prog = bin.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let mut c = command(bin)?;
+fn run_argv(prog: &str, bin: &Path, children: &[PathBuf], args: &[String], repo: Option<&Repo>, dir: &Path, timeout: Duration) -> Result<ExecOutput, String> {
+    let children: Vec<&Path> = children.iter().map(PathBuf::as_path).collect();
+    let mut c = command(bin, &children)?;
     environment(&mut c);
     if let Some(r) = repo {
         c.env("GIT_DIR", &r.git_dir).env("GIT_WORK_TREE", &r.work_tree);
@@ -320,7 +337,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn bare_git(sandboxed: bool, dir: &Path, args: &[&str]) -> std::process::Output {
         let git = binary("git").unwrap();
-        let inner = if sandboxed { command(&git).unwrap() } else { Command::new(&git) };
+        let inner = if sandboxed { command(&git, &[]).unwrap() } else { Command::new(&git) };
         let mut c = Command::new("/usr/bin/script");
         c.args(["-q", "/dev/null"]).arg(inner.get_program()).args(inner.get_args()).args(args);
         c.current_dir(dir).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").stdin(Stdio::null()).output().unwrap()
@@ -340,7 +357,7 @@ mod tests {
         assert!(bare_git(false, &dir, &["config", "filter.evil.clean", &evil]).status.success());
         std::fs::write(dir.join(".git/info/attributes"), "* filter=evil\n").unwrap();
         let args = ExecCommand::GitStatus.argv().unwrap().1;
-        let o = run_argv(&git, &args, Some(&repo), &repo.work_tree, TIMEOUT).unwrap();
+        let o = run_argv("git", &git, &[], &args, Some(&repo), &repo.work_tree, TIMEOUT).unwrap();
         assert_eq!(o.status, 0, "{o:?}");
         assert!(o.stdout.contains("# branch.head trunk") && o.stdout.contains("a.txt"), "{o:?}");
         assert!(!marker.exists(), "the filter ran");
@@ -349,6 +366,57 @@ mod tests {
         environment(&mut c);
         c.args(&args).current_dir(&repo.work_tree).env("GIT_DIR", &repo.git_dir).env("GIT_WORK_TREE", &repo.work_tree).output().unwrap();
         assert!(marker.exists(), "without the sandbox the pins alone let it run");
+    }
+
+    /// `dir` gains a filter in its config and an attribute naming it where GIT_ATTR_SOURCE doesn't reach.
+    #[cfg(target_os = "macos")]
+    fn add_filter(dir: &Path) {
+        let evil = dir.join("evil.sh").display().to_string();
+        assert!(bare_git(false, dir, &["config", "filter.evil.clean", &evil]).status.success());
+        std::fs::write(dir.join(".git/info/attributes"), "* filter=evil\n").unwrap();
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_trusted_git_under_another_name_still_runs_sandboxed() {
+        let Ok(git) = binary("git") else { return };
+        let (dir, marker) = hostile_repo("exec-renamed");
+        add_filter(&dir);
+        let bin = crate::testdir::TempDir::created("exec-renamed-bin");
+        // Not `git-…`: git reads a dashed name as a subcommand.
+        let copy = bin.join("scm-tool");
+        std::fs::copy(&git, &copy).unwrap();
+        let link = bin.join("git");
+        std::os::unix::fs::symlink(&copy, &link).unwrap();
+        let repo = repo_at(&dir);
+        let args = ExecCommand::GitStatus.argv().unwrap().1;
+        let o = run_argv("git", &link, &[], &args, Some(&repo), &repo.work_tree, TIMEOUT).unwrap();
+        assert!(o.status == 0 && o.stdout.contains("# branch.head trunk"), "{o:?}");
+        assert!(!marker.exists(), "the filter ran");
+        let mut c = Command::new(&copy);
+        environment(&mut c);
+        c.args(&args).current_dir(&repo.work_tree).env("GIT_DIR", &repo.git_dir).env("GIT_WORK_TREE", &repo.work_tree).output().unwrap();
+        assert!(marker.exists(), "the copy runs filters outside the sandbox, or this test proves nothing");
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn gh_and_the_git_it_starts_stay_in_the_sandbox() {
+        let (Ok(gh), Ok(git)) = (binary("gh"), binary("git")) else { return };
+        let (dir, marker) = hostile_repo("exec-gh");
+        add_filter(&dir);
+        let repo = repo_at(&dir);
+        // gh starts its git, which runs: the repo has no remote, so gh stops there.
+        let view = ["pr", "view"].map(String::from);
+        let o = run_argv("gh", &gh, std::slice::from_ref(&git), &view, Some(&repo), &repo.work_tree, TIMEOUT).unwrap();
+        assert!(o.stderr.contains("no git remotes"), "{o:?}");
+        // gh's git, under the profile it inherits from gh, still can't start the filter.
+        let mut c = command(&git, &[&gh]).unwrap();
+        environment(&mut c);
+        let args = ExecCommand::GitStatus.argv().unwrap().1;
+        let o = c.args(&args).current_dir(&repo.work_tree).env("GIT_DIR", &repo.git_dir).env("GIT_WORK_TREE", &repo.work_tree).output().unwrap();
+        assert!(o.status.success(), "{o:?}");
+        assert!(!marker.exists(), "a filter ran under gh's git");
     }
 
     #[test]
@@ -427,7 +495,7 @@ mod tests {
     fn a_slow_command_and_what_it_started_are_killed_at_the_timeout() {
         let t = Instant::now();
         let args = ["-c", "sleep 30 & echo started; sleep 30"].map(String::from);
-        let o = run_argv(Path::new("/bin/sh"), &args, None, Path::new("/"), Duration::from_millis(300)).unwrap();
+        let o = run_argv("sh", Path::new("/bin/sh"), &[PathBuf::from("/bin/bash"), PathBuf::from("/bin/sleep")], &args, None, Path::new("/"), Duration::from_millis(300)).unwrap();
         assert_eq!((o.status, o.stdout.as_str()), (-1, "started\n"));
         assert!(t.elapsed() < Duration::from_secs(3), "the backgrounded sleep must not hold the pipe open");
     }
@@ -435,7 +503,7 @@ mod tests {
     #[test]
     fn output_is_cut_per_stream() {
         let args = ["-c", "head -c 600000 /dev/zero; echo e >&2"].map(String::from);
-        let o = run_argv(Path::new("/bin/sh"), &args, None, Path::new("/"), TIMEOUT).unwrap();
+        let o = run_argv("sh", Path::new("/bin/sh"), &[PathBuf::from("/bin/bash"), PathBuf::from("/usr/bin/head")], &args, None, Path::new("/"), TIMEOUT).unwrap();
         assert_eq!((o.status, o.stdout.len(), o.stderr.as_str(), o.truncated), (0, OUTPUT_MAX, "e\n", true));
     }
 }

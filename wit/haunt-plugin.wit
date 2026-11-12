@@ -381,8 +381,8 @@ interface keys {
 // Each runs with fixed arguments, no shell, no stdin and a cleared environment, at the root of the git
 // repository tab `surface` was opened in, where `${cwd}` of `fs` would point (inside your home folder, not under a
 // dot-folder, ~/Library or the haunt dir, and not ~/Documents and the like themselves). git and gh come from Homebrew or the Command Line Tools, never PATH, and no
-// program the repo's git config names ever runs (on macOS git runs in a sandbox that lets it start nothing
-// else); git-status errs in a repo whose config defines a filter. A 10 s
+// program the repo's git config names ever runs (on macOS git and gh run in a sandbox that lets them start
+// nothing but git); git-status errs in a repo whose config defines a filter. A 10 s
 // timeout kills it and whatever it started; each stream is cut to 256 KB. The result arrives at
 // `on-exec(job, ...)`. At most 2 running per plugin.
 interface exec {
