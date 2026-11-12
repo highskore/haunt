@@ -716,9 +716,10 @@ fn status_tokens(s: &str) -> Vec<Vec<Glyph>> {
     tokens
 }
 
-/// `w` reads as `p`: each glyph equal or a wildcard, and at least one equal, so emoji alone spell nothing.
+/// `w` reads as `p`: each glyph equal (its skeleton, for a lookalike) or a wildcard, and at least one
+/// equal, so emoji alone spell nothing but a word all in lookalikes does.
 fn status_same(w: &[Glyph], p: &[char]) -> bool {
-    w.len() == p.len() && w.iter().zip(p).all(|(g, p)| g.c == *p || g.wild) && w.iter().zip(p).any(|(g, p)| g.c == *p && !g.wild)
+    w.len() == p.len() && w.iter().zip(p).all(|(g, p)| g.c == *p || g.wild) && w.iter().zip(p).any(|(g, p)| g.c == *p)
 }
 
 /// Whether `text` spells one of Haunt's status words or phrases. The sidebar's own (`layout::STATUS_TEXTS`,
@@ -2243,6 +2244,7 @@ mod tests {
             "Al·low", "Do.ne", "Allo\u{0353}w", "Al·low ok", "ok De·ny", "d\u{f3}ne", "ap-prove",
             "don\u{212E}", "\u{2373}dle", "d\u{25CB}ne", "D\u{2228}NE", "ok-done-ok", "a.done.b", "[x]done[x]", "x—done—x",
             "idler", "abandoned", "undone·x", "d\u{043E}ne", "\u{FF44}one",
+            "\u{0501}\u{043E}\u{0578}\u{0435}", "\u{0456}\u{0501}\u{04CF}\u{0435}", "R\u{0456}\u{0578}\u{0578}\u{0456}\u{0578}g",
         ] {
             assert!(decoration(d(bad, wrows::Tone::Dim)).is_err(), "{bad:?}");
         }
