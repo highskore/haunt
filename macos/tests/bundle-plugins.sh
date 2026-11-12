@@ -26,6 +26,10 @@ PIN=$(awk '$1 == "tabs-plus" { print $3 }' macos/plugins.lock)
 git -C "$DIR/haunt-tabs-plus" show "$PIN:haunt-plugin.toml" | sed 's/^entry = .*/entry = "plugin.wasm"/' >"$T/pinned.toml"
 cmp -s "$T/pinned.toml" "$T/tabs/dev.haunt.tabs-plus/haunt-plugin.toml" || fail "the bundled manifest isn't the pinned one"
 [ -z "$(ls -A target/plugin-src)" ] || fail "the staged sources were left behind: $(ls target/plugin-src)"
+# A CARGO_TARGET_DIR in the environment is where the wasm is found, not a stale one in the usual place.
+rm -f target/plugins/wasm32-wasip2/release/haunt_plugin.wasm
+CARGO_TARGET_DIR="$T/ctd" HAUNT_PLUGINS_DIR="$DIR" macos/bundle-plugins.sh "$T/ctd-out" tabs-plus >/dev/null
+[ -s "$T/ctd-out/dev.haunt.tabs-plus/plugin.wasm" ] && [ -s "$T/ctd/wasm32-wasip2/release/haunt_plugin.wasm" ] || fail "CARGO_TARGET_DIR not honoured"
 
 set +e
 HAUNT_PLUGINS_DIR="$DIR" macos/bundle-plugins.sh "$T/bad" tabs-plus,tabs 2>"$T/err"; code=$?

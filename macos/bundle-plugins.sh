@@ -215,7 +215,14 @@ for i in "${!repos[@]}"; do
     # Our toolchain, whatever the plugin's own rust-toolchain file says.
     (cd "$src" && RUSTUP_TOOLCHAIN="$TOOLCHAIN" cargo build -q --release --target wasm32-wasip2)
     sed 's/^entry = .*/entry = "plugin.wasm"/' "$src/haunt-plugin.toml" >"$DEST/$id/haunt-plugin.toml"
-    cp "$src/$entry" "$DEST/$id/plugin.wasm"
+    # A CARGO_TARGET_DIR (relative to the source, as cargo reads it) holds what the entry's target/ would.
+    wasm="$src/$entry"
+    if [ -n "${CARGO_TARGET_DIR:-}" ] && [[ "$entry" == target/* ]]; then
+      tdir="$CARGO_TARGET_DIR"
+      [[ "$tdir" == /* ]] || tdir="$src/$tdir"
+      wasm="$tdir/${entry#target/}"
+    fi
+    cp "$wasm" "$DEST/$id/plugin.wasm"
   fi
   echo "bundled plugin $id${rev:+ at ${rev:0:7}}"
 done
