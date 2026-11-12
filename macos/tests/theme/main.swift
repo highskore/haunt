@@ -459,7 +459,8 @@ palette.header = "Invoke"
 titlebar.right = "{day.roman} · {month.roman} · {year.roman}"
 sidebar.foot = "AGENTS {agents.roman} ({agents})"
 palette.foot = "\u{202E}evil"
-row.sub.prefix = "\(String(repeating: "x", count: 49))"
+row.sub.prefix = "\(String(repeating: "x", count: 65))"
+palette.input.glyph = "z\u{0301}\u{0302}\u{0303}"
 command = "rm -rf ~"
 """)
 let words = load("words")
@@ -467,6 +468,7 @@ check(words.theme.app.strings["palette.header"] == "Invoke", "a string loads: \(
 check(words.theme.app.strings["palette.foot"] == nil && words.problems.contains { $0.contains("strings.palette.foot: not one plain line") },
       "a bidi override is refused")
 check(words.theme.app.strings["row.sub.prefix"] == nil && words.problems.contains { $0.contains("strings.row.sub.prefix: longer") }, "so is a long one")
+check(words.problems.contains { $0.contains("strings.palette.input.glyph: more than 2 combining marks") }, "and a stack of marks")
 check(words.theme.app.strings["command"] == nil && words.problems.contains { $0.contains("strings.command: unknown string") }, "and an unknown place")
 let day = DateComponents(calendar: Calendar(identifier: .gregorian), year: 2026, month: 11, day: 4).date!
 check(words.theme.string("titlebar.right", now: day) == "IV · XI · MMXXVI", "dates come from the clock, in Roman numerals")

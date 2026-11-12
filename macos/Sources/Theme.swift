@@ -50,12 +50,18 @@ extension Theme {
     /// The places a theme may word, each one plain line; `{day.roman}`, `{month.roman}`, `{year.roman}`,
     /// `{agents}` and `{agents.roman}` fill in when drawn.
     static let stringKeys: Set<String> = ["row.sub.prefix", "titlebar.right", "palette.header", "palette.foot", "palette.input.glyph", "palette.message", "sidebar.foot"]
-    static let maxStringLength = 48
+    static let maxStringScalars = 64
+    /// More marks than this on one character stack it above and below its line ("zalgo").
+    static let maxCombiningMarks = 2
 
     private mutating func setString(_ name: String, _ value: TOML.Value) -> String? {
         guard Self.stringKeys.contains(name) else { return "unknown string" }
         guard case let .scalar(s) = value else { return "not a string" }
-        guard s.count <= Self.maxStringLength else { return "longer than \(Self.maxStringLength) characters" }
+        guard s.unicodeScalars.count <= Self.maxStringScalars else { return "longer than \(Self.maxStringScalars) code points" }
+        guard s.allSatisfy({ c in
+            c.unicodeScalars.filter { [.nonspacingMark, .spacingMark, .enclosingMark].contains($0.properties.generalCategory) }.count
+                <= Self.maxCombiningMarks
+        }) else { return "more than \(Self.maxCombiningMarks) combining marks on a character" }
         guard s.unicodeScalars.allSatisfy({ !TitleFormat.hidden($0) }) else { return "not one plain line" }
         app.strings[name] = s
         return nil

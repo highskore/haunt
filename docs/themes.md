@@ -116,7 +116,7 @@ Every effect is off by default, so black and white draws as it did before them.
 
 **Display type.** `[app] display.font` names a face for the title's `{tab}` or `{app}` part, the group labels and the palette header. `[app] text.chrome` lists gradient stops, top to bottom, that fill that text and a pill selection; every stop must be opaque, read 3:1 on the window, sidebar and palette backgrounds, and carry `palette.pill.ink` at 3:1, or the text is drawn flat and the theme logged.
 
-**`[strings]`.** A theme may word six places: `titlebar.right`, `palette.header`, `palette.foot` (replacing the hints), `palette.input.glyph`, `sidebar.foot` (with `ornament`) and `row.sub.prefix` (before a subagent line). Each is one plain line of up to 48 characters, with no control, bidi or invisible characters; anything else is refused and logged. `{day.roman}`, `{month.roman}` and `{year.roman}` come from the clock, `{agents}` and `{agents.roman}` from the sidebar.
+**`[strings]`.** A theme may word six places: `titlebar.right`, `palette.header`, `palette.foot` (replacing the hints), `palette.input.glyph`, `sidebar.foot` (with `ornament`) and `row.sub.prefix` (before a subagent line). Each is one plain line of up to 64 code points, with no control, bidi or invisible characters and at most two combining marks on a character; anything else is refused and logged. `{day.roman}`, `{month.roman}` and `{year.roman}` come from the clock, `{agents}` and `{agents.roman}` from the sidebar.
 
 ## How it works
 
