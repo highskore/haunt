@@ -625,11 +625,20 @@ mod tests {
             "events = [\"agent.tool\"]", "event_details = true", "pty_write = true", "pty_type = true", "notifications = true",
             "decisions_read = true", "allowlist_suggest = true", "sidebar = true", "decorate = true", "timer = true", "panel = true",
             "notify_hold = true", "sidebar_top = true", "keys = true", "away = true", "fs_read = [\"${cwd}/a\"]",
-            "fs_write = [\"${cwd}/a\"]", "exec = [\"git-status\"]", "terminal_read = true",
+            "fs_write = [\"${cwd}/a\"]", "exec = [\"git-status\"]", "terminal_read = true", "clipboard = \"write\"",
+            "open_url = [\"github.com\"]", "fs_list = true",
         ] {
-            let m = Manifest::parse(&manifest(line)).unwrap_or_else(|e| panic!("{line}: {e}"));
-            assert!(!m.capabilities.added_since(&none).is_empty(), "{line} added with no consent line");
+            let c = Manifest::parse(&manifest(line)).unwrap_or_else(|e| panic!("{line}: {e}")).capabilities;
+            assert!(!c.describe().is_empty(), "{line} has no consent line");
+            assert_eq!(c.added_since(&none), c.describe(), "{line} gained by an update must ask again");
         }
+        let one = Capabilities { open_url: vec!["github.com".into()], ..Default::default() };
+        let two = Capabilities { open_url: vec!["github.com".into(), "docs.rs".into()], ..Default::default() };
+        assert_eq!(two.added_since(&one), [("can open links to docs.rs in your browser when you click one of its buttons".into(), false)], "a new domain is a grown grant");
+        let off = Capabilities { clipboard: Some("none".into()), ..Default::default() };
+        let on = Capabilities { clipboard: Some("write".into()), ..Default::default() };
+        assert_eq!(on.added_since(&off), on.describe(), "none to write asks again");
+        assert!(off.added_since(&on).is_empty() && on.added_since(&on).is_empty());
         for refused in ["net = [\"a.example\"]", "hid = [1]", "clipboard = \"read\""] {
             assert!(Manifest::parse(&manifest(refused)).is_err(), "{refused}");
         }
