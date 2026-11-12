@@ -168,10 +168,19 @@ fn missing(field: &str) -> ParseError {
 }
 
 // JSON escapes can still decode to control characters, so every string is cleaned after decoding.
-/// Drops control and format (Cf) characters, so bidi overrides and zero-widths cannot disguise text.
+/// Drops control, format (Cf) and default-ignorable characters, so bidi overrides, zero-widths and
+/// fillers that draw as nothing cannot disguise text; other whitespace becomes a space.
 pub fn clean(s: &str) -> String {
     s.chars()
-        .filter_map(|c| if c.is_whitespace() && !is_format(c) { Some(' ') } else { (!c.is_control() && !is_format(c)).then_some(c) })
+        .filter_map(|c| {
+            if (c.is_control() && !c.is_whitespace()) || is_format(c) || is_default_ignorable(c) {
+                None
+            } else if c.is_whitespace() {
+                Some(' ')
+            } else {
+                Some(c)
+            }
+        })
         .collect()
 }
 
@@ -402,6 +411,38 @@ mod tests {
         }
         for c in ['a', 'é', '한', '\u{1100}', '\u{3165}', '\u{FFA1}', '\u{E1000}', '👻'] {
             assert!(!is_hidden(c), "{:x}", c as u32);
+        }
+    }
+
+    fn table_ranges(table: &serde_json::Value, key: &str) -> Vec<(u32, u32)> {
+        let hex = |v: &serde_json::Value| u32::from_str_radix(v.as_str().unwrap(), 16).unwrap();
+        table[key].as_array().unwrap().iter().map(|r| (hex(&r[0]), hex(&r[1]))).collect()
+    }
+
+    #[test]
+    fn hidden_characters_match_the_shared_table() {
+        // macos/tests/keys.sh and paste.sh check the app's side against the same file.
+        let table: serde_json::Value = serde_json::from_str(include_str!("../hidden-chars.json")).unwrap();
+        let (format, ignorable) = (table_ranges(&table, "format"), table_ranges(&table, "default_ignorable"));
+        let within = |ranges: &[(u32, u32)], c: char| ranges.iter().any(|&(lo, hi)| (lo..=hi).contains(&(c as u32)));
+        for c in (0..=char::MAX as u32).filter_map(char::from_u32) {
+            let (f, di) = (within(&format, c), within(&ignorable, c));
+            assert_eq!(is_format(c), f, "format {:x}", c as u32);
+            assert_eq!(is_default_ignorable(c), di, "default ignorable {:x}", c as u32);
+            if f || di {
+                let s = format!("l{c}s");
+                assert!(is_hidden(c), "{:x}", c as u32);
+                assert_eq!(clean(&s), "ls", "{:x}", c as u32);
+                assert_eq!(visible(&s), format!("l\\u{{{:x}}}s", c as u32));
+                assert!(!crate::plugin_manifest::plain_line(&s, 10), "{:x}", c as u32);
+                assert_eq!(crate::plugin_manifest::escape_hidden(&s), format!("l\\u{{{:x}}}s", c as u32));
+            }
+        }
+        for v in table["shown"].as_array().unwrap() {
+            let c = char::from_u32(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap()).unwrap();
+            let s = format!("l{c}s");
+            assert!(!is_hidden(c) && clean(&s) == s && visible(&s) == s, "{:x}", c as u32);
+            assert!(crate::plugin_manifest::plain_line(&s, 10) && crate::plugin_manifest::escape_hidden(&s) == s, "{:x}", c as u32);
         }
     }
 

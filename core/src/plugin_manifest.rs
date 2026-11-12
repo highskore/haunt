@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::event::EventKind;
+use crate::event::{is_default_ignorable, is_format, EventKind};
 
 pub const MANIFEST: &str = "haunt-plugin.toml";
 /// The `haunt:plugin` minor this host implements.
@@ -234,22 +234,19 @@ pub fn valid_id(id: &str) -> bool {
 /// Text the UI shows as is: at most `max` characters, with no control, format, line-separator,
 /// bidi-override or zero-width character that could hide or reorder what is shown.
 pub fn plain_line(s: &str, max: usize) -> bool {
-    s.chars().count() <= max && !s.chars().any(|c| c.is_control() || is_format(c) || matches!(c, '\u{2028}' | '\u{2029}'))
+    s.chars().count() <= max && !s.chars().any(refused)
+}
+
+/// A control, format, default-ignorable or line-separator character.
+pub fn refused(c: char) -> bool {
+    c.is_control() || is_format(c) || is_default_ignorable(c) || matches!(c, '\u{2028}' | '\u{2029}')
 }
 
 /// `s` with every character `plain_line` refuses written as `\u{..}`, for printing text that wasn't checked.
 pub fn escape_hidden(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_control() || is_format(c) || matches!(c, '\u{2028}' | '\u{2029}') { format!("\\u{{{:x}}}", c as u32) } else { c.to_string() })
+        .map(|c| if refused(c) { format!("\\u{{{:x}}}", c as u32) } else { c.to_string() })
         .collect()
-}
-
-/// Unicode's Cf (format) characters, which include the bidi controls, zero-width characters and BOM.
-fn is_format(c: char) -> bool {
-    matches!(c as u32,
-        0xAD | 0x600..=0x605 | 0x61C | 0x6DD | 0x70F | 0x890..=0x891 | 0x8E2 | 0x180E | 0x200B..=0x200F
-        | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD
-        | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
 }
 
 fn api_supported(api: &str) -> bool {

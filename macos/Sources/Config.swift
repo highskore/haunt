@@ -571,14 +571,19 @@ enum TitleFormat {
         return out.map { (String(String.UnicodeScalarView($0.0.unicodeScalars.filter { !hidden($0) })), $0.1) }.filter { !$0.0.isEmpty }
     }
 
-    /// The core's `plain_line` test, character for character: a control, format (bidi, zero-width, BOM) or
-    /// line-separator character, which could hide or reorder what the title shows.
+    /// The core's `plain_line` test, character for character: a control, format (bidi, zero-width, BOM),
+    /// default-ignorable (fillers, variation selectors) or line-separator character, which could hide or
+    /// reorder what the title shows. Both are tested against core/hidden-chars.json.
     static func hidden(_ c: Unicode.Scalar) -> Bool {
         switch c.value {
         case 0...0x1F, 0x7F...0x9F, 0x2028, 0x2029,
+             // Format (Cf).
              0xAD, 0x600...0x605, 0x61C, 0x6DD, 0x70F, 0x890...0x891, 0x8E2, 0x180E, 0x200B...0x200F,
              0x202A...0x202E, 0x2060...0x2064, 0x2066...0x206F, 0xFEFF, 0xFFF9...0xFFFB, 0x110BD, 0x110CD,
-             0x13430...0x1343F, 0x1BCA0...0x1BCA3, 0x1D173...0x1D17A, 0xE0001, 0xE0020...0xE007F:
+             0x13430...0x1343F, 0x1BCA0...0x1BCA3, 0x1D173...0x1D17A, 0xE0001, 0xE0020...0xE007F,
+             // Default_Ignorable_Code_Point not already above.
+             0x34F, 0x115F...0x1160, 0x17B4...0x17B5, 0x180B...0x180D, 0x180F, 0x2065, 0x3164,
+             0xFE00...0xFE0F, 0xFFA0, 0xFFF0...0xFFF8, 0xE0000, 0xE0002...0xE001F, 0xE0080...0xE0FFF:
             return true
         default:
             return false

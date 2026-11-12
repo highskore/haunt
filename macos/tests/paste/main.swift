@@ -48,5 +48,18 @@ for (c, what) in [("\u{2028}", "line separator"), ("\u{2029}", "paragraph separa
     check(PastePreview("a\(c)b").needsConfirmation, "\(what) held")
 }
 
+// core/hidden-chars.json, the table the core is tested against too.
+func hiddenTable() -> (format: [ClosedRange<UInt32>], ignorable: [ClosedRange<UInt32>], shown: [Unicode.Scalar]) {
+    let json = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "core/hidden-chars.json"))) as! [String: Any]
+    let hex = { (s: Any) in UInt32(s as! String, radix: 16)! }
+    let ranges = { (k: String) in (json[k] as! [[Any]]).map { hex($0[0])...hex($0[1]) } }
+    return (ranges("format"), ranges("default_ignorable"), (json["shown"] as! [Any]).map { Unicode.Scalar(hex($0))! })
+}
+let hiddenChars = hiddenTable()
+for v in UInt32(0)...0x10FFFF where (hiddenChars.format + hiddenChars.ignorable).contains(where: { $0.contains(v) }) {
+    check(PastePreview.hidden(Unicode.Scalar(v)!), "PastePreview.hidden(\(String(v, radix: 16))) per core/hidden-chars.json")
+}
+check(!hiddenChars.shown.contains(where: PastePreview.hidden), "PastePreview keeps the table's shown characters")
+
 if failures > 0 { print("paste: \(failures) failed"); exit(1) }
 print("paste: all passed")

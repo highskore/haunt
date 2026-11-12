@@ -8,6 +8,15 @@ func check(_ ok: Bool, _ what: String, line: Int = #line) {
     }
 }
 
+// core/hidden-chars.json, the table the core is tested against too.
+func hiddenTable() -> (format: [ClosedRange<UInt32>], ignorable: [ClosedRange<UInt32>], shown: [Unicode.Scalar]) {
+    let json = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "core/hidden-chars.json"))) as! [String: Any]
+    let hex = { (s: Any) in UInt32(s as! String, radix: 16)! }
+    let ranges = { (k: String) in (json[k] as! [[Any]]).map { hex($0[0])...hex($0[1]) } }
+    return (ranges("format"), ranges("default_ignorable"), (json["shown"] as! [Any]).map { Unicode.Scalar(hex($0))! })
+}
+let hiddenChars = hiddenTable()
+
 // Parsing.
 let b = Shortcut.parse("cmd+shift+b")
 check(b == Shortcut(mods: [.command, .shift], key: "b"), "cmd+shift+b parses")
@@ -102,6 +111,14 @@ func title(_ f: String, _ tab: String, _ meta: String) -> String { TitleFormat.p
 titleLogs = []
 check(TitleFormat.parse(.scalar("{tab}\u{202E}gpj.exe")) { titleLogs.append($0) } == "" && titleLogs.count == 1, "a bidi override in the format shows nothing")
 check(title("{tab} — {meta}", "a\u{202E}b\u{200B}c\u{7}", "m\u{2028}x · y") == "[abc] — mx", "hidden characters in a tab's name or meta are dropped")
+check(title("{tab}", "a\u{3164}b\u{FE0F}c\u{E0100}", "") == "[abc]", "default-ignorable characters in a tab's name are dropped")
+for v in UInt32(0)...0x10FFFF {
+    guard let c = Unicode.Scalar(v) else { continue }
+    let want = v <= 0x1F || (0x7F...0x9F).contains(v) || v == 0x2028 || v == 0x2029
+        || (hiddenChars.format + hiddenChars.ignorable).contains { $0.contains(v) }
+    check(TitleFormat.hidden(c) == want, "TitleFormat.hidden(\(String(v, radix: 16))) matches core/hidden-chars.json")
+}
+check(!hiddenChars.shown.contains(where: TitleFormat.hidden), "TitleFormat.hidden keeps the table's shown characters")
 check(title("{tab} — {meta}", "pawr", "agent-sidebar · Writing tests") == "[pawr] — agent-sidebar", "name and the meta's first part")
 check(title("{tab} — {meta}", "vibes", "") == "[vibes]", "an empty meta takes its separator with it")
 check(title("~ {meta} {x} {tab}", "a", "b") == "~ b {x} [a]", "unknown braces stay text")

@@ -1,0 +1,15 @@
+{
+  "about": "Unicode 16 code point ranges, inclusive, in hex. The core (event.rs) and the app (TitleFormat.hidden, PastePreview.hidden) are both tested against this table.",
+  "format": [
+    ["AD", "AD"], ["600", "605"], ["61C", "61C"], ["6DD", "6DD"], ["70F", "70F"], ["890", "891"], ["8E2", "8E2"],
+    ["180E", "180E"], ["200B", "200F"], ["202A", "202E"], ["2060", "2064"], ["2066", "206F"], ["FEFF", "FEFF"],
+    ["FFF9", "FFFB"], ["110BD", "110BD"], ["110CD", "110CD"], ["13430", "1343F"], ["1BCA0", "1BCA3"],
+    ["1D173", "1D17A"], ["E0001", "E0001"], ["E0020", "E007F"]
+  ],
+  "default_ignorable": [
+    ["AD", "AD"], ["34F", "34F"], ["61C", "61C"], ["115F", "1160"], ["17B4", "17B5"], ["180B", "180F"],
+    ["200B", "200F"], ["202A", "202E"], ["2060", "206F"], ["3164", "3164"], ["FE00", "FE0F"], ["FEFF", "FEFF"],
+    ["FFA0", "FFA0"], ["FFF0", "FFF8"], ["1BCA0", "1BCA3"], ["1D173", "1D17A"], ["E0000", "E0FFF"]
+  ],
+  "shown": ["41", "E9", "D55C", "1100", "1161", "3165", "FE10", "FFA1", "FFFC", "E1000", "1F47B", "2764"]
+}
