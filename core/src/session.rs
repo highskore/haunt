@@ -401,10 +401,11 @@ impl Session {
         }
     }
 
-    /// The request `key` names, the first time `plugin_id` is refused on it; None after, or for
-    /// another key.
+    /// The live request `key` names, the first time `plugin_id` is refused on it; None after, or when
+    /// `key` isn't the request on screen.
     pub fn first_refusal(&mut self, key: u64, plugin_id: &str) -> Option<Permission> {
-        let p = self.permission.as_mut().filter(|p| p.key() == key && !p.refused_by.iter().any(|id| id == plugin_id))?;
+        self.live_permission().filter(|p| p.key() == key)?;
+        let p = self.permission.as_mut().filter(|p| !p.refused_by.iter().any(|id| id == plugin_id))?;
         p.refused_by.push(plugin_id.to_owned());
         Some(p.clone())
     }

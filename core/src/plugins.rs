@@ -418,7 +418,7 @@ impl wdec::Host for HostState {
         // The 0.4 `outcome` variant has no case for a refused plugin answer; those rows stay out.
         core.decisions_where(&text, limit.min(MAX_DECISIONS), |d| !matches!(d.outcome, Outcome::RefusedPlugin { .. }))
             .into_iter()
-            .filter_map(|d| {
+            .map(|d| {
                 let outcome = match d.outcome {
                     Outcome::AllowedInHaunt => wdec::Outcome::AllowedInHaunt,
                     Outcome::DeniedInHaunt => wdec::Outcome::DeniedInHaunt,
@@ -426,9 +426,9 @@ impl wdec::Host for HostState {
                     Outcome::DeniedByPlugin { plugin_id } => wdec::Outcome::DeniedByPlugin(plugin_id),
                     Outcome::AnsweredInTerminal => wdec::Outcome::AnsweredInTerminal,
                     Outcome::Superseded => wdec::Outcome::Superseded,
-                    Outcome::RefusedPlugin { .. } => return None,
+                    Outcome::RefusedPlugin { .. } => unreachable!("filtered out by the query"),
                 };
-                Some(wdec::Decision {
+                wdec::Decision {
                     at_ms: d.at_ms,
                     surface_id: d.surface_id,
                     tool: d.tool,
@@ -436,7 +436,7 @@ impl wdec::Host for HostState {
                     cwd: d.cwd,
                     outcome,
                     agent: d.agent.id().to_owned(),
-                })
+                }
             })
             .collect()
     }

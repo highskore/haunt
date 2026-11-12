@@ -158,6 +158,7 @@ mod tests {
         assert_eq!(c.gate_plugin_request(&answer(&a.surface_id, key + 1)), None);
         let refusal = |reason| PluginRefusal { plugin_id: "p".into(), reason };
         assert_eq!(c.take_plugin_refusals(), [refusal(Refusal::InTerminal), refusal(Refusal::NoRequest)]);
+        assert!(c.decisions("refused_plugin", 10).is_empty(), "only a request on screen is logged");
     }
 
     fn typed(surface: &str, text: &str, enter: bool) -> HostRequest {
