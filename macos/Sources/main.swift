@@ -13,6 +13,10 @@ for name in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_CHILD_SESSION"
     unsetenv(name)
 }
 
+#if HAUNT_FIXTURES
+if let theme = ProcessInfo.processInfo.environment["HAUNT_CHECK_THEME"] { exit(ThemeCheck.run(theme)) }
+#endif
+
 if ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != GHOSTTY_SUCCESS {
     FileHandle.standardError.write(Data("ghostty_init failed\n".utf8))
     exit(1)

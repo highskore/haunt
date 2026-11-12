@@ -5,6 +5,14 @@ import os
 final class HauntConfig {
     static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "dev.haunt.Haunt", category: "config")
 
+    /// A theme problem in the log; a fixture also prints it, so the fidelity script fails on a skipped layer.
+    static func themeProblem(_ p: String) {
+        logger.warning("\(p, privacy: .public)")
+        #if HAUNT_FIXTURES
+        FileHandle.standardError.write(Data("theme problem: \(p)\n".utf8))
+        #endif
+    }
+
     let dir: URL
     var tomlURL: URL { dir.appendingPathComponent("config.toml") }
     var ghosttyURL: URL { dir.appendingPathComponent("ghostty.generated.conf") }
@@ -109,7 +117,7 @@ final class HauntConfig {
         // Also drops the fonts when the theme is black and white or failed to load.
         ThemeFonts.activate(loaded.fonts, loaded.uiFonts)
         if pluginThemes != nil, loaded.problems != lastThemeProblems {
-            for p in loaded.problems { Self.logger.warning("\(p, privacy: .public)") }
+            for p in loaded.problems { Self.themeProblem(p) }
             lastThemeProblems = loaded.problems
         }
         let seen = Dictionary(([tomlURL] + loaded.files).map { ($0, FileStamp($0)) }, uniquingKeysWith: { a, _ in a })
@@ -129,6 +137,7 @@ final class HauntConfig {
         toml["ghostty"] = ghostty.merging(toml["ghostty"] ?? [:]) { _, user in user }
         let themeChanged = loaded.theme != Theme.current || loaded.layerSource != Layers.source
         Theme.current = loaded.theme
+        Layers.report = Self.themeProblem
         Layers.set(loaded.layers, source: loaded.layerSource)
         Layers.terminalSeeThrough = (toml["ghostty"]?["background-opacity"]?.strings.first.flatMap(Double.init) ?? 1) < 1
         themeName = loaded.name

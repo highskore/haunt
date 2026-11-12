@@ -96,6 +96,12 @@ if im.width * 2 == ref.width:
 ' "$OUT/$tag-capture.png" "$ROOT/design/reference/$s.png"
       "$ROOT/design/check" "$OUT/$tag-capture.png" "$s" --out "$OUT${HAUNT_INACTIVE:+/inactive}" || status=1
     fi
+    # A theme's layer that Haunt refused or skipped is a failure, not a quieter capture.
+    if grep -q "^theme problem: .*layer" "$OUT/$tag-app.log" 2>/dev/null; then
+      echo "$s: theme layers refused:" >&2
+      grep "^theme problem: .*layer" "$OUT/$tag-app.log" >&2
+      status=1
+    fi
     if [ -n "$pid" ]; then
       kill "$pid" 2>/dev/null
       for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
