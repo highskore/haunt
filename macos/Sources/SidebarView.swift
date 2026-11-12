@@ -30,7 +30,14 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         #endif
     }()
     private var hoverId: String? {
-        didSet { if hoverId != oldValue { invalidateRow(oldValue); invalidateRow(hoverId) } }
+        didSet {
+            guard hoverId != oldValue else { return }
+            invalidateRow(oldValue)
+            invalidateRow(hoverId)
+            // Other plugins' labels that lost the row to `row_labels` order.
+            let others = snapshot.groups.lazy.flatMap(\.rows).first { $0.surfaceId == self.hoverId }?.otherLabels ?? []
+            toolTip = others.isEmpty ? nil : others.joined(separator: "\n")
+        }
     }
     private var hoverClose = false { didSet { if hoverClose != oldValue { invalidateRow(hoverId) } } }
 

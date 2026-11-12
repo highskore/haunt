@@ -112,6 +112,7 @@ titlebar_buttons = ["search", "new_tab", "sidebar"]   # the default
 palette_position = "center-top"                       # or "bottom-right"
 palette_rows = "two-line"                             # or "single-line": the sub beside the title
 title_format = ""                                     # e.g. "{tab} — {meta}"; empty shows no title
+row_labels = ["checklist", "ci"]                      # whose row label wins; none by default
 
 [notifications]      # all on by default
 enabled = true       # every agent notification
@@ -123,7 +124,7 @@ menu_bar = true      # the menu bar item
 cursor-style = "bar"
 ```
 
-`agents_view` is the view ⌘⇧A shows. `titlebar_buttons` lists the title bar's icons, left to right, from `search`, `new_tab`, `settings` and `sidebar`. Unknown names are skipped and logged; `[]` leaves the bar empty. Each icon's tooltip shows its shortcut from `[keys]`. `palette_position` puts ⌘K at the top centre or in the bottom-right corner, `palette_width` (240–600) sets its width, and `palette_rows` lays out its rows. `title_format` centres a title in the title bar: `{tab}` is the selected tab's name and `{meta}` the first part of its meta line. A theme's `[layout]` can set these too, and yours win.
+`agents_view` is the view ⌘⇧A shows. `titlebar_buttons` lists the title bar's icons, left to right, from `search`, `new_tab`, `settings` and `sidebar`. Unknown names are skipped and logged; `[]` leaves the bar empty. Each icon's tooltip shows its shortcut from `[keys]`. `palette_position` puts ⌘K at the top centre or in the bottom-right corner, `palette_width` (240–600) sets its width, and `palette_rows` lays out its rows. `title_format` centres a title in the title bar: `{tab}` is the selected tab's name and `{meta}` the first part of its meta line. A theme's `[layout]` can set these too, and yours win. `row_labels` orders plugins whose decorations want the same row: the first listed one that has one shows, plugins not listed come after in install order, and the rest show in the row's tooltip. Name a plugin by its id, the id's last part (`checklist-meter`) or that part's first word (`checklist`).
 
 `[keys]` sets shortcuts by action name (the generated `config.toml` lists them with their defaults). A plugin's palette command is named `"<plugin id>/<item id>"`, for example `"dev.haunt.tabs-plus/move-up" = "alt+cmd+up"`; a plugin's default key must include cmd and never takes one of Haunt's or a chord the terminal or macOS uses (a chord set here has no such limit), and bound plugin commands appear in the Window menu.
 

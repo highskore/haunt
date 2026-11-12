@@ -11,7 +11,11 @@ pub struct PluginConfig {
     pub problems: Vec<String>,
     /// False when config.toml didn't parse: a reload then keeps every plugin's previous settings.
     pub parsed: bool,
+    /// `[layout] row_labels`: plugin ids or short names whose row decoration wins, first first.
+    pub row_labels: Vec<String>,
 }
+
+const MAX_ROW_LABELS: usize = 64;
 
 impl PluginConfig {
     /// A `plugins` entry that isn't a table sets nothing. A config.toml that doesn't parse sets nothing at
@@ -40,7 +44,17 @@ impl PluginConfig {
             }
             Some(_) => problems.push("[plugins]: not a table, ignored".into()),
         }
-        Self { tables, problems, parsed: true }
+        let row_labels = match doc.get("layout").and_then(|l| l.get("row_labels")) {
+            None => Vec::new(),
+            Some(toml::Value::Array(a)) if a.iter().all(toml::Value::is_str) => {
+                a.iter().filter_map(|v| v.as_str()).take(MAX_ROW_LABELS).map(str::to_owned).collect()
+            }
+            Some(_) => {
+                problems.push("[layout] row_labels: not a list of plugin names, ignored".into());
+                Vec::new()
+            }
+        };
+        Self { tables, problems, parsed: true, row_labels }
     }
 
     /// The JSON `init` and `on-settings-changed` get: the defaults in `schema` (the manifest's
@@ -108,6 +122,14 @@ mod tests {
         assert_eq!(p.len(), 3, "{p:?}");
         assert!(p.iter().any(|l| l.contains("shell: not a setting")));
         assert!(p.iter().any(|l| l.contains("pins: a string, but this setting is a boolean")));
+    }
+
+    #[test]
+    fn row_labels_are_a_list_of_names_in_layout() {
+        assert_eq!(PluginConfig::parse("[layout]\nrow_labels = [\"checklist\", \"ci\"]\n").row_labels, ["checklist", "ci"]);
+        let c = PluginConfig::parse("[layout]\nrow_labels = \"ci\"\n");
+        assert!(c.row_labels.is_empty() && c.problems[0].contains("row_labels"));
+        assert!(PluginConfig::parse("[layout]\nrow_labels = [\"ci\", 1]\n").row_labels.is_empty());
     }
 
     #[test]

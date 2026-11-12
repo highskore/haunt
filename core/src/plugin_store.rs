@@ -558,8 +558,12 @@ impl Store {
         let mut set = PluginSet {
             settings_problems: config.problems.clone(),
             config_tables: config.parsed.then(|| config.tables.clone()),
+            core: core.cloned(),
             ..PluginSet::default()
         };
+        if let Some(core) = core {
+            core.set_row_labels(config.row_labels.clone());
+        }
         let cache = CwasmCache::open(&self.cache_dir());
         // Plugins with the same grants share a linker.
         let mut linkers: Vec<(Capabilities, Linker<HostState>)> = Vec::new();
@@ -805,6 +809,7 @@ pub struct PluginSet {
     themes: Vec<ThemeContribution>,
     /// The (plugin, panel) that has the right pane.
     right_pane: Option<(String, String)>,
+    core: Option<CoreHandle>,
 }
 
 /// The most settings JSON one plugin gets.
@@ -936,6 +941,9 @@ impl PluginSet {
     /// its palette commands are cleared for it to register again. Returns whether `[plugins]` changed;
     /// a file that doesn't parse keeps the settings, and the next good one is applied in full.
     pub fn set_config(&mut self, config: &PluginConfig) -> bool {
+        if config.parsed && let Some(core) = &self.core {
+            core.set_row_labels(config.row_labels.clone());
+        }
         if !config.parsed {
             self.config_tables = None;
             self.settings_problems.clone_from(&config.problems);

@@ -148,9 +148,13 @@ pub(crate) struct State {
     next_sidebar_token: u64,
     /// The time every change and snapshot sees instead of the clock; set only to replay a trace.
     clock: Option<Instant>,
-    /// (plugin instance token, surface, decoration); a lower token loaded first and wins the row.
+    /// (plugin instance token, surface, decoration); a lower token loaded first.
     decorations: Vec<(u64, String, Decoration)>,
     next_rows_token: u64,
+    /// The plugin id behind each rows token.
+    rows_plugins: HashMap<u64, String>,
+    /// config.toml `[layout] row_labels`: plugins whose decoration wins a row, first first.
+    row_labels: Vec<String>,
 }
 
 impl State {
@@ -316,17 +320,28 @@ impl State {
         };
         if !self.decorations.is_empty() {
             for r in snap.groups.iter_mut().flat_map(|g| g.rows.iter_mut()) {
-                let mut d = self.decorations.iter().filter(|(_, s, _)| *s == r.surface_id).min_by_key(|(t, _, _)| *t).map(|(_, _, d)| d.clone());
+                let mut ds: Vec<_> = self.decorations.iter().filter(|(_, s, _)| *s == r.surface_id).collect();
+                ds.sort_by_key(|(t, _, _)| (self.label_rank(*t), *t));
+                let mut ds = ds.into_iter().map(|(_, _, d)| d.clone());
+                let mut d = ds.next();
                 // Haunt's own status owns a row that needs you: no plugin text can hide or imitate it.
                 if let Some(d) = d.as_mut().filter(|_| r.needs_you || r.pending.is_some()) {
                     d.label = None;
                     d.spark = None;
                     d.suffix = None;
+                } else {
+                    r.other_labels = ds.filter_map(|d| d.label.or(d.suffix)).collect();
                 }
                 r.decoration = d;
             }
         }
         snap
+    }
+
+    /// Where the plugin behind rows token `t` comes in `row_labels`; unlisted plugins after all of them.
+    fn label_rank(&self, t: u64) -> usize {
+        let id = self.rows_plugins.get(&t).map_or("", String::as_str);
+        self.row_labels.iter().position(|l| names_plugin(l, id)).unwrap_or(self.row_labels.len())
     }
 
     /// Before any plugin arrangement.
@@ -852,6 +867,13 @@ impl Core {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SidebarToken(u64);
 
+/// A `row_labels` entry names a plugin by its id, the id's last part (`checklist-meter`), or that
+/// part's first word (`checklist`).
+fn names_plugin(label: &str, id: &str) -> bool {
+    let last = id.rsplit('.').next().unwrap_or(id);
+    !label.is_empty() && (label == id || label == last || last.strip_prefix(label).is_some_and(|rest| rest.starts_with('-')))
+}
+
 /// One plugin instance's claim on row decorations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RowsToken(u64);
@@ -952,11 +974,23 @@ impl CoreHandle {
         requests_queued(&self.state);
     }
 
-    /// Marks a plugin instance loaded with the decorate capability; earlier instances win a row.
-    pub fn attach_rows(&self) -> RowsToken {
+    /// Marks an instance of `plugin_id` loaded with the decorate capability; among plugins `row_labels`
+    /// doesn't order, earlier instances win a row.
+    pub fn attach_rows(&self, plugin_id: &str) -> RowsToken {
         let mut st = lock(&self.state);
         st.next_rows_token += 1;
-        RowsToken(st.next_rows_token)
+        let t = st.next_rows_token;
+        st.rows_plugins.insert(t, plugin_id.to_owned());
+        RowsToken(t)
+    }
+
+    /// config.toml's `[layout] row_labels` changed.
+    pub fn set_row_labels(&self, labels: Vec<String>) {
+        update_state(&self.state, |st, _| {
+            let changed = st.row_labels != labels;
+            st.row_labels = labels;
+            changed && !st.decorations.is_empty()
+        });
     }
 
     /// Sets or, with None, removes this instance's decoration of an open tab's row.
@@ -991,6 +1025,7 @@ impl CoreHandle {
     /// The instance cleared, was disabled, reloaded or dropped: its decorations go with it.
     pub fn detach_rows(&self, token: RowsToken) {
         update_state(&self.state, |st, _| {
+            st.rows_plugins.remove(&token.0);
             let before = st.decorations.len();
             st.decorations.retain(|(t, _, _)| *t != token.0);
             st.decorations.len() != before

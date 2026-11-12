@@ -262,6 +262,7 @@ struct Row: Equatable, Hashable {
     var pending: PendingRequest?
     var color: TabColor?
     var decoration: Decoration? = nil
+    var otherLabels: [String] = []
 }
 
 enum Tone: Equatable, Hashable {

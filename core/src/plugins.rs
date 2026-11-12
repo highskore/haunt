@@ -259,7 +259,7 @@ impl HostState {
                 }
                 None => None,
             },
-            rows: core.as_ref().filter(|_| caps.decorate).map(|c| c.attach_rows()),
+            rows: core.as_ref().filter(|_| caps.decorate).map(|c| c.attach_rows(id)),
             timer: None,
             panels: Panels::default(),
             core,
@@ -1435,6 +1435,8 @@ mod tests {
         let core = crate::Core::new(&*tempdir("rows-needs"));
         let a = core.register_surface("/a").unwrap();
         let mut st = HostState::new("dev.x.p", &Capabilities { decorate: true, ..Default::default() }, None, None, Some(core.handle()));
+        let mut other = HostState::new("dev.x.q", &Capabilities { decorate: true, ..Default::default() }, None, None, Some(core.handle()));
+        other.decorate(a.surface_id.clone(), Some(deco("Allow"))).unwrap();
         let spark = wrows::Spark { points: vec![1, 2], tone: wrows::Tone::Warn };
         st.decorate(a.surface_id.clone(), Some(wrows::Decoration { suffix: Some("CI 9/9".into()), bar: Some(0.5), spark: Some(spark), ..deco("CI 9/9") })).unwrap();
         let row = |core: &crate::Core| core.snapshot().groups.iter().flat_map(|g| g.rows.clone()).find(|r| r.surface_id == a.surface_id).unwrap();
@@ -1443,6 +1445,7 @@ mod tests {
         core.with_state(|s| s.handle_line(&line, Instant::now()));
         let r = row(&core);
         assert!(r.needs_you && r.pending.is_some());
+        assert!(r.other_labels.is_empty(), "nor in its tooltip");
         let d = r.decoration.unwrap();
         assert_eq!((d.label, d.spark, d.suffix), (None, None, None), "Haunt's status owns the row");
         assert_eq!(d.bar_permille, Some(500), "the bar may stay");
@@ -1454,6 +1457,31 @@ mod tests {
         let still = decoration(wrows::Decoration { suffix: long(), ..deco("a") }).unwrap();
         let ticker = decoration(wrows::Decoration { suffix: long(), scroll: true, ..deco("a") }).unwrap();
         assert_eq!((still.suffix.unwrap().len(), ticker.suffix.unwrap().len()), (decorate::SUFFIX_MAX, decorate::TICKER_MAX));
+    }
+
+    #[test]
+    fn the_users_row_labels_pick_the_winner_and_the_rest_go_in_the_tooltip() {
+        use wrows::Host as _;
+        let core = crate::Core::new(&*tempdir("rows-order"));
+        let a = core.register_surface("/a").unwrap();
+        let caps = Capabilities { decorate: true, ..Default::default() };
+        let row = |core: &crate::Core| core.snapshot().groups.iter().flat_map(|g| g.rows.clone()).find(|r| r.surface_id == a.surface_id).unwrap();
+        let mut ci = HostState::new("dev.haunt.ci-lights", &caps, None, None, Some(core.handle()));
+        let mut sticky = HostState::new("dev.haunt.sticky-notes", &caps, None, None, Some(core.handle()));
+        let mut checklist = HostState::new("dev.haunt.checklist-meter", &caps, None, None, Some(core.handle()));
+        ci.decorate(a.surface_id.clone(), Some(deco("CI 7/9"))).unwrap();
+        sticky.decorate(a.surface_id.clone(), Some(wrows::Decoration { label: None, suffix: Some("note".into()), ..deco("") })).unwrap();
+        checklist.decorate(a.surface_id.clone(), Some(deco("spec 11/18"))).unwrap();
+        let r = row(&core);
+        assert_eq!((r.decoration.unwrap().label.as_deref(), r.other_labels), (Some("CI 7/9"), vec!["note".to_owned(), "spec 11/18".to_owned()]), "load order");
+
+        core.handle().set_row_labels(vec!["checklist".into(), "dev.haunt.ci-lights".into()]);
+        let r = row(&core);
+        assert_eq!(r.decoration.unwrap().label.as_deref(), Some("spec 11/18"));
+        assert_eq!(r.other_labels, ["CI 7/9", "note"], "listed ones first, then the rest in load order");
+        core.handle().set_row_labels(vec!["sticky-notes".into(), "check".into()]);
+        assert_eq!(row(&core).decoration.unwrap().suffix.as_deref(), Some("note"), "a full short name; `check` names nothing");
+        assert_eq!(row(&core).other_labels, ["CI 7/9", "spec 11/18"]);
     }
 
     #[test]

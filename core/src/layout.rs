@@ -58,9 +58,12 @@ pub struct Row {
     pub pending: Option<PendingRequest>,
     /// A colour the user picked for the tab, drawn as `SidebarSnapshot.color_style` says.
     pub color: Option<TabColor>,
-    /// A plugin's label, suffix, bar or sparkline; the first loaded plugin's wins.
+    /// A plugin's label, suffix, bar or sparkline; the user's `row_labels` order picks one, then load order.
     #[cfg_attr(feature = "ffi", uniffi(default = None))]
     pub decoration: Option<crate::decorate::Decoration>,
+    /// The labels (or suffixes) of other plugins' decorations that lost the row, for its tooltip.
+    #[cfg_attr(feature = "ffi", uniffi(default = []))]
+    pub other_labels: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -170,6 +173,7 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
             pending: None,
             color: None,
             decoration: None,
+            other_labels: Vec::new(),
         };
     }
 
@@ -220,6 +224,7 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
             .map(|p| PendingRequest { key: p.key(), tool: p.tool.clone(), preview: p.preview(), suspicious: session.terminal_only(p) }),
         color: None,
         decoration: None,
+        other_labels: Vec::new(),
     }
 }
 

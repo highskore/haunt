@@ -218,6 +218,7 @@ mod tests {
             pending: None,
             color: None,
             decoration: None,
+            other_labels: Vec::new(),
         }
     }
 

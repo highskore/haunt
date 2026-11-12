@@ -219,7 +219,8 @@ interface sidebar {
 }
 
 // Capability `decorate`. One decoration per row and plugin, set and replaced at any time; the row
-// shows the first installed plugin's. All text is plain: hidden characters are removed, labels cut
+// shows one, in the user's `[layout] row_labels` order, then install order; the others' labels go in
+// its tooltip. All text is plain: hidden characters are removed, labels cut
 // to 24 characters and suffixes to 64 (160 when `scroll`). On a row that needs you or has a request
 // up, haunt's status owns the row: the label, spark and suffix are dropped there; the bar stays.
 interface rows {
