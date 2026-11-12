@@ -487,8 +487,8 @@ Theme.current = Theme()
 
 // Ornament hooks are off in black and white, so it draws exactly as before them.
 let bwfx = Effects(), bwapp = AppTokens()
-check(!bwfx.windowSquare && !bwfx.windowBorder && !bwfx.titlebarDouble && bwfx.lightsShape == "circle" && bwfx.labelRule == "none"
-      && bwfx.rowSelect == "fill" && !bwfx.iconRing && bwfx.iconShell == "tile" && bwfx.progressStyle == "bar" && !bwfx.needsGlow
+check(!bwfx.windowSquare && !bwfx.windowBorder && bwfx.lightsShape == "circle" && bwfx.labelRule == "none"
+      && bwfx.rowSelect == "fill" && bwfx.progressStyle == "bar" && !bwfx.needsGlow
       && bwfx.ornament == "none" && bwfx.paletteInset == 22 && !bwfx.paletteHeader && !bwfx.paletteInputRules,
       "every ornament effect is off by default")
 check(bwfx.windowFrame == "none" && bwfx.paneFrame == "none" && bwfx.titlebarStyle == "plain" && !bwfx.titlebarIcon && !bwfx.titlebarMenu

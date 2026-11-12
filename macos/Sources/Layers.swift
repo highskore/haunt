@@ -108,9 +108,9 @@ enum Layers {
         return t
     }()
 
-    /// A light may be ringed past its circle. Rows get no bleed: each is clipped to its own box, so it never
-    /// reaches the text of the row or label next to it.
-    static let bleed: [String: CGFloat] = ["lights": 4]
+    /// A light may be ringed past its circle, an icon ringed and a progress knob glow past theirs. Rows get no
+    /// bleed: each is clipped to its own box, so it never reaches the text of the row or label next to it.
+    static let bleed: [String: CGFloat] = ["lights": 4, "icon": 4, "bar.fill": 6]
     /// The slots drawn under each slot's text, bottom first, in the order they are drawn: their layers are in the
     /// pixels the slot's text is checked against.
     static let below: [String: [String]] = [

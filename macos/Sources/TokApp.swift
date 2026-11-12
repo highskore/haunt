@@ -53,11 +53,11 @@ struct AppTokens: Equatable {
     var titleMetaFont: CGFloat = 0
     var titleMetaTracking: CGFloat = 0
     var paletteHeaderFont: CGFloat = 18
-    /// `[strings] titlebar.right`'s type size and letter spacing in em, and `[effects] titlebar.double`'s rule.
+    /// `[strings] titlebar.right`'s type size and letter spacing in em, and a second title bar rule's colour for layers.
     var titlebarRightFont: CGFloat = 11
     var titlebarRightTracking: CGFloat = 0
     var titlebarRule2 = NSColor(white: 1, alpha: 0.06)
-    /// `[effects] progress.style = "dotted"`'s knob, and the gap between the sigil and the footer text.
+    /// A progress knob's colour, for layers.
     var barKnob = NSColor.white
     /// Bevels (`window.frame`, `pane.frame`, `label.rule = "groupbox"`, `palette.frame = "dialog"`): the highlight,
     /// the light, the shade and the dark edge; and how far a bevelled window's content stands in.
@@ -104,7 +104,13 @@ struct AppTokens: Equatable {
     var rowSelectInk = NSColor.white
     /// `row.select = "name"`: the fill behind the selected name.
     var rowSelectFill = NSColor(srgbRed: 0, green: 0, blue: 0.5, alpha: 1)
-    var sidebarFootGap: CGFloat = 6
+    /// Points kept clear above the sidebar footer's text for its layers, the text's tracking in em, and its
+    /// alignment, "left" or "center".
+    var sidebarFootArt: CGFloat = 0
+    var sidebarFootTracking: CGFloat = 0
+    var sidebarFootAlign = "left"
+    /// How far a group label's text stands in past `label.pad`, to leave room for its layers.
+    var labelIndent: CGFloat = 0
     /// Ornament lines and outlines, and the fainter rules and rings.
     var ornament = NSColor(white: 1, alpha: 0.6)
     var ornamentDim = NSColor(white: 1, alpha: 0.3)
@@ -183,7 +189,10 @@ struct AppTokens: Equatable {
         "app.titlebar.bg": .color(\.app.titlebarBg),
         "app.row.select.ink": .color(\.app.rowSelectInk),
         "app.row.select.fill": .color(\.app.rowSelectFill),
-        "app.sidebar.foot.gap": .number(\.app.sidebarFootGap),
+        "app.sidebar.foot.art": .number(\.app.sidebarFootArt),
+        "app.sidebar.foot.tracking": .number(\.app.sidebarFootTracking),
+        "app.sidebar.foot.align": .string(\.app.sidebarFootAlign),
+        "app.label.indent": .number(\.app.labelIndent),
         "app.ornament": .color(\.app.ornament),
         "app.ornament.dim": .color(\.app.ornamentDim),
         "app.ornament.alpha": .number(\.app.ornamentAlpha),
@@ -209,7 +218,6 @@ extension Tok {
         static var titleMeta: NSColor { Theme.current.app.titleMeta }
         static var titleFont: CGFloat { Theme.current.app.titleFont }
         static var ornament: NSColor { Theme.current.app.ornament }
-        static var sidebarFootGap: CGFloat { Theme.current.app.sidebarFootGap }
         static var ornamentDim: NSColor { Theme.current.app.ornamentDim }
         static var appearance: NSAppearance? {
             NSAppearance(named: Theme.current.app.appearance == "light" ? .aqua : .darkAqua)

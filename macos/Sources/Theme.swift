@@ -18,7 +18,9 @@ extension Theme {
     /// Sizes outside this are refused: a typo shouldn't push the window off the screen.
     static let sizeRange: ClosedRange<CGFloat> = 0...400
     /// Numbers with a range of their own instead of `sizeRange`.
-    static let numberRanges: [String: ClosedRange<CGFloat>] = ["app.ornament.alpha": 0...0.12, "app.palette.offset.x": -40...40]
+    static let numberRanges: [String: ClosedRange<CGFloat>] = [
+        "app.ornament.alpha": 0...0.12, "app.palette.offset.x": -40...40, "app.sidebar.foot.tracking": 0...1,
+    ]
     /// Kept in every theme: Claude's mark is always its own orange.
     static let locked: Set<String> = ["color.claude"]
 

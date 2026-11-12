@@ -11,6 +11,8 @@ pub const MAX_SLOT_SHADOWS: usize = 4;
 pub const MAX_SLOT_GRADIENTS: usize = 4;
 pub const MAX_PATH_CMDS: usize = 256;
 pub const MAX_COORD: f64 = 400.0;
+/// A frame's insets, lengths and offsets: a window-sized mark (a watermark) may hang past its slot.
+pub const MAX_FRAME: f64 = 1000.0;
 pub const MAX_IMAGES: usize = 8;
 pub const MAX_PNG_BYTES: usize = 256 << 10;
 pub const MAX_PNG_PIXELS: u32 = 512;
@@ -324,8 +326,8 @@ impl Cx<'_> {
                     _ => self.bad(at, "opacity: not a number from 0 to 1"),
                 },
                 "index" => match v.as_integer() {
-                    Some(n @ 0..=2) if l.slot == "lights" => l.index = Some(n as u8),
-                    _ => self.bad(at, "index: only for lights, 0 to 2"),
+                    Some(n @ 0..=2) if l.slot == "lights" || l.slot == "icon" => l.index = Some(n as u8),
+                    _ => self.bad(at, "index: only for lights and icon, 0 to 2"),
                 },
                 _ => self.bad(at, format!("unknown key {:?}", clip(k))),
             }
@@ -532,14 +534,14 @@ impl Cx<'_> {
 
     /// One axis: `left`/`right` insets (the default, both 0), or `x` anchor + `w` length (+ `dx`).
     fn span(&mut self, t: &toml::Table, at: &str, [near, far, anchor, len, off]: [&str; 5], anchors: &[&str]) -> Option<LayerSpan> {
-        let coord = |k: &str| t.get(k).map(|v| num_in(v, -MAX_COORD, MAX_COORD));
+        let coord = |k: &str| t.get(k).map(|v| num_in(v, -MAX_FRAME, MAX_FRAME));
         let has_len = t.contains_key(len) || t.contains_key(anchor) || t.contains_key(off);
         if has_len && (t.contains_key(near) || t.contains_key(far)) {
             return self.skip(at, format!("{near}/{far} and {anchor}/{len} both given; skipped"));
         }
         if !has_len {
             let (Some(a), Some(b)) = (coord(near).unwrap_or(Some(0.0)), coord(far).unwrap_or(Some(0.0))) else {
-                return self.skip(at, format!("{near}/{far}: not a number from -400 to 400; skipped"));
+                return self.skip(at, format!("{near}/{far}: not a number from -1000 to 1000; skipped"));
             };
             return Some(LayerSpan { mode: "inset".into(), a, b, from_text: false });
         }
@@ -552,11 +554,11 @@ impl Cx<'_> {
                 }
             },
         };
-        let Some(Some(b)) = t.get(len).map(|v| num_in(v, 0.0, MAX_COORD)) else {
-            return self.skip(at, format!("{len}: needed with {anchor}, a number from 0 to 400; skipped"));
+        let Some(Some(b)) = t.get(len).map(|v| num_in(v, 0.0, MAX_FRAME)) else {
+            return self.skip(at, format!("{len}: needed with {anchor}, a number from 0 to 1000; skipped"));
         };
         let Some(a) = coord(off).unwrap_or(Some(0.0)) else {
-            return self.skip(at, format!("{off}: not a number from -400 to 400; skipped"));
+            return self.skip(at, format!("{off}: not a number from -1000 to 1000; skipped"));
         };
         Some(LayerSpan { mode, a, b, from_text: false })
     }
@@ -1022,7 +1024,7 @@ glow = true
         assert!(one(&shadow(MAX_BLUR)).problems.is_empty());
         assert!(one(&shadow(MAX_BLUR + 0.5)).layers.is_empty());
         let big = |x: f64| format!("[[layer]]\nslot = \"sidebar\"\n  [[layer.draw]]\n  kind = \"rect\"\n  fill = \"#000000\"\n  left = {x}\n");
-        assert!(one(&big(MAX_COORD)).problems.is_empty() && one(&big(MAX_COORD + 1.0)).layers.is_empty());
+        assert!(one(&big(MAX_FRAME)).problems.is_empty() && one(&big(MAX_FRAME + 1.0)).layers.is_empty());
     }
 
     #[test]
@@ -1117,6 +1119,8 @@ glow = true
         assert!(s.layers.is_empty());
         let s = one("[[layer]]\nslot = \"sidebar\"\nwhen = [\"angry\"]\nindex = 1\n  [[layer.draw]]\n  kind = \"rect\"\n  fill = \"#000000\"\n");
         assert_eq!((s.layers[0].when.len(), s.layers[0].index, s.problems.len()), (0, None, 2));
+        let s = one("[[layer]]\nslot = \"icon\"\nindex = 2\n  [[layer.draw]]\n  kind = \"rect\"\n  fill = \"#000000\"\n");
+        assert_eq!((s.layers[0].index, s.problems.len()), (Some(2), 0));
     }
 
     #[test]

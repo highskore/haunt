@@ -59,24 +59,19 @@ struct Effects: Equatable {
     /// Square window corners instead of the system's, and a 1 pt `color.window.border` inside the edge.
     var windowSquare = false
     var windowBorder = false
-    /// A second, darker rule just above the title bar's (`app.ornament.dim`).
-    var titlebarDouble = false
-    /// The traffic lights as "circle"s or outlined "diamond"s.
+    /// The traffic lights as "circle"s, window "boxes" or "squares".
     var lightsShape = "circle"
-    /// Group labels with a short rule, a diamond and a rule running out to the edge.
+    /// Group labels plain, in a "groupbox" or on a "block".
     var labelRule = "none"
-    /// The selected row as a "fill", or as two corner "brackets" over a glow from its left edge.
+    /// The selected row as a "fill", by its "name", with a "cursor", or "none" (left to the theme's layers).
     var rowSelect = "fill"
-    /// Rings around the agent icons, and the shell glyph's tile as a "tile" or a turned "diamond".
-    var iconRing = false
-    var iconShell = "tile"
-    /// The progress bar as a solid "bar", or a "dotted" track with a gradient fill and a diamond knob.
+    /// The progress bar as a solid "bar", "segments", or "none" (left to the theme's layers).
     var progressStyle = "bar"
     /// A glow behind the needs-you status, in its own colour.
     var needsGlow = false
     /// The needs-you status's weight when it isn't a pill.
     var needsWeight = "regular"
-    /// Artwork drawn in code: "sigil" puts a star in the pane and the sidebar's foot and marks the window's corners.
+    /// Artwork drawn in code: "lcd" lays a pixel grid over all but the terminal.
     var ornament = "none"
     /// How far the bottom-right palette stands in from the window's edges.
     var paletteInset: CGFloat = 22
@@ -135,16 +130,13 @@ struct Effects: Equatable {
         "palette.modes": .choice(\.paletteModes, ["styled", "plain"]),
         "window.square": .bool(\.windowSquare),
         "window.border": .bool(\.windowBorder),
-        "titlebar.double": .bool(\.titlebarDouble),
-        "lights.shape": .choice(\.lightsShape, ["circle", "diamond", "boxes", "squares"]),
-        "label.rule": .choice(\.labelRule, ["none", "diamond", "groupbox", "block"]),
-        "row.select": .choice(\.rowSelect, ["fill", "brackets", "name", "cursor"]),
-        "icon.ring": .bool(\.iconRing),
-        "icon.shell": .choice(\.iconShell, ["tile", "diamond"]),
-        "progress.style": .choice(\.progressStyle, ["bar", "dotted", "segments"]),
+        "lights.shape": .choice(\.lightsShape, ["circle", "boxes", "squares"]),
+        "label.rule": .choice(\.labelRule, ["none", "groupbox", "block"]),
+        "row.select": .choice(\.rowSelect, ["fill", "name", "cursor", "none"]),
+        "progress.style": .choice(\.progressStyle, ["bar", "segments", "none"]),
         "needs.glow": .bool(\.needsGlow),
         "needs.weight": .choice(\.needsWeight, ["regular", "bold"]),
-        "ornament": .choice(\.ornament, ["none", "sigil", "lcd"]),
+        "ornament": .choice(\.ornament, ["none", "lcd"]),
         "palette.inset": .number(\.paletteInset, 0...80),
         "palette.header": .bool(\.paletteHeader),
         "palette.input.rules": .bool(\.paletteInputRules),

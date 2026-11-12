@@ -44,25 +44,6 @@ final class WindowLayersView: NSView {
     }
 }
 
-/// `ornament`'s watermark and corner marks, behind the content: shown only when the terminal's background lets them through.
-final class WatermarkView: NSView {
-    override var isFlipped: Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    override func draw(_ dirtyRect: NSRect) {
-        guard Theme.current.effects.ornament == "sigil", let ctx = NSGraphicsContext.current?.cgContext else { return }
-        ctx.clip(to: bounds)
-        let app = Theme.current.app
-        NSColor.white.withAlphaComponent(app.ornamentAlpha).setStroke()
-        Draw.sigil(at: NSPoint(x: bounds.maxX + 60 - 520, y: bounds.minY - 40), size: 520, stroke: 1.2)
-        let corners = [NSPoint(x: 6, y: 6), NSPoint(x: bounds.width - 52, y: 6),
-                       NSPoint(x: bounds.width - 52, y: bounds.height - 52), NSPoint(x: 6, y: bounds.height - 52)]
-        for (i, o) in corners.enumerated() {
-            Draw.cornerOrnament(at: o, quarterTurns: i, bright: app.ornament, dim: app.ornamentDim, in: ctx)
-        }
-    }
-}
-
 /// Window artwork over the window's own views but under its overlays, drawn from `[effects]`: the border
 /// and bevels.
 final class OrnamentView: NSView {
@@ -112,7 +93,6 @@ private final class RootView: NSView {
     let material = NSVisualEffectView()
     let ring = RingView()
     let ornaments = OrnamentView()
-    let watermark = WatermarkView()
     let layers = WindowLayersView()
     /// A fixture's stand-in for the desktop behind glass (HAUNT_BACKDROP), so captures don't depend on the wallpaper.
     var backdrop: NSImageView? {
@@ -175,7 +155,7 @@ private final class RootView: NSView {
         material.material = .hudWindow
         material.blendingMode = .behindWindow
         material.state = .active
-        for v in [material, layers, watermark, titleBar, sidebar, topRow, pane, ornaments, scrim, agents, toast, ring] { addSubview(v) }
+        for v in [material, layers, titleBar, sidebar, topRow, pane, ornaments, scrim, agents, toast, ring] { addSubview(v) }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -195,8 +175,6 @@ private final class RootView: NSView {
         layer?.masksToBounds = fx.windowRadius > 0 || fx.windowSquare
         ornaments.isHidden = fx.ornament != "lcd" && !fx.windowBorder && fx.windowFrame == "none" && fx.paneFrame == "none"
         ornaments.needsDisplay = true
-        watermark.isHidden = fx.ornament == "none" || !Theme.current.app.terminalSeeThrough
-        watermark.needsDisplay = true
     }
 
     override func layout() {
@@ -233,7 +211,6 @@ private final class RootView: NSView {
         pane.frame = sunk ? paneBox.insetBy(dx: 2, dy: 2) : paneBox
         rightPane?.frame = NSRect(x: inner.maxX - rightW, y: bodyTop, width: rightW, height: inner.maxY - bodyTop)
         ornaments.pane = paneBox
-        watermark.frame = pane.frame
         layers.pane = pane.isHidden ? .zero : pane.frame
         review?.frame = reviewCoversSidebar ? NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top) : pane.frame
         scrim.frame = NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top)

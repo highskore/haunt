@@ -129,19 +129,6 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
                 sq.stroke()
                 continue
             }
-            if Theme.current.effects.lightsShape == "diamond" && !lightsHover {
-                // An outlined diamond; the close light's carries an ×.
-                Tok.App.ornament.setStroke()
-                Draw.diamond(center: NSPoint(x: r.midX, y: r.midY), size: r.width * 0.61, stroke: 1)
-                if i == 0 {
-                    let k = r.width / 6, p = NSBezierPath()
-                    p.move(to: NSPoint(x: r.midX - k, y: r.midY - k)); p.line(to: NSPoint(x: r.midX + k, y: r.midY + k))
-                    p.move(to: NSPoint(x: r.midX + k, y: r.midY - k)); p.line(to: NSPoint(x: r.midX - k, y: r.midY + k))
-                    p.lineWidth = 1
-                    p.stroke()
-                }
-                continue
-            }
             (lightsHover || Theme.current.effects.titlebarLights == "color" ? Tok.Lights.fill[i] : Tok.Color.lights).setFill()
             NSBezierPath(ovalIn: r).fill()
             guard lightsHover else { continue }
@@ -307,9 +294,6 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
             }
         } else if Theme.current.effects.titlebarRule {
             Draw.fill(NSRect(x: 0, y: bounds.height - Tok.App.hairline, width: bounds.width, height: Tok.App.hairline), Tok.Color.hairline)
-            if Theme.current.effects.titlebarDouble {
-                Draw.fill(NSRect(x: 0, y: bounds.height - 3 * Tok.App.hairline, width: bounds.width, height: Tok.App.hairline), Theme.current.app.titlebarRule2)
-            }
         }
         Layers.draw("titlebar", bounds, text: titleRuns(), state: Layers.state(self), in: ctx)
 

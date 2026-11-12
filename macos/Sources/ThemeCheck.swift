@@ -55,7 +55,7 @@ enum ThemeCheck {
             Layers.draw("sidebar.footer", CGRect(x: 0, y: 640, width: cw, height: 60), textRun: CGRect(x: 14, y: 672, width: 80, height: 14),
                         text: runs(CGRect(x: 14, y: 672, width: 80, height: 14), Tok.App.sidebarFootFg), state: state, in: ctx)
             let lp = Tok.Size.labelPad, lineH = Tok.Size.labelFont * Tok.Font.baseLine
-            let label = CGRect(x: lp[1], y: top + 4 + lp[0], width: 70, height: lineH)
+            let label = CGRect(x: lp[1] + Theme.current.app.labelIndent, y: top + 4 + lp[0], width: 70, height: lineH)
             Layers.draw("label.group", CGRect(x: 0, y: top + 4, width: cw, height: lp[0] + lineH + lp[2]),
                         textRun: label, text: runs(label, Tok.Color.textLabel), state: state, in: ctx)
             let pad = Tok.Size.rowPad, inset = Theme.current.effects.rowInset

@@ -82,7 +82,7 @@ Some looks need more than colours and sizes. The `[effects]` table switches on e
 | `window.ring` | bool | an inner ring and top highlight (`app.window.ring`, `app.window.highlight`) |
 | `titlebar.rule` | bool, default true | the hairline under the title bar |
 | `titlebar.lights` | `"grey"`, `"color"` | the traffic lights at rest |
-| `sidebar.footer` | bool | the live agent count under the sidebar |
+| `sidebar.footer` | bool | the live agent count (or `[strings] sidebar.foot`) under the sidebar, `app.sidebar.foot.align` `"left"` or `"center"`, tracked `app.sidebar.foot.tracking` em (0–1), with `app.sidebar.foot.art` points kept clear above it for the theme's `sidebar.footer` layers (left out when the rows need the room) |
 | `label.case`, `label.weight` | `"upper"`, `"sentence"`; `"regular"`, `"medium"`, `"semibold"` | group labels |
 | `row.inset`, `row.radius` | 0–40 | rows as rounded boxes inset from the sidebar's edges |
 | `needs.pill` | bool | a needs-you row's status in a pill (`app.pill.*`) |
@@ -99,15 +99,13 @@ Some looks need more than colours and sizes. The `[effects]` table switches on e
 | `palette.modes` | `"styled"`, `"plain"` | a plugin mode's rows (the decision log) styled like the rest, or in the black-and-white layout and mono font with an inverted selection, inside the themed panel |
 | `palette.input.icon`, `palette.input.weight` | bool; `"regular"`, `"light"` | a search glyph before the query, and the query's weight |
 | `window.square`, `window.border` | bool | square corners instead of the system's, and a 1 pt `color.window.border` inside the edge |
-| `titlebar.double` | bool | a second rule (`app.titlebar.rule2`) just above the title bar's |
-| `lights.shape` | `"circle"`, `"diamond"`, `"boxes"`, `"squares"` | the traffic lights at rest, diamonds outlined in `app.ornament`, bevelled minimise, maximise and close boxes on the right, or flat squares |
-| `label.rule` | `"none"`, `"diamond"`, `"groupbox"`, `"block"` | a group label between a short rule and diamond and a rule fading to the edge, each group in an etched box with its label on the top edge (`app.group.pad`, `app.group.gap`), or the label in `app.label.ink` on a block of `app.label.fill` (`app.label.block.pad`) |
-| `row.select` | `"fill"`, `"brackets"`, `"name"`, `"cursor"` | the selected row filled, two corner brackets over a glow from its left edge, only its name highlighted (`app.row.select.fill`, `app.row.select.ink`) with a dotted ring, or the whole row in those colours behind a triangle cursor |
-| `icon.ring`, `icon.shell` | bool; `"tile"`, `"diamond"` | rings around the agent icons, and the shell glyph on a tile or in a diamond |
-| `progress.style` | `"bar"`, `"dotted"`, `"segments"` | the progress bar solid, a dotted track with a fading fill and a diamond knob (`app.bar.knob`), or blocks (`app.bar.segment`: width, gap) in a sunken track, or in `app.bar.frame` when it has any opacity |
+| `lights.shape` | `"circle"`, `"boxes"`, `"squares"` | the traffic lights at rest, bevelled minimise, maximise and close boxes on the right, or flat squares |
+| `label.rule` | `"none"`, `"groupbox"`, `"block"` | a plain group label (its text `app.label.indent` further in, to leave room for `label.group` layers), each group in an etched box with its label on the top edge (`app.group.pad`, `app.group.gap`), or the label in `app.label.ink` on a block of `app.label.fill` (`app.label.block.pad`) |
+| `row.select` | `"fill"`, `"name"`, `"cursor"`, `"none"` | the selected row filled, only its name highlighted (`app.row.select.fill`, `app.row.select.ink`) with a dotted ring, the whole row in those colours behind a triangle cursor, or nothing but the theme's `row.selected` layers |
+| `progress.style` | `"bar"`, `"segments"`, `"none"` | the progress bar solid, blocks (`app.bar.segment`: width, gap) in a sunken track, or in `app.bar.frame` when it has any opacity, or nothing but the theme's `bar.track` and `bar.fill` layers |
 | `needs.glow` | bool | a glow behind the needs-you status |
 | `needs.weight` | `"regular"`, `"bold"` | the needs-you status's weight, when it isn't a pill |
-| `ornament` | `"none"`, `"sigil"`, `"lcd"` | artwork drawn in code: a sigil at the sidebar's foot (left out when the rows need its room), and, behind the window's content, a sigil at `app.ornament.alpha` (0–0.12) and marks in the window's corners, shown only when the window and Ghostty's background are both see-through; or an LCD grid in `app.ornament` at that alpha over the title bar and sidebar, never over the terminal |
+| `ornament` | `"none"`, `"lcd"` | an LCD grid in `app.ornament` at `app.ornament.alpha` (0–0.12) over the title bar and sidebar, never over the terminal |
 | `palette.inset` | 0–80, default 22 | how far the bottom-right palette stands in from the window's edges |
 | `palette.header`, `palette.input.rules` | bool | `[strings] palette.header` above the input, and rules above and below the input |
 | `ui.weight` | `"regular"`, `"light"` | the theme's UI face's regular text drawn light |
@@ -123,7 +121,7 @@ Every effect is off by default, so black and white draws as it did before them.
 
 **Rings.** `[app] palette.rings` lists rings drawn around the palette in place of its border, outermost first, each `"#rrggbb width"` with a width up to 8 pt.
 
-**`[strings]`.** A theme may word seven places: `titlebar.right`, `palette.header`, `palette.foot` (replacing the default hints; a mode's hints stay Haunt's), `palette.input.glyph`, `palette.message` (with `palette.frame = "dialog"`), `sidebar.foot` (with `ornament`; it must show `{agents}` or `{agents.roman}`) and `row.sub.prefix` (before a subagent line). Each is one plain line of up to 64 code points, with no control, bidi or invisible characters and at most two combining marks on a character; none may pass for one of Haunt's status words (Needs you, Running, Idle, Waiting for you, Approve, Done, Failed, and Allow or Deny as a word), checked as plugins' row labels are, lookalikes, spacing and accents included, nor read as a permission request or its answer (no word may start with Allow, Deny, Deni, Approv, Permi or Request). Anything else is refused and logged. `{day.roman}`, `{month.roman}` and `{year.roman}` come from the clock, `{agents}` and `{agents.roman}` from the sidebar; the filled-in line is checked again, and Haunt draws its own words in its place if it fails or doesn't fit whole; a theme's words are never cut short. `row.sub.prefix` is checked together with the subagent label beside it, as cut to fit.
+**`[strings]`.** A theme may word seven places: `titlebar.right`, `palette.header`, `palette.foot` (replacing the default hints; a mode's hints stay Haunt's), `palette.input.glyph`, `palette.message` (with `palette.frame = "dialog"`), `sidebar.foot` (with `sidebar.footer`; it must show `{agents}` or `{agents.roman}`) and `row.sub.prefix` (before a subagent line). Each is one plain line of up to 64 code points, with no control, bidi or invisible characters and at most two combining marks on a character; none may pass for one of Haunt's status words (Needs you, Running, Idle, Waiting for you, Approve, Done, Failed, and Allow or Deny as a word), checked as plugins' row labels are, lookalikes, spacing and accents included, nor read as a permission request or its answer (no word may start with Allow, Deny, Deni, Approv, Permi or Request). Anything else is refused and logged. `{day.roman}`, `{month.roman}` and `{year.roman}` come from the clock, `{agents}` and `{agents.roman}` from the sidebar; the filled-in line is checked again, and Haunt draws its own words in its place if it fails or doesn't fit whole; a theme's words are never cut short. `row.sub.prefix` is checked together with the subagent label beside it, as cut to fit.
 
 ## Layers
 
@@ -167,13 +165,14 @@ opacity = 1.0              # 0–1
 | `label.group` | a group label's line; its text is a text run |
 | `row`, `row.selected`, `row.hover` | a sidebar row's box, clipped to it |
 | `palette.row.selected`, `palette.row.hover` | a palette entry, with the same 6 pt |
-| `icon`, `bar.track`, `bar.fill` | a row's icon, its progress track and the filled part |
+| `icon` | a row's icon, spilling 4 pt (rings); `index` 0 is Claude's, 1 Codex's, 2 a shell's |
+| `bar.track`, `bar.fill` | a row's progress track and the filled part, which may spill 6 pt (a knob's glow) |
 | `status.needs` | a needs-you status; its text is a text run |
 | `palette.caption`, `button`, `button.default` | reserved for the dialog palette |
 
 **States** (`when`): `focused`, `inactive`, `selected`, `hover`, `pressed`.
 
-**The frame.** On each axis, either insets (`left`/`right`, `top`/`bottom`, from −400 to 400; negative reaches out, still clipped), or an anchor (`x`: `left`, `center`, `right`, `text.left`, `text.right`; `y`: `top`, `center`, `bottom`) with a length (`w`, `h`) and an offset (`dx`, `dy`). `from_text = true` starts the left inset at the end of the slot's text run, for a rule after a label. Text anchors are only for `label.group` and `status.needs`.
+**The frame.** On each axis, either insets (`left`/`right`, `top`/`bottom`, from −1000 to 1000; negative reaches out, still clipped), or an anchor (`x`: `left`, `center`, `right`, `text.left`, `text.right`; `y`: `top`, `center`, `bottom`) with a length (`w`, `h`, up to 1000) and an offset (`dx`, `dy`). `from_text = true` starts the left inset at the end of the slot's text run, for a rule after a label. Text anchors are only for `label.group` and `status.needs`.
 
 | `kind` | Keys | Draws |
 | --- | --- | --- |
@@ -183,7 +182,7 @@ opacity = 1.0              # 0–1
 | `bevel` | `rings` | one or two 1 pt rings, outermost first, each `[top, left, bottom, right]` colours |
 | `pattern` | `cell`, `dots`; or `tile` | a cell up to 16×16 pt with up to 64 1-pt `"#colour x y"` dots, or a PNG tile, repeated over the frame |
 | `image` | `file`, `repeat` | a PNG from the theme's folder; `repeat` `"corners"` or `"tile"` |
-| `path` | `d`, `view`, `fill`, `stroke`, `width`, `dash`, `repeat` | a vector shape, up to 256 commands; `repeat = "corners"` |
+| `path` | `d`, `view`, `fill`, `stroke`, `width`, `dash`, `repeat` | a vector shape, up to 256 commands with points from −400 to 400 in `view`'s units; `repeat = "corners"` |
 | `shadow` | `color`, `blur`, `offset`, `radius` | a soft shadow around the frame's shape, not the shape itself: `blur` up to 12, `offset` up to ±6 |
 
 `width` is 0.25–8 pt, `dash` 1–4 lengths from 0.5 to 40, `radius` 0–40.
