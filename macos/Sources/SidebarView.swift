@@ -590,6 +590,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         if let d = row.decoration, d.labelTone == .warn || d.suffixTone == .warn {
             runs += [first, rest].map { Layers.Run(rect: $0, ink: Tok.App.pluginWarn) }
         }
+        if let d = row.decoration, d.suffixTone == .text { runs.append(Layers.Run(rect: rest, ink: ink ?? Tok.Color.textPrimary)) }
         return runs
     }
 

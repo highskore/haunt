@@ -63,18 +63,26 @@ let ticker = RowDecor(Decoration(label: nil, labelTone: .dim, suffix: "▲ 3 tes
 let metaFont = Draw.ui(Tok.Size.rowMeta)
 let prompt = "main · TODO.md has three boxes; tick them off one by one and run the tests"
 let fit = { (room: CGFloat) in ticker.meta(prompt, font: metaFont, room: room) }
-let suffixW = Draw.width(CTLineCreateWithAttributedString(ticker.meta("", font: metaFont)))
-for room in [suffixW, suffixW + 30, 160, 240] {
+let markW = Draw.width(CTLineCreateWithAttributedString(ticker.meta("…", font: metaFont)))
+for room in [markW, markW + 30, 160, 240] {
     let s = fit(room)
     check(s.string.hasSuffix("▲ 3 tests"), "the suffix stays whole in \(room) pt: \(s.string)")
     check(Draw.width(CTLineCreateWithAttributedString(s)) <= room, "and the line fits \(room) pt")
 }
+check(fit(markW).string == "… · ▲ 3 tests", "with none of the prompt left, its \"…\" stays: \(fit(markW).string)")
 check(fit(160).string.hasPrefix("main · TODO") && fit(160).string.contains("… · ▲"), "the prompt is cut, then the suffix")
 check(fit(2000).string == prompt + " · ▲ 3 tests", "room for all: nothing cut")
-let narrow = fit(suffixW - 1)
-check(narrow.string.hasPrefix("…") && narrow.string.hasSuffix("tests") && !narrow.string.contains("main"),
-      "too narrow for the suffix: the prompt goes and the suffix keeps its end: \(narrow.string)")
-check(Draw.width(CTLineCreateWithAttributedString(narrow)) <= suffixW - 1, "and fits")
+let narrow = fit(markW - 1)
+check(narrow.string.hasPrefix("…") && narrow.string.hasSuffix("tests") && !narrow.string.contains("main") && !narrow.string.contains(" · "),
+      "too narrow for the marked suffix: the prompt goes and the suffix keeps its end: \(narrow.string)")
+check(Draw.width(CTLineCreateWithAttributedString(narrow)) <= markW - 1, "and fits")
+let dotsW = Draw.width(Draw.line("…", metaFont, .black))
+check(fit(dotsW - 1).string == prompt + " · ▲ 3 tests", "narrower than \"…\": left whole for the caller's end-cut")
+let longTicker = RowDecor(Decoration(label: nil, labelTone: .dim, suffix: "Read session.ts → Edit session.ts → Bash npm test → Read refresh.ts →",
+                                     suffixTone: .dim, scroll: false, barPermille: nil, spark: nil), statusWins: false)!
+let bare = longTicker.meta("", font: metaFont, room: 150)
+check(bare.string.hasPrefix("…") && bare.string.hasSuffix("Read refresh.ts →") && Draw.width(CTLineCreateWithAttributedString(bare)) <= 150,
+      "no meta and a long ticker: its end stays: \(bare.string)")
 
 // A theme's words are drawn whole and checked as drawn, or Haunt's own are.
 Theme.statusCheck = { $0 == "Done" }

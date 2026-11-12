@@ -57,8 +57,8 @@ struct RowDecor {
         guard let suffix, Self.tooWide(whole, room) else { return whole }
         let head = Array(meta), tail = Array(suffix)
         if let s = Self.longest(head.count, room, { k in
-            let h = String(head[..<k]).trimmingCharacters(in: .whitespaces)
-            return self.meta(h.isEmpty ? "" : h + "…", font: font)
+            // Even with nothing of it left, the meta keeps its "…", so it never goes without a mark.
+            self.meta(String(head[..<k]).trimmingCharacters(in: .whitespaces) + "…", font: font)
         }) { return s }
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: suffixColor]
         return Self.longest(tail.count, room) { k in
