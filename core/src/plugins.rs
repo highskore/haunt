@@ -1047,6 +1047,10 @@ impl wkeys::Host for HostState {
         if id.is_empty() || id.chars().any(is_hidden) || id.chars().count() > MAX_TITLE {
             return Err("a key's id must be plain and non-empty".into());
         }
+        // Both are named "<plugin id>/<id>" in the key map, so the key would replace the command's default.
+        if self.palette.iter().any(|p| !p.is_mode && p.id == id) {
+            return Err(format!("{:?} is already one of its palette commands", visible(&id)));
+        }
         let c = crate::chord::canonical_with_cmd(&chord).ok_or_else(|| format!("{:?} is not a chord with cmd, like \"cmd+shift+p\"", visible(&chord).chars().take(40).collect::<String>()))?;
         let mine = format!("{}/{id}", self.id);
         if let Some(owner) = self.core.as_ref().and_then(|core| core.chord_owner(&c)).filter(|o| *o != mine) {
@@ -2406,6 +2410,9 @@ mod tests {
         assert!(p.bind("talk".into(), "cmd+t".into()).unwrap_err().contains("Haunt's"));
         assert!(p.bind("talk".into(), "cmd+shift+y".into()).unwrap_err().contains("dev.other/go"));
         assert!(p.bind("\u{200b}".into(), "cmd+shift+j".into()).is_err());
+        wpal::Host::command(&mut p, "deploy".into(), "Deploy".into(), Some("cmd+shift+d".into()));
+        assert!(p.bind("deploy".into(), "cmd+shift+j".into()).unwrap_err().contains("palette command"));
+        p.palette.clear();
         p.bind("talk".into(), "shift+cmd+u".into()).unwrap();
         assert!(p.bind("other".into(), "cmd+shift+u".into()).unwrap_err().contains("talk"));
         assert_eq!(p.keys, [("talk".to_owned(), "cmd+shift+u".to_owned())]);
