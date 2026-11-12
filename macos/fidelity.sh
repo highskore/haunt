@@ -25,8 +25,11 @@ if [ ! -x "$FBIN" ] || [ -n "$(find Sources Vendor deps/lib -newer "$FBIN" -prin
   HAUNT_FIXTURES=1 ./build.sh >/dev/null || exit 1
 fi
 PLUGINS="${HAUNT_PLUGINS_DIR:-$ROOT/../haunt-plugins}"
+# The bundled plugins' files by content, found through any symlinked plugin folder.
+plugins_sum=$(find -H "$PLUGINS/haunt-decision-log" "$PLUGINS/haunt-theme-glass" "$PLUGINS/haunt-theme-sigil" "$PLUGINS/haunt-theme-win95" \
+  -type f -not -path '*/target/*' -not -path '*/.git/*' -print0 2>/dev/null | sort -z | xargs -0 shasum | shasum | cut -d' ' -f1)
 if [ ! -d "$APP" ] || [ "$FBIN" -nt "$APP/Contents/MacOS/haunt" ] || [ "$ROOT/build/haunt.app" -nt "$APP" ] ||
-  [ -n "$(find "$PLUGINS/haunt-decision-log" "$PLUGINS/haunt-theme-glass" "$PLUGINS/haunt-theme-sigil" "$PLUGINS/haunt-theme-win95" -newer "$APP" -not -path '*/target/*' -print -quit 2>/dev/null)" ]; then
+  [ "$plugins_sum" != "$(cat "$ROOT/build/haunt-fixtures.plugins" 2>/dev/null)" ]; then
   rm -rf "$APP"
   cp -R "$ROOT/build/haunt.app" "$APP"
   cp "$FBIN" "$APP/Contents/MacOS/haunt"
@@ -35,6 +38,7 @@ if [ ! -d "$APP" ] || [ "$FBIN" -nt "$APP/Contents/MacOS/haunt" ] || [ "$ROOT/bu
   rm -rf "$APP/Contents/Resources/plugins"
   ./bundle-plugins.sh "$APP/Contents/Resources/plugins" decision-log,theme-glass,theme-sigil,theme-win95 >/dev/null || exit 1
   codesign --force --sign - "$APP" >/dev/null 2>&1
+  echo "$plugins_sum" >"$ROOT/build/haunt-fixtures.plugins"
 fi
 status=0
 for screen in "${@:-ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox nt-07-menu th-01-glass th-02-sigil th-04-win95}"; do
