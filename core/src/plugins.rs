@@ -25,6 +25,10 @@ mod bindings {
     wasmtime::component::bindgen!({ path: "../wit/haunt-plugin.wit", world: "plugin" });
 }
 
+#[path = "plugin_fx.rs"]
+mod fx;
+pub use fx::{DockImage, Stage};
+
 use bindings::Plugin;
 use bindings::haunt::plugin::{
     allowlist as wallow, clipboard as wclip, clock as wclock, fs_list as wfslist, link as wlink, exec as wexec, hold as whold, keys as wkeys, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
@@ -195,6 +199,8 @@ pub struct LoadSpec {
     pub haunt_dir: Option<PathBuf>,
     /// What `decisions` and `allowlist` read and propose to; without it they see nothing.
     pub core: Option<CoreHandle>,
+    /// Who owns the Dock tile, the glow and the title-bar slot, shared by the plugins of one set.
+    pub stage: Stage,
 }
 
 /// Written once per export call (`LoadedPlugin::call`) and on drop, not once per `set`.
@@ -323,6 +329,8 @@ pub struct HostState {
     exec_jobs: Vec<u64>,
     /// `fs-list.tree` walks started and not yet reported, with the folder as audited.
     tree_jobs: Vec<(u64, String)>,
+    stage: Stage,
+    fx: fx::Fx,
 }
 
 impl Drop for HostState {
@@ -335,6 +343,7 @@ impl Drop for HostState {
             c.release_hover(&self.id);
             let _ = c.set_top_row(&self.id, None);
         }
+        self.release_fx();
     }
 }
 
@@ -389,6 +398,8 @@ impl HostState {
             exec: caps.exec.clone(),
             exec_jobs: Vec::new(),
             tree_jobs: Vec::new(),
+            stage: Stage::default(),
+            fx: fx::Fx::default(),
             events: EventGrant { details: caps.event_details, answers: caps.pty_write },
         }
     }
@@ -1782,6 +1793,7 @@ impl LoadedPlugin {
             data.clear_top_row();
             data.drop_keys();
             data.drop_user_effects(marks.0, marks.1);
+            data.release_fx();
             PluginError(why)
         })
     }
@@ -2153,6 +2165,9 @@ impl PluginHost {
         if caps.panel {
             wpanel::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
+        if caps.dock {
+            fx::wdock::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
         if caps.fs_read_granted() || caps.fs_write_granted() {
             let mut fs = l.instance("haunt:plugin/fs@0.5.0")?;
             if caps.fs_read_granted() {
@@ -2185,6 +2200,7 @@ impl PluginHost {
         if !spec.name.is_empty() {
             store.data_mut().name = spec.name.clone();
         }
+        store.data_mut().stage = spec.stage.clone();
         store.limiter(|s| &mut s.limits);
         // Instantiation runs the component's start functions, which get the same budget as a call.
         store.set_epoch_deadline(CALL_TICKS);

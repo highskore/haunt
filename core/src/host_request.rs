@@ -35,4 +35,8 @@ pub enum HostRequest {
     OpenUrl { plugin_id: String, url: String },
     /// Select an open tab, from a button, key or command the user just used (`sidebar.focus`).
     FocusTab { plugin_id: String, surface: String },
+    /// The Dock tile: `image` (none: haunt's icon) with `badge` as its count, `blink` flashed now and then. Only
+    /// the plugin that owns the tile sends one; all none gives haunt's own back.
+    #[cfg(feature = "plugins")]
+    DockShow { plugin_id: String, image: Option<crate::plugins::DockImage>, badge: Option<u32>, blink: Option<crate::plugins::DockImage> },
 }

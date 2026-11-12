@@ -438,6 +438,7 @@ enum HostRequest: Equatable, Hashable {
     case clipboardWrite(pluginId: String, pluginName: String, text: String)
     case openUrl(pluginId: String, url: String)
     case focusTab(pluginId: String, surface: String)
+    case dockShow(pluginId: String, image: DockImage?, badge: UInt32?, blink: DockImage?)
 }
 
 struct PluginKey: Equatable, Hashable {
@@ -468,6 +469,11 @@ struct AuditClip: Equatable, Hashable {
 struct AuditDrain: Equatable, Hashable {
     var lines: [AuditLine]
     var error: String?
+}
+
+struct DockImage: Equatable, Hashable {
+    var id: String
+    var png: Data
 }
 
 enum PanelPlacement: Equatable, Hashable {

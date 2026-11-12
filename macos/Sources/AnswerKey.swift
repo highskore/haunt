@@ -38,6 +38,8 @@ enum PtyRoute: Equatable {
             self = .paste(w)
         case .notify, .showPanel, .holdNotifications, .holdSummary, .releaseNotifications, .closePanel, .keysChanged, .clipboardWrite, .openUrl, .focusTab:
             return nil
+        case .dockShow:
+            return nil
         }
     }
 }

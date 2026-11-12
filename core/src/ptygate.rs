@@ -61,6 +61,8 @@ impl Core {
             | HostRequest::ClipboardWrite { .. }
             | HostRequest::OpenUrl { .. }
             | HostRequest::FocusTab { .. } => None,
+            #[cfg(feature = "plugins")]
+            HostRequest::DockShow { .. } => None,
         }
     }
 }

@@ -10,6 +10,8 @@ final class HauntConfig {
     var ghosttyURL: URL { dir.appendingPathComponent("ghostty.generated.conf") }
     private(set) var keys = KeyMap.defaults
     private(set) var notifications = NotificationSettings()
+    /// `[effects]`: what plugins may show or play outside their panels.
+    private(set) var effects = PluginEffects()
     /// The loaded plugins' commands that come with a key, as "<plugin id>/<item id>": default key; set before `reload`.
     var pluginKeyDefaults: [String: String] = [:]
     private(set) var agentsView = AgentsViewStyle.narrowList
@@ -56,6 +58,7 @@ final class HauntConfig {
     private var lastKeyProblems: [String] = []
     private var lastLayoutProblems: [String] = []
     private var lastNotificationProblems: [String] = []
+    private var lastEffectsProblems: [String] = []
 
     /// HAUNT_CONFIG_DIR, else HAUNT_HOME, else ~/.haunt: the same order as `haunt setup`.
     init(dir: URL? = nil) {
@@ -148,6 +151,12 @@ final class HauntConfig {
         }
         let notificationsChanged = newNotifications != notifications
         notifications = newNotifications
+        var effectsProblems: [String] = []
+        effects = PluginEffects(table: toml["effects"] ?? [:]) { effectsProblems.append($0) }
+        if effectsProblems != lastEffectsProblems {
+            for p in effectsProblems { Self.logger.error("\(p, privacy: .public)") }
+            lastEffectsProblems = effectsProblems
+        }
         var layoutProblems: [String] = []
         agentsView = AgentsViewStyle.parse(toml["layout"]?["agents_view"]) { layoutProblems.append($0) }
         let buttons = TitlebarButton.parse(toml["layout"]?["titlebar_buttons"]) { layoutProblems.append($0) }
@@ -796,5 +805,28 @@ extension NSColor {
         let c = usingColorSpace(.sRGB)!
         return String(format: "#%02x%02x%02x", Int((c.redComponent * 255).rounded()),
                       Int((c.greenComponent * 255).rounded()), Int((c.blueComponent * 255).rounded()))
+    }
+}
+
+/// `[effects]`: what plugins may show or play outside their own panels. All on by default.
+struct PluginEffects: Equatable {
+    var dock = true
+
+    static let keys: [String: WritableKeyPath<PluginEffects, Bool>] = ["dock": \.dock]
+
+    init() {}
+
+    init(table: [String: TOML.Value], problem: (String) -> Void) {
+        for (k, v) in table.sorted(by: { $0.key < $1.key }) {
+            guard let path = Self.keys[k] else {
+                problem("[effects] \(k): unknown setting")
+                continue
+            }
+            guard case let .scalar(s) = v, s == "true" || s == "false" else {
+                problem("[effects] \(k): expected true or false")
+                continue
+            }
+            self[keyPath: path] = s == "true"
+        }
     }
 }

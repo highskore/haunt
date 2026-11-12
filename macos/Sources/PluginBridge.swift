@@ -14,6 +14,11 @@ final class PluginBridge {
     var onNote: ((String) -> Void)?
     /// A plugin bound or unbound a key.
     var onKeysChanged: (() -> Void)?
+    let dock = PluginDock()
+    /// `[effects]` from config.toml.
+    var effects = PluginEffects() {
+        didSet { dock.enabled = effects.dock }
+    }
     /// Set once the core has started, so the decision log is loaded before plugins read it.
     var plugins: PluginsAPI? {
         // The old set's audit lines are written before it goes.
@@ -23,6 +28,7 @@ final class PluginBridge {
             hold.release()
             hover.owner = nil
             if plugins == nil { presence.stop() } else { presence.start() }
+            dock.reset()
         }
     }
     private let core: CoreAPI
@@ -122,6 +128,8 @@ final class PluginBridge {
                 NSWorkspace.shared.open(u)
             case let .focusTab(_, surface):
                 openTab?(surface)
+            case let .dockShow(_, image, badge, blink):
+                dock.show(image: image, badge: badge, blink: blink)
             case .ptyAnswer, .ptyType:
                 guard let w = core.gatePluginRequest(request: req), let route = PtyRoute(req, w) else { continue }
                 write(route)

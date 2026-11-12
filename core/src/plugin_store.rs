@@ -573,6 +573,7 @@ impl Store {
         let cache = CwasmCache::open(&self.cache_dir());
         // Plugins with the same grants share a linker.
         let mut linkers: Vec<(Capabilities, Linker<HostState>)> = Vec::new();
+        let stage = crate::plugins::Stage::default();
         for e in self.read_lock()?.plugins {
             if e.sha256_wasm.is_empty() {
                 match self.verify_data(&e) {
@@ -596,6 +597,7 @@ impl Store {
                         .unwrap_or_else(|| PluginConfig::default().settings_json(&e.id, &manifest.settings, &mut Vec::new())),
                     haunt_dir: Some(self.home.clone()),
                     core: core.cloned(),
+                    stage: stage.clone(),
                 };
                 let (component, _) = host.compile_cached(&wasm, &wasm_digest, cache)?;
                 let i = match linkers.iter().position(|(c, _)| *c == e.granted) {
