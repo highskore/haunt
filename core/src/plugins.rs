@@ -759,6 +759,17 @@ pub(crate) fn says_status(text: &str) -> bool {
     })
 }
 
+/// Whether a suffix or ticker says what a row needing you says, "needs you" or "waiting for you", anywhere
+/// in its letters and digits, compared as `says_status` compares labels. Other status words are fine there:
+/// "checks running" and "failed 2m ago" are a plugin's own words.
+pub(crate) fn says_needs_you(text: &str) -> bool {
+    static PHRASES: std::sync::LazyLock<Vec<Vec<char>>> = std::sync::LazyLock::new(|| {
+        [crate::layout::NEEDS_YOU, crate::layout::WAITING].map(|p| status_fold(p).iter().filter(|g| status_kept(g)).map(|g| g.c).collect()).to_vec()
+    });
+    let flat: Vec<Glyph> = status_fold(text).into_iter().filter(status_kept).collect();
+    PHRASES.iter().any(|p| flat.windows(p.len()).any(|w| status_same(w, p)))
+}
+
 fn decoration(d: wrows::Decoration) -> Result<Decoration, String> {
     let spark = match d.spark {
         Some(s) => {
@@ -777,10 +788,14 @@ fn decoration(d: wrows::Decoration) -> Result<Decoration, String> {
             return Err(format!("{l:?} reads as Haunt's own status"));
         }
     }
+    let suffix = plain_opt(d.suffix, if d.scroll { decorate::TICKER_MAX } else { decorate::SUFFIX_MAX });
+    if let Some(t) = suffix.as_deref().filter(|t| says_needs_you(t)) {
+        return Err(format!("{t:?} reads as a row that needs you"));
+    }
     Ok(Decoration {
         label,
         label_tone: tone(d.label_tone),
-        suffix: plain_opt(d.suffix, if d.scroll { decorate::TICKER_MAX } else { decorate::SUFFIX_MAX }),
+        suffix,
         suffix_tone: tone(d.suffix_tone),
         scroll: d.scroll,
         bar_permille: d.bar.map(decorate::permille).transpose()?,
@@ -2251,6 +2266,15 @@ mod tests {
         for ok in ["CI 7/9", "spec 11/18", "3 edits", "✓", "wait 2m", "allowlist", "allowlist ok", "🚀🚀🚀🚀", "dev ✓", "denylisted"] {
             let dec = decoration(d(ok, wrows::Tone::Warn)).unwrap();
             assert_eq!(dec.spark.unwrap().tone, Tone::Text, "the sparkline may keep text");
+        }
+        let s = |suffix: &str, scroll: bool| wrows::Decoration {
+            label: None, label_tone: wrows::Tone::Dim, suffix: Some(suffix.into()), suffix_tone: wrows::Tone::Dim, scroll, bar: None, spark: None,
+        };
+        for bad in ["api needs you", "n\u{0435}eds-you", "Waiting for you", "x·NEEDS·YOU·x", "w a i t i n g for you"] {
+            assert!(decoration(s(bad, false)).is_err() && decoration(s(bad, true)).is_err(), "{bad:?}");
+        }
+        for ok in ["#142 · checks running", "failed 2m ago", "held 3m · a failed turn", "echo done", "CI 7/9 · 3 edits", "waiting 2m"] {
+            assert!(decoration(s(ok, false)).is_ok() && decoration(s(ok, true)).is_ok(), "{ok:?}");
         }
     }
 

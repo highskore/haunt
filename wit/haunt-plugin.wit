@@ -246,6 +246,7 @@ interface rows {
     suffix: option<string>,
     suffix-tone: tone,
     // The suffix scrolls slowly when it doesn't fit, like a ticker; it may then be 160 characters.
+    // A suffix saying "needs you" or "waiting for you", however spelled, is refused.
     scroll: bool,
     // A thin bar under the row, 0 to 1.
     bar: option<f32>,
