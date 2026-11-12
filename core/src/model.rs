@@ -907,6 +907,15 @@ impl std::fmt::Debug for CoreHandle {
     }
 }
 
+/// A tab that needs you, as `CoreHandle::needs_you` gives it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Waiting {
+    pub name: String,
+    /// As the agent sent it, hidden characters and all: not for showing as is.
+    pub command: Option<String>,
+    pub since: std::time::Duration,
+}
+
 impl CoreHandle {
     pub fn selected_surface(&self) -> Option<String> {
         lock(&self.state).selected.clone()
@@ -939,6 +948,21 @@ impl CoreHandle {
             *res.as_ref().unwrap_or(&false)
         });
         res.map(|_| ())
+    }
+
+    /// `surface`'s name, its verified request's command and how long it has needed you, while it does; and how
+    /// many tabs need you.
+    pub fn needs_you(&self, surface: &str) -> (Option<Waiting>, usize) {
+        let now = Instant::now();
+        let st = lock(&self.state);
+        let snap = st.core_snapshot(now);
+        let rows = || snap.groups.iter().flat_map(|g| &g.rows).filter(|r| r.needs_you);
+        let waiting = rows().find(|r| r.surface_id == surface).and_then(|r| {
+            let s = st.surfaces.iter().find(|s| s.id == surface)?;
+            let command = s.session.live_permission().map(|p| p.text());
+            Some(Waiting { name: r.name.clone(), command, since: now.saturating_duration_since(s.session.status_changed) })
+        });
+        (waiting, rows().count())
     }
 
     /// The rows in the core's own order, without meta or task text.

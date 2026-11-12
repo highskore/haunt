@@ -440,7 +440,7 @@ enum HostRequest: Equatable, Hashable {
     case focusTab(pluginId: String, surface: String)
     case dockImages(pluginId: String, images: [DockImage])
     case dockShow(pluginId: String, image: String?, badge: UInt32?, blink: String?, seq: UInt64)
-    case glowShow(pluginId: String, count: UInt8, seq: UInt64)
+    case glowShow(pluginId: String, label: GlowLabel, seq: UInt64)
     case glowHide(pluginId: String, seq: UInt64)
     case titleSet(pluginId: String, text: String?, seq: UInt64)
     case soundPlay(pluginId: String, sound: SoundName, pitch: Int32, volume: Float)
@@ -481,6 +481,11 @@ struct AuditClip: Equatable, Hashable {
 struct AuditDrain: Equatable, Hashable {
     var lines: [AuditLine]
     var error: String?
+}
+
+enum GlowLabel: Equatable, Hashable {
+    case count(n: UInt8)
+    case row(surface: String, head: String, waitedSecs: UInt64)
 }
 
 struct DockImage: Equatable, Hashable {

@@ -10,6 +10,11 @@ struct DockImage: Equatable, Hashable {
     var rgba: Data
 }
 
+enum GlowLabel: Equatable, Hashable {
+    case count(n: UInt8)
+    case row(surface: String, head: String, waitedSecs: UInt64)
+}
+
 enum SoundName: Equatable, Hashable {
     case chime, bell, rain
 }
@@ -167,6 +172,15 @@ do {
     check(slots.admit(.glow, new, seq: 13, letGo: true) && slots.admit(.glow, old, seq: 14, letGo: false), "the holder lets go, then another claims")
     check(slots.admit(.title, old, seq: 15, letGo: false) && slots.admit(.title, old, seq: 16, letGo: false), "spots are counted apart")
 }
+
+// MARK: The glow's words
+
+check(PluginGlow.label(count: 0) == nil && PluginGlow.label(count: 1) == "1 needs you" && PluginGlow.label(count: 3) == "3 need you", "counts")
+check(PluginGlow.label(head: "api · git push?", waited: 72) == "api · git push? · 1m12s", PluginGlow.label(head: "api · git push?", waited: 72))
+check(PluginGlow.elapsed(0) == "0s" && PluginGlow.elapsed(3599) == "59m59s" && PluginGlow.elapsed(7500) == "2h05m" && PluginGlow.elapsed(-5) == "0s", "elapsed")
+let longest = PluginGlow.label(head: String(repeating: "x", count: 23), waited: 3599)
+check(longest.count == 32 && longest.hasSuffix(" · 59m59s"), "a full head still shows its time: \(longest)")
+check(PluginGlow.label(head: String(repeating: "x", count: 40), waited: 1).count == 32, "never past 32")
 
 // MARK: Speech, rendered to buffers and never played
 

@@ -41,10 +41,9 @@ pub enum HostRequest {
     /// than the last it carried out for that spot.
     #[cfg(feature = "plugins")]
     DockShow { plugin_id: String, image: Option<String>, badge: Option<u32>, blink: Option<String>, seq: u64 },
-    /// The warn-orange glow along the top of the screen; the app labels it "`count` need(s) you" (0: no label).
-    /// Only from its owner.
+    /// The warn-orange glow along the top of the screen, with haunt's `label`. Only from its owner.
     #[cfg(feature = "plugins")]
-    GlowShow { plugin_id: String, count: u8, seq: u64 },
+    GlowShow { plugin_id: String, label: crate::plugins::GlowLabel, seq: u64 },
     #[cfg(feature = "plugins")]
     GlowHide { plugin_id: String, seq: u64 },
     /// One line of dim mono text in the title bar, next to its buttons; none clears it. Only from its owner.

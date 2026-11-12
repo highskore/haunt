@@ -575,6 +575,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
         let sel = snap.groups.lazy.flatMap(\.rows).first { $0.selected }
         root.titleBar.progress = sel?.progress.map { $0.total == 0 ? 0 : CGFloat($0.done) / CGFloat($0.total) }
         root.titleBar.tab = sel.map { ($0.name, $0.meta) }
+        bridge.glow.needYou(Set(snap.groups.lazy.flatMap(\.rows).filter(\.needsYou).map(\.surfaceId)))
         onSnapshot?(snap)
     }
 

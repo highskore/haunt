@@ -148,12 +148,16 @@ impl Permission {
     /// "git push" for Bash, "Edit /w/a.rs" for the rest, with newlines, tabs and invisible
     /// characters shown rather than removed (see `event::visible`).
     pub fn preview(&self) -> String {
-        let text = match &self.input {
+        crate::event::visible(&self.text())
+    }
+
+    /// `preview` as sent, hidden characters and all.
+    pub fn text(&self) -> String {
+        match &self.input {
             Some(i) if self.tool == "Bash" => i.clone(),
             Some(i) => format!("{} {i}", self.tool),
             None => self.tool.clone(),
-        };
-        crate::event::visible(&text)
+        }
     }
 
     /// Answered only in the terminal, because what runs may not be what the preview suggests: a

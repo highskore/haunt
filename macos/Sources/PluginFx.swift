@@ -115,9 +115,12 @@ final class PluginGlow {
                                                                     queue: .main) { [weak self] _ in self?.apply() }
         }
     }
-    /// Shown while set; the label inside may still be nil.
-    private var label: String??
+    private enum Shown { case count(UInt8), row(surface: String, head: String, since: Date) }
+    /// Shown while set.
+    private var shown: Shown?
     private var panel: GlowPanel?
+    /// Counts a row label's waiting time on.
+    private var ticker: Timer?
     private var anchorObserver: NSObjectProtocol?
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
 
@@ -132,17 +135,34 @@ final class PluginGlow {
     }
 
     deinit {
+        ticker?.invalidate()
         for (center, o) in observers { center.removeObserver(o) }
         if let o = anchorObserver { NotificationCenter.default.removeObserver(o) }
     }
 
-    func show(count: UInt8) {
-        label = .some(Self.label(count))
+    func show(_ label: GlowLabel) {
+        switch label {
+        case let .count(n): shown = .count(n)
+        case let .row(surface, head, waitedSecs):
+            shown = .row(surface: surface, head: head, since: Date(timeIntervalSinceNow: -TimeInterval(waitedSecs)))
+        }
         apply()
     }
 
-    /// Haunt's words, never the plugin's.
-    static func label(_ count: UInt8) -> String? {
+    /// The tabs that need you, from each sidebar snapshot: a row label whose tab no longer does becomes the count.
+    func needYou(_ surfaces: Set<String>) {
+        guard case let .row(surface, _, _) = shown, !surfaces.contains(surface) else { return }
+        shown = .count(UInt8(min(surfaces.count, 99)))
+        apply()
+    }
+
+    func hide() {
+        shown = nil
+        apply()
+    }
+
+    /// Haunt's words, never the plugin's, cut to 32 characters.
+    static func label(count: UInt8) -> String? {
         switch count {
         case 0: nil
         case 1: "1 needs you"
@@ -150,15 +170,41 @@ final class PluginGlow {
         }
     }
 
-    func hide() {
-        label = nil
-        apply()
+    static func label(head: String, waited: TimeInterval) -> String {
+        String("\(head) · \(elapsed(waited))".prefix(32))
+    }
+
+    /// "42s", "1m12s", "2h05m".
+    static func elapsed(_ t: TimeInterval) -> String {
+        let s = max(0, Int(t))
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60)m\(String(format: "%02d", s % 60))s" }
+        return "\(s / 3600)h\(String(format: "%02d", s / 60 % 60))m"
+    }
+
+    private var text: String? {
+        switch shown {
+        case let .count(n): Self.label(count: n)
+        case let .row(_, head, since): Self.label(head: head, waited: Date().timeIntervalSince(since))
+        case nil: nil
+        }
     }
 
     private func apply() {
-        guard enabled, let label, let screen = anchor?.screen ?? NSScreen.main else {
+        ticker?.invalidate()
+        ticker = nil
+        guard enabled, shown != nil, let screen = anchor?.screen ?? NSScreen.main else {
             panel?.orderOut(nil)
             return
+        }
+        if case .row = shown, showsLabel {
+            let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+                guard let self, self.showsLabel else { return }
+                self.panel?.glow.setLabel(self.text)
+            }
+            t.tolerance = 0.2
+            RunLoop.main.add(t, forMode: .common)
+            ticker = t
         }
         let p = panel ?? GlowPanel()
         panel = p
@@ -167,7 +213,7 @@ final class PluginGlow {
         let menuBar = f.maxY - screen.visibleFrame.maxY
         let height = menuBar + ceil(Self.font.ascender - Self.font.descender) + 8
         p.setFrame(NSRect(x: f.minX, y: f.maxY - height, width: f.width, height: height), display: false)
-        p.glow.update(label: showsLabel ? label : nil, below: menuBar + 4, scale: screen.backingScaleFactor,
+        p.glow.update(label: showsLabel ? text : nil, below: menuBar + 4, scale: screen.backingScaleFactor,
                       breathe: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         p.orderFrontRegardless()
     }
@@ -221,6 +267,15 @@ private final class GlowView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     /// `below`: how far under the top edge the label starts.
+    /// Only the text, so the breathing carries on.
+    func setLabel(_ label: String?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        text.string = label ?? ""
+        text.isHidden = label == nil
+        CATransaction.commit()
+    }
+
     func update(label: String?, below: CGFloat, scale: CGFloat, breathe: Bool) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -230,9 +285,8 @@ private final class GlowView: NSView {
         let h = ceil(PluginGlow.font.ascender - PluginGlow.font.descender) + 2
         text.frame = NSRect(x: b.width / 2, y: b.maxY - below - h, width: b.width / 2 - Self.inset, height: h)
         text.contentsScale = scale
-        text.string = label ?? ""
-        text.isHidden = label == nil
         CATransaction.commit()
+        setLabel(label)
         for l in [line, halo] {
             l.removeAnimation(forKey: "breathe")
             guard breathe else { continue }

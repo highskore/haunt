@@ -158,8 +158,8 @@ final class PluginBridge {
                 if slots.admit(.dock, pluginId, seq: seq, letGo: image == nil && badge == nil) {
                     dock.show(pluginId: pluginId, image: image, badge: badge, blink: blink)
                 }
-            case let .glowShow(pluginId, count, seq):
-                if slots.admit(.glow, pluginId, seq: seq, letGo: false) { glow.show(count: count) }
+            case let .glowShow(pluginId, label, seq):
+                if slots.admit(.glow, pluginId, seq: seq, letGo: false) { glow.show(label) }
             case let .glowHide(pluginId, seq):
                 if slots.admit(.glow, pluginId, seq: seq, letGo: true) { glow.hide() }
             case let .titleSet(pluginId, text, seq):

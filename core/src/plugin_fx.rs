@@ -303,17 +303,50 @@ impl wdock::Host for HostState {
 }
 
 pub const GLOW_COUNT_MAX: u8 = 99;
+/// The whole label, as the app draws it.
+pub const GLOW_LABEL_MAX: usize = 32;
+/// A row label's command, before its `?`.
+pub const GLOW_COMMAND_MAX: usize = 16;
+/// Room left for " · " and a waiting time of up to six characters ("59m59s", "12h05m").
+pub const GLOW_HEAD_MAX: usize = GLOW_LABEL_MAX - 9;
+
+/// The glow's label, always haunt's own words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
+pub enum GlowLabel {
+    /// "1 needs you", "N need you"; none for 0.
+    Count { n: u8 },
+    /// "`head` · <time waiting>", `head` being "<tab> · <command>?" or "<tab>": the app counts the time on from
+    /// `waited_secs`, and shows its own count once `surface` stops needing you.
+    Row { surface: String, head: String, waited_secs: u64 },
+}
+
+impl HostState {
+    fn glow_label(&self, label: wglow::GlowLabel) -> Result<GlowLabel, String> {
+        let surface = match label {
+            wglow::GlowLabel::Count(n) if n > GLOW_COUNT_MAX => return Err(format!("count must be 0 to {GLOW_COUNT_MAX}")),
+            wglow::GlowLabel::Count(n) => return Ok(GlowLabel::Count { n }),
+            wglow::GlowLabel::Row(s) => s,
+        };
+        let (waiting, count) = self.core.as_ref().map(|c| c.needs_you(&surface)).unwrap_or_default();
+        let Some(w) = waiting else { return Ok(GlowLabel::Count { n: count.min(GLOW_COUNT_MAX as usize) as u8 }) };
+        let command = w.command.filter(|_| self.events.details).map(|p| super::plain(&p, GLOW_COMMAND_MAX)).filter(|p| !p.trim().is_empty());
+        let head = match command {
+            Some(c) => format!("{} · {}?", w.name, c.trim()),
+            None => w.name,
+        };
+        Ok(GlowLabel::Row { surface, head: super::plain(head.trim(), GLOW_HEAD_MAX), waited_secs: w.since.as_secs() })
+    }
+}
 
 impl wglow::Host for HostState {
-    /// Only the warn orange: never Haunt's needs-you white, and no colour of the plugin's own. The label is the
-    /// app's, from `count`: free text drawn over other apps could pass for theirs.
-    fn show(&mut self, tone: super::wrows::Tone, count: u8) -> Result<(), String> {
+    /// Only the warn orange: never Haunt's needs-you white, and no colour of the plugin's own. The label is
+    /// haunt's, from a count or a tab's own state: free text drawn over other apps could pass for theirs.
+    fn show(&mut self, tone: super::wrows::Tone, label: wglow::GlowLabel) -> Result<(), String> {
         if tone != super::wrows::Tone::Warn {
             return Err("the glow comes in warn only".into());
         }
-        if count > GLOW_COUNT_MAX {
-            return Err(format!("count must be 0 to {GLOW_COUNT_MAX}"));
-        }
+        let label = self.glow_label(label)?;
         if !self.fx.glow_rate.ok() {
             return Err(format!("show at most {SHOWS_PER_SEC} times a second"));
         }
@@ -322,7 +355,7 @@ impl wglow::Host for HostState {
         }
         let plugin_id = self.id.clone();
         self.stage.claim(Slot::Glow, &plugin_id).map_err(|who| format!("the glow is taken: {who}"))?;
-        self.request(HostRequest::GlowShow { plugin_id, count, seq: next_seq() })
+        self.request(HostRequest::GlowShow { plugin_id, label, seq: next_seq() })
     }
 
     fn hide(&mut self) {
@@ -628,7 +661,60 @@ mod glow_tests {
     use super::super::{Capabilities, PluginHost};
     use super::tests::state;
     use super::*;
+    use std::time::Instant;
     use wasmtime::component::Component;
+    use wglow::GlowLabel::{Count, Row};
+
+    /// A plugin with `glow`, and `event_details` if `details`, over a core where tab `a` asks to run `command`
+    /// and tab `b` doesn't need you.
+    fn waiting(details: bool, command: &str) -> (crate::Core, HostState, String, String, crate::testdir::TempDir) {
+        let dir = crate::testdir::TempDir::new("fx-glow-row");
+        let core = crate::Core::new(&*dir);
+        let (a, b) = (core.register_surface("/srv/api").unwrap(), core.register_surface("/srv/web").unwrap());
+        let input = serde_json::json!({ "v": 1, "surface_id": a.surface_id, "nonce": a.nonce, "event": "permission_seen", "tool_name": "Bash", "tool_input": { "command": command } });
+        core.with_state(|s| s.handle_line(&input.to_string(), Instant::now()));
+        let caps = Capabilities { glow: true, event_details: details, ..Default::default() };
+        let st = HostState::new("dev.haunt.a", &caps, None, None, Some(core.handle()));
+        (core, st, a.surface_id, b.surface_id, dir)
+    }
+
+    fn label(st: &mut HostState, surface: &str) -> GlowLabel {
+        st.fx.glow_rate = Rate::new(SHOWS_PER_SEC, Duration::from_secs(1));
+        wglow::Host::show(st, Tone::Warn, Row(surface.into())).unwrap();
+        let Some(HostRequest::GlowShow { label, .. }) = st.outbox.pop() else { panic!("{:?}", st.outbox) };
+        label
+    }
+
+    #[test]
+    fn a_row_label_is_the_tab_its_command_and_the_wait() {
+        let (_core, mut st, a, _, _dir) = waiting(true, "git push");
+        let GlowLabel::Row { surface, head, waited_secs } = label(&mut st, &a) else { panic!() };
+        assert_eq!((surface.as_str(), head.as_str()), (a.as_str(), "api · git push?"));
+        assert!(waited_secs < 5, "{waited_secs}");
+    }
+
+    #[test]
+    fn a_row_label_names_the_command_only_with_event_details() {
+        let (_core, mut st, a, _, _dir) = waiting(false, "git push --force origin main");
+        assert!(matches!(label(&mut st, &a), GlowLabel::Row { head, .. } if head == "api"));
+    }
+
+    #[test]
+    fn a_row_labels_command_is_plain_and_cut_and_the_label_fits() {
+        let (_core, mut st, a, _, _dir) = waiting(true, "git\u{200b} push\u{202e} \u{1b}[31m--force origin main");
+        let GlowLabel::Row { head, .. } = label(&mut st, &a) else { panic!() };
+        assert_eq!(head, "api · git push [31m--f?");
+        assert!(head.chars().count() <= GLOW_HEAD_MAX && GLOW_HEAD_MAX + " · 59m59s".chars().count() <= GLOW_LABEL_MAX);
+    }
+
+    #[test]
+    fn a_row_label_for_a_tab_that_doesnt_need_you_is_haunts_count() {
+        let (_core, mut st, _, b, _dir) = waiting(true, "git push");
+        assert_eq!(label(&mut st, &b), GlowLabel::Count { n: 1 });
+        assert_eq!(label(&mut st, "no-such-tab"), GlowLabel::Count { n: 1 });
+        let mut coreless = state("dev.haunt.b", &Stage::default());
+        assert_eq!(label(&mut coreless, "x"), GlowLabel::Count { n: 0 });
+    }
 
     #[test]
     fn the_glow_import_needs_its_capability() {
@@ -643,29 +729,33 @@ mod glow_tests {
     fn the_glow_is_warn_only_with_a_count_of_99_at_most() {
         let mut a = state("dev.haunt.a", &Stage::default());
         for t in [Tone::Dim, Tone::Text] {
-            assert!(wglow::Host::show(&mut a, t, 1).unwrap_err().contains("warn only"));
+            assert!(wglow::Host::show(&mut a, t, Count(1)).unwrap_err().contains("warn only"));
         }
         for bad in [100, 255] {
-            assert!(wglow::Host::show(&mut a, Tone::Warn, bad).unwrap_err().contains("0 to 99"), "{bad}");
+            assert!(wglow::Host::show(&mut a, Tone::Warn, Count(bad)).unwrap_err().contains("0 to 99"), "{bad}");
         }
         assert!(a.outbox.is_empty());
-        wglow::Host::show(&mut a, Tone::Warn, 99).unwrap();
-        wglow::Host::show(&mut a, Tone::Warn, 0).unwrap();
-        assert!(matches!(&a.outbox[..], [HostRequest::GlowShow { count: 99, .. }, HostRequest::GlowShow { count: 0, .. }]), "{:?}", a.outbox);
+        wglow::Host::show(&mut a, Tone::Warn, Count(99)).unwrap();
+        wglow::Host::show(&mut a, Tone::Warn, Count(0)).unwrap();
+        assert!(
+            matches!(&a.outbox[..], [HostRequest::GlowShow { label: GlowLabel::Count { n: 99 }, .. }, HostRequest::GlowShow { label: GlowLabel::Count { n: 0 }, .. }]),
+            "{:?}",
+            a.outbox
+        );
     }
 
     #[test]
     fn the_first_plugin_to_show_owns_the_glow_until_it_hides_or_is_disabled() {
         let stage = Stage::default();
         let (mut a, mut b) = (state("dev.haunt.a", &stage), state("dev.haunt.b", &stage));
-        wglow::Host::show(&mut a, Tone::Warn, 2).unwrap();
-        assert!(wglow::Host::show(&mut b, Tone::Warn, 0).unwrap_err().contains("dev.haunt.a has it"));
+        wglow::Host::show(&mut a, Tone::Warn, Count(2)).unwrap();
+        assert!(wglow::Host::show(&mut b, Tone::Warn, Count(0)).unwrap_err().contains("dev.haunt.a has it"));
         wglow::Host::hide(&mut b);
         assert!(b.outbox.is_empty(), "a non-owner's hide does nothing");
         a.outbox.clear();
         wglow::Host::hide(&mut a);
         assert!(matches!(&a.outbox[..], [HostRequest::GlowHide { .. }]));
-        wglow::Host::show(&mut b, Tone::Warn, 0).unwrap();
+        wglow::Host::show(&mut b, Tone::Warn, Count(0)).unwrap();
         b.outbox.clear();
         b.release_fx();
         assert!(matches!(&b.outbox[..], [HostRequest::GlowHide { .. }]));
@@ -676,9 +766,9 @@ mod glow_tests {
     fn glow_shows_are_rate_limited() {
         let mut a = state("dev.haunt.a", &Stage::default());
         for _ in 0..SHOWS_PER_SEC {
-            wglow::Host::show(&mut a, Tone::Warn, 0).unwrap();
+            wglow::Host::show(&mut a, Tone::Warn, Count(0)).unwrap();
         }
-        assert!(wglow::Host::show(&mut a, Tone::Warn, 0).unwrap_err().contains("times a second"));
+        assert!(wglow::Host::show(&mut a, Tone::Warn, Count(0)).unwrap_err().contains("times a second"));
     }
 }
 
