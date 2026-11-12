@@ -153,7 +153,7 @@ enum Layers {
 
     /// A redraw whose layers take longer than this counts as slow; two slow ones, or one over `stopMs`, turn the
     /// theme's layers off for the session.
-    static let slowMs = 40.0, stopMs = 200.0
+    static let slowMs = 60.0, stopMs = 200.0
     /// Layer sources turned off this session for being too slow to draw.
     private static var tooSlow: [LayerSource] = []
     private static var slowFrames = 0
@@ -171,8 +171,13 @@ enum Layers {
         drawn = [:]
         guard frame.open else { return }
         let ms = frame.ms
-        lastFrameMs = ms
         frame = (0, false)
+        judge(ms)
+    }
+
+    /// Counts a redraw whose layers took `ms`.
+    static func judge(_ ms: Double) {
+        lastFrameMs = ms
         guard !current.isEmpty, !liveResize() else { return }
         if ms > slowMs { slowFrames += 1 }
         guard ms > stopMs || slowFrames >= 2 else { return }

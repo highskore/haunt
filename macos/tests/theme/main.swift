@@ -805,6 +805,14 @@ do {
     Layers.draw("palette.field", CGRect(x: 700, y: 300, width: 380, height: 40), in: big)
     for r in 0..<8 { Layers.draw(r == 0 ? "palette.row.selected" : "palette.row.hover", CGRect(x: 704, y: 344 + 40 * r, width: 372, height: 36), in: big) }
     }
+    // Slow means over 60 ms: two 50 ms redraws, a cold check of a busy theme, leave layers on; two over 60 turn them off.
+    let paced = [LayerSpec(id: "watchdog", slot: "sidebar", prims: [PrimSpec(kind: "rect", fill: "#000000")])]
+    Layers.set(Layers.resolve(paced, images: [], theme: white).0, source: LayerSource(specs: paced))
+    Layers.judge(50); Layers.judge(50)
+    check(!Layers.current.isEmpty, "two 50 ms redraws leave layers on")
+    Layers.judge(61); Layers.judge(61)
+    check(Layers.current.isEmpty, "two over 60 ms turn them off")
+    Layers.set(Layers.resolve(worst, images: [], theme: white).0, source: worstSource)
     // A live resize never turns layers off, though its redraws are still timed.
     Layers.liveResize = { true }
     for _ in 0..<2 { drawWindow(); Layers.endFrame() }
