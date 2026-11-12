@@ -155,6 +155,8 @@ pub(crate) struct State {
     rows_plugins: HashMap<u64, String>,
     /// config.toml `[layout] row_labels`: plugins whose decoration wins a row, first first.
     row_labels: Vec<String>,
+    /// The plugin holding notifications, until when.
+    notify_hold: Option<(String, Instant)>,
 }
 
 impl State {
@@ -982,6 +984,29 @@ impl CoreHandle {
         let t = st.next_rows_token;
         st.rows_plugins.insert(t, plugin_id.to_owned());
         RowsToken(t)
+    }
+
+    /// `plugin_id` holds notifications until `until`; refused while another plugin's hold runs.
+    pub fn hold_notifications(&self, plugin_id: &str, until: Instant) -> Result<(), String> {
+        let mut st = lock(&self.state);
+        if let Some((owner, end)) = &st.notify_hold
+            && owner != plugin_id
+            && *end > Instant::now()
+        {
+            return Err(format!("{owner} is holding notifications"));
+        }
+        st.notify_hold = Some((plugin_id.to_owned(), until));
+        Ok(())
+    }
+
+    /// Ends `plugin_id`'s hold; whether it had one.
+    pub fn release_notifications(&self, plugin_id: &str) -> bool {
+        let mut st = lock(&self.state);
+        let mine = st.notify_hold.as_ref().is_some_and(|(owner, _)| owner == plugin_id);
+        if mine {
+            st.notify_hold = None;
+        }
+        mine
     }
 
     /// config.toml's `[layout] row_labels` changed.

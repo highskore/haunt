@@ -30,6 +30,7 @@ protocol PluginsAPI: AnyObject {
     func takeRequests() -> [HostRequest]
     func rowMenuItems(surfaceId: String) -> [RowMenuItem]
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws
+    func notifyAction(pluginId: String, actionId: String, binding: String) throws
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?)
     func setTheme(name: String, tokens: [ThemeToken]) throws
@@ -130,6 +131,7 @@ final class NoPlugins: PluginsAPI {
     func takeRequests() -> [HostRequest] { [] }
     func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
+    func notifyAction(pluginId: String, actionId: String, binding: String) throws {}
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?) {}
     func setTheme(name: String, tokens: [ThemeToken]) throws {}
@@ -152,6 +154,7 @@ final class FixturePlugins: PluginsAPI {
     func takeRequests() -> [HostRequest] { [] }
     func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
+    func notifyAction(pluginId: String, actionId: String, binding: String) throws {}
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?) {}
     func setTheme(name: String, tokens: [ThemeToken]) throws {}
@@ -375,6 +378,8 @@ enum HostRequest: Equatable, Hashable {
     case ptyAnswer(pluginId: String, surface: String, allow: Bool, requestId: UInt64)
     case ptyType(pluginId: String, surface: String, text: String, enter: Bool)
     case showPanel(pluginId: String, pluginName: String, panel: Panel)
+    case holdNotifications(pluginId: String, pluginName: String, minutes: UInt32)
+    case releaseNotifications(pluginId: String)
     case closePanel(pluginId: String, id: String)
 }
 

@@ -262,6 +262,11 @@ impl HauntPlugins {
         Ok(haunt_core::sync::lock(&self.set).invoke_row_item(&plugin_id, &item_id, &surface_id)?)
     }
 
+    /// The user chose action `action_id` on a plugin's notification bound to `binding` ("" for none).
+    pub fn notify_action(&self, plugin_id: String, action_id: String, binding: String) -> Result<(), HostError> {
+        Ok(haunt_core::sync::lock(&self.set).notify_action(&plugin_id, &action_id, &binding)?)
+    }
+
     /// A button on a plugin's panel, or the user closing it (`action` empty); see `HostRequest::ShowPanel`.
     pub fn panel_action(&self, plugin_id: String, panel_id: String, generation: u64, action: String) -> Result<(), HostError> {
         Ok(haunt_core::sync::lock(&self.set).panel_action(&plugin_id, &panel_id, generation, &action)?)

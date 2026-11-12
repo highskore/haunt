@@ -4,7 +4,7 @@
 // 0.4: `theme` and `typing` imports; `on-theme-changed` export.
 // 0.5: surface, tool, command, file path, task id and request key on agent-event; `rows`, `timer`,
 //      `clock` and `panel` imports; `on-tick` export; `on-event` returns nothing.
-//      Draft, not linked yet: `hold`, `top-row`, `keys`, `exec`, `sound`, `speech`, `dock`, `glow`,
+//      `hold` import. Draft, not linked yet: `top-row`, `keys`, `exec`, `sound`, `speech`, `dock`, `glow`,
 //      `title` and `terminal` imports; `on-exec` and `on-away-changed` exports.
 package haunt:plugin@0.5.0;
 
@@ -320,18 +320,18 @@ interface panel {
   close: func(id: string);
 }
 
-// --- Draft: B-D and 5-10. The shapes are settled for plugins to build against; the host doesn't link
-// --- these imports yet, and a manifest asking for their capabilities doesn't install yet.
-
 // Capability `notify_hold`. Holds haunt's notifications and other plugins' while the user focuses,
 // then shows one that sums them up. A permission prompt is never held: its notification still shows,
 // and its row still goes to NEEDS YOU. One hold at a time, owned by the plugin that started it.
 interface hold {
   // Holds for `minutes` (1 to 240); haunt releases it then if the plugin hasn't.
   start: func(minutes: u32) -> result<_, string>;
-  // Ends the hold and shows the summary; how many notifications were held.
-  release: func() -> u32;
+  // Ends the hold; haunt shows the summary.
+  release: func();
 }
+
+// --- Draft: C, D and 5-10. The shapes are settled for plugins to build against; the host doesn't link
+// --- these imports yet, and a manifest asking for their capabilities doesn't install yet.
 
 // Capability `sidebar_top`. One row above every group in the sidebar, drawn like a tab row; the first
 // plugin to set it owns it until it sets `none`. Text is plain; title cut to 32, sub and right to 24.

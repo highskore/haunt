@@ -217,6 +217,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
         super.init(window: win)
         win.delegate = self
         bridge.panels.host = self
+        bridge.openTab = { [weak self] id in self?.open(id) }
 
         #if HAUNT_FIXTURES
         if fixture != nil, let path = ProcessInfo.processInfo.environment["HAUNT_BACKDROP"], let image = NSImage(contentsOfFile: path) {

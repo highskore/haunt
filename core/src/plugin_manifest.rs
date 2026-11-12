@@ -58,6 +58,7 @@ pub struct Capabilities {
     pub decorate: bool,
     pub timer: bool,
     pub panel: bool,
+    pub notify_hold: bool,
     pub fs_read: Vec<String>,
     pub fs_write: Vec<String>,
     pub net: Vec<String>,
@@ -180,6 +181,9 @@ impl Capabilities {
         if self.notifications {
             out.push(("can show notifications with action buttons".into(), false));
         }
+        if self.notify_hold {
+            out.push(("can hold Haunt's notifications for up to 4 hours, then show one summary (never a permission prompt's)".into(), false));
+        }
         if self.decisions_read {
             out.push(("can read your whole permission decision log: every command and file path an agent asked to use, its folder, tab and your answer; these can contain secrets".into(), false));
         }
@@ -228,6 +232,7 @@ impl Capabilities {
             decorate: self.decorate && !old.decorate,
             timer: self.timer && !old.timer,
             panel: self.panel && !old.panel,
+            notify_hold: self.notify_hold && !old.notify_hold,
             fs_read: self.fs_read.iter().filter(|g| !old.fs_read.contains(g)).cloned().collect(),
             fs_write: self.fs_write.iter().filter(|g| !old.fs_write.contains(g)).cloned().collect(),
             ..Default::default()
@@ -473,6 +478,8 @@ mod tests {
         assert!(lines.iter().any(|(l, red)| l.contains("label, a bar or a sparkline") && !red));
         assert!(lines.iter().any(|(l, red)| l.contains("every 15 seconds") && !red));
         assert!(lines.iter().any(|(l, red)| l.starts_with("can show its own panels") && *red));
+        let hold = Manifest::parse(&manifest("notify_hold = true")).unwrap().capabilities.describe();
+        assert!(hold.iter().any(|(l, red)| l.contains("never a permission prompt's") && !red));
         assert!(lines.iter().any(|(l, red)| l.starts_with("can read files matching <the agent's project folder>/x") && *red));
         assert!(lines.iter().any(|(l, red)| l.starts_with("reads the commands, file paths and prompts") && *red));
     }

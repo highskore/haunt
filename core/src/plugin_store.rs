@@ -910,6 +910,11 @@ impl PluginSet {
         }
     }
 
+    /// The user chose an action on one of `plugin_id`'s notifications.
+    pub fn notify_action(&mut self, plugin_id: &str, action_id: &str, binding: &str) -> Result<(), PluginError> {
+        self.plugin(plugin_id)?.notify_action(action_id, binding)
+    }
+
     /// A button on show `generation` of one of `plugin_id`'s panels, or the user closing it (`action` empty).
     pub fn panel_action(&mut self, plugin_id: &str, panel_id: &str, generation: u64, action: &str) -> Result<(), PluginError> {
         if action.is_empty() && self.right_pane.as_ref().is_some_and(|(p, i)| p == plugin_id && i == panel_id) {

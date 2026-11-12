@@ -174,12 +174,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Fixtures and HAUNT_INACTIVE launches never post: they would land in the user's Notification Center.
     private func startNotifications(_ c: MainWindowController) {
         let center = SystemNoteCenter()
-        let n = AgentNotifier(center: center, core: core,
+        let n = AgentNotifier(center: HoldingNoteCenter(center, hold: c.bridge.hold), core: core,
                               press: { [weak c] key, id in c?.press(key, to: id) },
                               open: { [weak c] id in c?.open(id) },
                               isFocused: { [weak c] id in c?.isFocused(id) ?? false })
         n.settings = config.notifications
         center.onResponse = { [weak n] action, surface, key in n?.respond(action, surfaceId: surface, requestKey: key) }
+        center.onPluginResponse = { [weak c] plugin, action, binding in
+            c?.bridge.notificationChosen(pluginId: plugin, action: action, binding: binding)
+        }
         center.presentsGhosttyNote = { [weak self] note in self?.ghostty.shouldPresentNotification(notification: note) ?? true }
         notifier = n
         noteCenter = center

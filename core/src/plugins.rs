@@ -27,7 +27,7 @@ mod bindings {
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
-    allowlist as wallow, clock as wclock, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
+    allowlist as wallow, clock as wclock, hold as whold, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
     sidebar as wside, theme as wtheme, timer as wtimer, typing as wtyping, types as wit,
 };
 pub(crate) use bindings::haunt::plugin::panel as wpanel;
@@ -42,6 +42,7 @@ const CALL_TICKS: u64 = 5;
 const PTY_PER_SEC: usize = 10;
 const MAX_PALETTE: usize = 64;
 const MAX_OUTBOX: usize = 256;
+const MAX_NOTIFIED: usize = 64;
 const MAX_LOGS: usize = 1000;
 const MAX_STR: usize = 4096;
 /// Characters, not bytes, of a registered command or mode title.
@@ -112,6 +113,10 @@ pub enum HostRequest {
     PtyType { plugin_id: String, surface: String, text: String, enter: bool },
     /// Show `panel`, or replace the one this plugin showed with its id.
     ShowPanel { plugin_id: String, plugin_name: String, panel: Panel },
+    /// Hold haunt's and other plugins' notifications (never a permission prompt's) for `minutes`, then
+    /// show one summary; the app releases it then itself.
+    HoldNotifications { plugin_id: String, plugin_name: String, minutes: u32 },
+    ReleaseNotifications { plugin_id: String },
     ClosePanel { plugin_id: String, id: String },
 }
 
@@ -225,6 +230,8 @@ pub struct HostState {
     /// The `timer.every` interval and when `on-tick` is next due.
     timer: Option<(Duration, Instant)>,
     panels: Panels,
+    /// (action id, binding) of this run's recent notifications: the only replies `notify_action` takes.
+    notified: VecDeque<(String, String)>,
     theme: Arc<Theme>,
     /// The tab focused when the user ran one of this plugin's commands, while that call runs.
     typing_into: Option<String>,
@@ -234,6 +241,9 @@ impl Drop for HostState {
     fn drop(&mut self) {
         self.release_sidebar();
         self.release_rows();
+        if let Some(c) = &self.core {
+            c.release_notifications(&self.id);
+        }
     }
 }
 
@@ -262,6 +272,7 @@ impl HostState {
             rows: core.as_ref().filter(|_| caps.decorate).map(|c| c.attach_rows(id)),
             timer: None,
             panels: Panels::default(),
+            notified: VecDeque::new(),
             core,
             theme: Theme::default_shared(),
             typing_into: None,
@@ -402,9 +413,17 @@ impl wnotify::Host for HostState {
         if actions.len() > 4 {
             return Err("at most 4 actions".into());
         }
-        let actions = actions.into_iter().map(|a| NotifyAction { id: clip(a.id), title: clip(a.title) }).collect();
-        let r = HostRequest::Notify { plugin_id: self.id.clone(), title: clip(title), body: clip(body), actions, binding: binding.map(clip) };
-        self.request(r)
+        let actions: Vec<NotifyAction> = actions.into_iter().map(|a| NotifyAction { id: clip(a.id), title: clip(a.title) }).collect();
+        let binding = binding.map(clip);
+        let r = HostRequest::Notify { plugin_id: self.id.clone(), title: clip(title), body: clip(body), actions: actions.clone(), binding: binding.clone() };
+        self.request(r)?;
+        for a in actions {
+            if self.notified.len() >= MAX_NOTIFIED {
+                self.notified.pop_front();
+            }
+            self.notified.push_back((a.id, binding.clone().unwrap_or_default()));
+        }
+        Ok(())
     }
 }
 
@@ -622,6 +641,34 @@ impl HostState {
         for id in std::mem::take(&mut self.panels).ids() {
             self.outbox.push(HostRequest::ClosePanel { plugin_id: self.id.clone(), id });
         }
+    }
+
+    /// A disabled plugin's hold ends, so it can't keep notifications away.
+    fn release_hold(&mut self) {
+        if self.core.as_ref().is_some_and(|c| c.release_notifications(&self.id)) {
+            self.outbox.push(HostRequest::ReleaseNotifications { plugin_id: self.id.clone() });
+        }
+    }
+}
+
+pub const HOLD_MAX_MINUTES: u32 = 240;
+
+impl whold::Host for HostState {
+    fn start(&mut self, minutes: u32) -> Result<(), String> {
+        if !(1..=HOLD_MAX_MINUTES).contains(&minutes) {
+            return Err(format!("a hold is 1 to {HOLD_MAX_MINUTES} minutes"));
+        }
+        if self.outbox.len() >= MAX_OUTBOX {
+            return Err("too many pending requests".into());
+        }
+        let core = self.core.as_ref().ok_or("no haunt core")?;
+        core.hold_notifications(&self.id, Instant::now() + Duration::from_secs(u64::from(minutes) * 60))?;
+        let (plugin_id, plugin_name) = (self.id.clone(), self.name.clone());
+        self.request(HostRequest::HoldNotifications { plugin_id, plugin_name, minutes })
+    }
+
+    fn release(&mut self) {
+        self.release_hold();
     }
 }
 
@@ -853,6 +900,7 @@ impl LoadedPlugin {
             data.release_sidebar();
             data.release_rows();
             data.close_panels();
+            data.release_hold();
             PluginError(why)
         })
     }
@@ -933,6 +981,15 @@ impl LoadedPlugin {
 
     pub fn on_action(&mut self, action_id: &str, payload: &str) -> Result<(), PluginError> {
         self.call(|b, s| b.call_on_action(s, action_id, payload))
+    }
+
+    /// The user chose action `action_id` on a notification bound to `binding` (empty: none):
+    /// `on-action(action_id, binding)`, only for an action this plugin posted in this run.
+    pub fn notify_action(&mut self, action_id: &str, binding: &str) -> Result<(), PluginError> {
+        if !self.store.data().notified.iter().any(|(a, b)| a == action_id && b == binding) {
+            return Err(PluginError(format!("no notification action {action_id:?}")));
+        }
+        self.on_action(action_id, binding)
     }
 
     /// The user ran palette item `action_id` (from the palette or its key): `typing` may type into the
@@ -1026,6 +1083,9 @@ impl PluginHost {
         }
         if caps.notifications {
             wnotify::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if caps.notify_hold {
+            whold::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.pty_write {
             wpty::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
@@ -1457,6 +1517,46 @@ mod tests {
         let still = decoration(wrows::Decoration { suffix: long(), ..deco("a") }).unwrap();
         let ticker = decoration(wrows::Decoration { suffix: long(), scroll: true, ..deco("a") }).unwrap();
         assert_eq!((still.suffix.unwrap().len(), ticker.suffix.unwrap().len()), (decorate::SUFFIX_MAX, decorate::TICKER_MAX));
+    }
+
+    #[test]
+    fn one_plugin_holds_notifications_at_a_time_and_a_dropped_one_lets_go() {
+        use whold::Host as _;
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/hold@0.5.0" (instance (export "release" (func)))))"#).unwrap();
+        assert!(host.check_links(&c, &Capabilities { notifications: true, ..Default::default() }).unwrap_err().0.contains("haunt:plugin/hold"));
+        host.check_links(&c, &Capabilities { notify_hold: true, ..Default::default() }).unwrap();
+
+        let core = crate::Core::new(&*tempdir("hold"));
+        let caps = Capabilities { notify_hold: true, ..Default::default() };
+        let mut focus = HostState::new("dev.x.focus", &caps, None, None, Some(core.handle()));
+        let mut other = HostState::new("dev.x.other", &caps, None, None, Some(core.handle()));
+        assert!(focus.start(0).is_err() && focus.start(HOLD_MAX_MINUTES + 1).is_err());
+        focus.start(25).unwrap();
+        assert!(other.start(5).unwrap_err().contains("dev.x.focus"));
+        other.release();
+        assert!(matches!(&focus.outbox[..], [HostRequest::HoldNotifications { plugin_id, minutes: 25, .. }] if plugin_id == "dev.x.focus"));
+        assert!(other.outbox.is_empty(), "releasing someone else's hold does nothing");
+        focus.release();
+        assert!(matches!(focus.outbox.last(), Some(HostRequest::ReleaseNotifications { plugin_id }) if plugin_id == "dev.x.focus"));
+        other.start(5).unwrap();
+        drop(other);
+        focus.start(5).unwrap();
+    }
+
+    #[test]
+    fn only_a_posted_notification_action_reaches_the_plugin() {
+        use wnotify::Host as _;
+        let mut st = HostState::new("dev.x.n", &Capabilities { notifications: true, ..Default::default() }, None, None, None);
+        let action = |id: &str| wnotify::Action { id: id.into(), title: "Open".into() };
+        st.notify("CI".into(), "red".into(), vec![action("open-pr")], Some("tab-1".into())).unwrap();
+        assert!(st.notified.contains(&("open-pr".into(), "tab-1".into())));
+        assert!(st.notify("x".into(), String::new(), (0..5).map(|i| action(&i.to_string())).collect(), None).is_err());
+        for i in 0..MAX_NOTIFIED {
+            st.notify("x".into(), String::new(), vec![action(&i.to_string())], None).unwrap();
+        }
+        assert_eq!(st.notified.len(), MAX_NOTIFIED);
+        assert!(!st.notified.iter().any(|(a, _)| a == "open-pr"), "oldest first out");
     }
 
     #[test]

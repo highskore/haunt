@@ -8,6 +8,23 @@ final class SystemNoteCenter: NSObject, NoteCenter, UNUserNotificationCenterDele
 
     /// On the main queue: the action, and the note's surface and request key.
     var onResponse: ((NoteAction, String?, UInt64?) -> Void)?
+    /// On the main queue: a plugin's note was chosen, as (plugin id, its action id or "", binding or "").
+    var onPluginResponse: ((String, String, String) -> Void)?
+
+    static let pluginKey = "pluginId", bindingKey = "binding"
+    private static let pluginAction = "plugin."
+
+    /// A category for a plugin's action buttons, named by its actions so equal sets share one.
+    static func pluginCategory(_ actions: [NotifyAction], foreground: Bool) -> UNNotificationCategory {
+        var h: UInt64 = 0xcbf29ce484222325
+        for b in actions.map({ "\($0.id)\u{1f}\($0.title)" }).joined(separator: "\u{1e}").utf8 + [foreground ? 1 : 0] {
+            h = (h ^ UInt64(b)) &* 0x100000001b3
+        }
+        let acts = actions.map {
+            UNNotificationAction(identifier: pluginAction + $0.id, title: $0.title, options: foreground ? [.foreground] : [])
+        }
+        return UNNotificationCategory(identifier: "dev.haunt.plugin.\(String(h, radix: 16))", actions: acts, intentIdentifiers: [])
+    }
     /// Whether one of Ghostty's own notes shows while Haunt is in front: not over the surface it came from.
     var presentsGhosttyNote: (UNNotification) -> Bool = { _ in true }
 
@@ -83,6 +100,17 @@ final class SystemNoteCenter: NSObject, NoteCenter, UNUserNotificationCenterDele
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
+        let info = response.notification.request.content.userInfo
+        if let plugin = info[Self.pluginKey] as? String {
+            let id = response.actionIdentifier
+            let action = id.hasPrefix(Self.pluginAction) ? String(id.dropFirst(Self.pluginAction.count)) : ""
+            let binding = info[Self.bindingKey] as? String ?? ""
+            DispatchQueue.main.async { [weak self] in
+                if id != UNNotificationDismissActionIdentifier { self?.onPluginResponse?(plugin, action, binding) }
+                completionHandler()
+            }
+            return
+        }
         let action: NoteAction?
         switch response.actionIdentifier {
         case "allow": action = .allow
@@ -90,7 +118,6 @@ final class SystemNoteCenter: NSObject, NoteCenter, UNUserNotificationCenterDele
         case "open", UNNotificationDefaultActionIdentifier: action = .open
         default: action = nil
         }
-        let info = response.notification.request.content.userInfo
         let (surface, key) = AgentNote.target(info)
         DispatchQueue.main.async { [weak self] in
             if let action { self?.onResponse?(action, surface, key) }
