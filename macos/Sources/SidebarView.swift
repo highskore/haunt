@@ -670,7 +670,6 @@ final class SidebarView: NSView, NSTextFieldDelegate {
 
         // Line 1: icon, name, status.
         let icon = NSRect(x: left, y: y + (rowLine1 - Tok.Size.iconSize) / 2, width: Tok.Size.iconSize, height: Tok.Size.iconSize)
-        drawIcon(row.kind, in: icon, ctx: ctx)
         if row.needsYou && !l.hovered {
             let textH = Tok.Size.rowRight * lh
             let run = NSRect(x: right - l.statusW, y: y + (rowLine1 - textH) / 2, width: l.statusW, height: textH)
@@ -678,6 +677,8 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             let ink = fx.needsPill ? Layers.Run(rect: run, ink: Theme.current.app.pillFg, on: Theme.current.app.pillBg) : Layers.Run(rect: run, ink: Tok.Color.needs)
             Layers.draw("status.needs", run, within: bounds, textRun: run, text: [ink], base: base, state: state, in: ctx)
         }
+        // After the row's last layer: the icon's glyph is text.
+        drawIcon(row.kind, in: icon, ctx: ctx)
 
         if l.hovered {
             let r = closeRect(top: top)

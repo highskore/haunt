@@ -51,6 +51,33 @@ check(view.inputGlyph == "⌕", "and the field's glyph is Haunt's")
 Theme.current = Theme()
 Theme.statusCheck = { _ in true }
 
+// A dialog's caption, buttons and their labels are drawn over the palette's layers: an opaque layer in the
+// palette's own colour leaves the buttons as they were.
+func snapshot() -> NSBitmapImageRep {
+    let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+    view.cacheDisplay(in: view.bounds, to: rep)
+    Layers.endFrame()
+    return rep
+}
+Theme.current.effects.paletteFrame = "dialog"
+view.update(chip: nil, query: "", placeholder: "", rows: [row("a")], foot: [], maxRows: 8)
+let plain = snapshot()
+let cover = [LayerSpec(id: "cover", slot: "palette", prims: [PrimSpec(kind: "rect", fill: Tok.Color.paletteBg.themeHex)])]
+Layers.set(Layers.resolve(cover, images: [], theme: Theme.current).0, source: LayerSource(specs: cover))
+let covered = snapshot()
+Layers.set([], source: LayerSource())
+// Every pixel the dialog inks inside its outer bevel, compared by its colour, is the same with the layer.
+let bg = plain.colorAt(x: 10, y: 60)
+var lost = 0
+for y in 4..<(plain.pixelsHigh - 4) {
+    for x in 4..<(plain.pixelsWide - 4) {
+        let was = plain.colorAt(x: x, y: y)
+        if was != bg && was != covered.colorAt(x: x, y: y) { lost += 1 }
+    }
+}
+check(lost == 0, "an opaque palette layer leaves the dialog's caption, buttons and labels: \(lost) px lost")
+Theme.current = Theme()
+
 if failures > 0 {
     print("\(failures) failed")
     exit(1)

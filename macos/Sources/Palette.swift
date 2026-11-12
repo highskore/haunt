@@ -606,7 +606,6 @@ final class PaletteView: NSView {
         if dialog {
             Draw.fill(bounds, Tok.Color.paletteBg)
             Draw.bevel(bounds, "out")
-            drawDialog(ctx)
         } else if glass {
             let shape = NSBezierPath(roundedRect: bounds, xRadius: r, yRadius: r)
             Tok.Color.paletteBg.setFill()
@@ -631,6 +630,8 @@ final class PaletteView: NSView {
         }
 
         Layers.draw("palette", bounds, state: Layers.state(self), in: ctx)
+        // The dialog's caption, buttons and labels go over the palette's layers, like every other text.
+        if dialog { drawDialog(ctx) }
         ctx.saveGState()
         ctx.translateBy(x: edge, y: edge)
         if dialog {
@@ -668,7 +669,8 @@ final class PaletteView: NSView {
         let small = Draw.ui(Tok.Size.paletteSmallFont), smallH = Tok.Size.paletteSmallFont * lh
         let headerLine = header.map { Draw.line($0, Draw.ui(Tok.Size.paletteSmallFont, .bold), app.rowSelectInk) }
         let headerRun = headerLine.map { NSRect(x: cap.minX + 4, y: cap.minY + (cap.height - smallH) / 2, width: Draw.width($0), height: smallH) }
-        Layers.draw("palette.caption", cap, text: headerRun.map { [Layers.Run(rect: $0, ink: app.rowSelectInk)] } ?? [], state: state, in: ctx)
+        Layers.draw("palette.caption", cap, text: headerRun.map { [Layers.Run(rect: $0, ink: app.rowSelectInk)] } ?? [],
+                    base: stops.count > 1 ? stops : [app.rowSelectFill], state: state, in: ctx)
         let top = edge + headH, pad = padX
         // The input glyph labels the field from outside it, like the card's "Open:".
         var fx = x0 + pad
