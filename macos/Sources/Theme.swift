@@ -39,7 +39,51 @@ extension Theme {
         for (k, v) in (toml["effects"] ?? [:]).sorted(by: { $0.key < $1.key }) {
             if let why = effects.set(k, v) { problems.append("\(file): effects.\(k): \(why), ignored") }
         }
+        for (k, v) in (toml["strings"] ?? [:]).sorted(by: { $0.key < $1.key }) {
+            if let why = setString(k, v) { problems.append("\(file): strings.\(k): \(why), ignored") }
+        }
         return problems
+    }
+
+    /// The places a theme may word, each one plain line; `{day.roman}`, `{month.roman}`, `{year.roman}`,
+    /// `{agents}` and `{agents.roman}` fill in when drawn.
+    static let stringKeys: Set<String> = ["row.sub.prefix", "titlebar.right", "palette.header", "palette.foot", "palette.input.glyph", "sidebar.foot"]
+    static let maxStringLength = 48
+
+    private mutating func setString(_ name: String, _ value: TOML.Value) -> String? {
+        guard Self.stringKeys.contains(name) else { return "unknown string" }
+        guard case let .scalar(s) = value else { return "not a string" }
+        guard s.count <= Self.maxStringLength else { return "longer than \(Self.maxStringLength) characters" }
+        guard s.unicodeScalars.allSatisfy({ !TitleFormat.hidden($0) }) else { return "not one plain line" }
+        app.strings[name] = s
+        return nil
+    }
+
+    /// The theme's words for `key` with its tokens filled in, or nil when it has none.
+    func string(_ key: String, agents: Int = 0, now: Date = Date()) -> String? {
+        guard var s = app.strings[key] else { return nil }
+        let d = Calendar(identifier: .gregorian).dateComponents([.day, .month, .year], from: now)
+        for (token, n) in [("{day.roman}", d.day ?? 0), ("{month.roman}", d.month ?? 0), ("{year.roman}", d.year ?? 0),
+                           ("{agents.roman}", agents)] {
+            s = s.replacingOccurrences(of: token, with: Self.roman(n))
+        }
+        return s.replacingOccurrences(of: "{agents}", with: String(agents))
+    }
+
+    /// 1–3999 in Roman numerals; anything else in digits.
+    static func roman(_ n: Int) -> String {
+        guard (1...3999).contains(n) else { return String(n) }
+        let table = [(1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
+                     (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
+        var n = n, out = ""
+        for (v, r) in table { while n >= v { out += r; n -= v } }
+        return out
+    }
+
+    /// `app.text.chrome`'s stops, or none if any isn't a colour.
+    var chromeStops: [NSColor] {
+        let c = app.textChrome.compactMap { NSColor(themeHex: $0) }
+        return c.count == app.textChrome.count ? c : []
     }
 
     /// nil when `name` took `value`; otherwise why not.
@@ -68,7 +112,9 @@ extension Theme {
             self[keyPath: path] = ns
         case let .string(path):
             guard case .scalar = value, !s[0].isEmpty else { return "not a string" }
-            if name.hasPrefix("font."), name != "font.mono.css", !Self.installed(s[0]) { return "font \(s[0]) isn't installed" }
+            if name.hasPrefix("font.") || name == "app.display.font", name != "font.mono.css", !Self.installed(s[0]) {
+                return "font \(s[0]) isn't installed"
+            }
             self[keyPath: path] = s[0]
         case let .strings(path):
             guard case .array = value else { return "not a list" }
@@ -166,7 +212,7 @@ extension Theme {
         "color.window.border", "color.zen.track",
         "app.scrim", "app.window.ring", "app.window.highlight", "app.palette.ring", "app.palette.highlight", "app.row.raised.ring",
         "app.row.raised.highlight", "app.row.raised.shadow", "app.row.hover", "app.pill.bg", "app.pill.ring", "app.palette.pill.highlight",
-        "app.palette.pill.mute",
+        "app.palette.pill.mute", "app.ornament", "app.ornament.dim", "app.titlebar.rule2", "app.bar.knob",
     ]
 
     /// Secondary text that may be see-through, down to `minAlpha`: its contrast is judged blended.
@@ -355,6 +401,7 @@ struct LoadedTheme {
             problems.append("color.palette.bg: a blurred palette needs at least \(Int(Self.minBlurTint * 100))% opacity, raised to it")
             theme.color.paletteBg = theme.color.paletteBg.withAlphaComponent(Self.minBlurTint)
         }
+        problems += checkChrome(over: base)
         let before = theme
         for (name, ratio) in theme.makeReadable() {
             if let p = Theme.colorPath(name), before[keyPath: p] != bw[keyPath: p] { problems.append(Self.faint(name, ratio)) }
@@ -375,6 +422,22 @@ struct LoadedTheme {
         }
         problems += terminalColors(over: bg)
         return problems
+    }
+
+    /// Chrome text must read at every stop on each background it is drawn over, and a pill's text on every stop;
+    /// otherwise the text is drawn flat.
+    private mutating func checkChrome(over base: NSColor) -> [String] {
+        guard !theme.app.textChrome.isEmpty else { return [] }
+        let stops = theme.chromeStops
+        let c = theme.color
+        let grounds = [c.windowBg, c.sidebarBg.over(c.windowBg), c.paletteBg].map { $0.over(base) }
+        let pill = theme.app.palettePillInk
+        let ok = !stops.isEmpty && stops.allSatisfy { s in
+            s.alphaComponent == 1 && grounds.allSatisfy { s.contrast($0) >= Self.minContrast } && pill.over(s).contrast(s) >= Self.minContrast
+        }
+        guard !ok else { return [] }
+        theme.app.textChrome = []
+        return ["app.text.chrome: every stop must be an opaque colour reading \(Int(Self.minContrast)):1 on its backgrounds, drawn flat instead"]
     }
 
     /// The least contrast a terminal colour needs against the background it is drawn on.

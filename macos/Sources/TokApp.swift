@@ -53,6 +53,28 @@ struct AppTokens: Equatable {
     var titleFg = NSColor(white: 1, alpha: 0.88)
     var titleMeta = NSColor(white: 1, alpha: 0.45)
     var titleFont: CGFloat = 13
+    /// A display face for the title's tab part, group labels and the palette header; empty keeps the UI font.
+    var displayFont = ""
+    /// Gradient stops, top to bottom, filling display text and a pill selection; empty draws them flat.
+    var textChrome: [String] = []
+    /// The title's other parts: type size (0 follows `title.font`) and letter spacing in em.
+    var titleMetaFont: CGFloat = 0
+    var titleMetaTracking: CGFloat = 0
+    var paletteHeaderFont: CGFloat = 18
+    /// `[strings] titlebar.right`'s type size and letter spacing in em, and `[effects] titlebar.double`'s rule.
+    var titlebarRightFont: CGFloat = 11
+    var titlebarRightTracking: CGFloat = 0
+    var titlebarRule2 = NSColor(white: 1, alpha: 0.06)
+    /// `[effects] progress.style = "dotted"`'s knob, and the gap between the sigil and the footer text.
+    var barKnob = NSColor.white
+    var sidebarFootGap: CGFloat = 6
+    /// Ornament lines and outlines, and the fainter rules and rings.
+    var ornament = NSColor(white: 1, alpha: 0.6)
+    var ornamentDim = NSColor(white: 1, alpha: 0.3)
+    /// `[effects] ornament`'s artwork opacity in the pane.
+    var ornamentAlpha: CGFloat = 0.07
+    /// `[strings]`: a theme's words for named places, checked like a title (see `Theme.stringKeys`).
+    var strings: [String: String] = [:]
     /// macOS's look for menus, sheets and alerts: "dark" or "light".
     var appearance = "dark"
 
@@ -93,6 +115,19 @@ struct AppTokens: Equatable {
         "app.title.fg": .color(\.app.titleFg),
         "app.title.meta": .color(\.app.titleMeta),
         "app.title.font": .number(\.app.titleFont),
+        "app.display.font": .string(\.app.displayFont),
+        "app.text.chrome": .strings(\.app.textChrome),
+        "app.title.meta.font": .number(\.app.titleMetaFont),
+        "app.title.meta.tracking": .number(\.app.titleMetaTracking),
+        "app.palette.header.font": .number(\.app.paletteHeaderFont),
+        "app.titlebar.right.font": .number(\.app.titlebarRightFont),
+        "app.titlebar.right.tracking": .number(\.app.titlebarRightTracking),
+        "app.titlebar.rule2": .color(\.app.titlebarRule2),
+        "app.bar.knob": .color(\.app.barKnob),
+        "app.sidebar.foot.gap": .number(\.app.sidebarFootGap),
+        "app.ornament": .color(\.app.ornament),
+        "app.ornament.dim": .color(\.app.ornamentDim),
+        "app.ornament.alpha": .number(\.app.ornamentAlpha),
     ]
 }
 
@@ -114,6 +149,9 @@ extension Tok {
         static var titleFg: NSColor { Theme.current.app.titleFg }
         static var titleMeta: NSColor { Theme.current.app.titleMeta }
         static var titleFont: CGFloat { Theme.current.app.titleFont }
+        static var ornament: NSColor { Theme.current.app.ornament }
+        static var sidebarFootGap: CGFloat { Theme.current.app.sidebarFootGap }
+        static var ornamentDim: NSColor { Theme.current.app.ornamentDim }
         static var appearance: NSAppearance? {
             NSAppearance(named: Theme.current.app.appearance == "light" ? .aqua : .darkAqua)
         }

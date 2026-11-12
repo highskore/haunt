@@ -23,6 +23,41 @@ final class RingView: NSView {
     }
 }
 
+/// Window artwork over everything, drawn from `[effects]`: the 1 pt border, and `ornament`'s pane watermark
+/// and corner marks.
+final class OrnamentView: NSView {
+    var pane = NSRect.zero { didSet { needsDisplay = true } }
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let fx = Theme.current.effects, app = Theme.current.app
+        if fx.ornament == "sigil" {
+            if pane.width > 0 {
+                ctx.saveGState()
+                ctx.clip(to: pane)
+                NSColor.white.withAlphaComponent(app.ornamentAlpha).setStroke()
+                Draw.sigil(at: NSPoint(x: pane.maxX + 60 - 520, y: pane.minY - 40), size: 520, stroke: 1.2)
+                ctx.restoreGState()
+            }
+            let corners = [NSPoint(x: 6, y: 6), NSPoint(x: bounds.width - 52, y: 6),
+                           NSPoint(x: bounds.width - 52, y: bounds.height - 52), NSPoint(x: 6, y: bounds.height - 52)]
+            for (i, o) in corners.enumerated() {
+                Draw.cornerOrnament(at: o, quarterTurns: i, bright: app.ornament, dim: app.ornamentDim, in: ctx)
+            }
+        }
+        if fx.windowBorder {
+            let hl = Tok.App.hairline
+            let edge = NSBezierPath(rect: bounds.insetBy(dx: hl / 2, dy: hl / 2))
+            edge.lineWidth = hl
+            Tok.Color.windowBorder.setStroke()
+            edge.stroke()
+        }
+    }
+}
+
 /// Lays out title bar, sidebar and pane at fixed mockup sizes; without the sidebar, mockup 10's.
 private final class RootView: NSView {
     let titleBar = TitleBarView()
@@ -37,6 +72,7 @@ private final class RootView: NSView {
     /// `[effects] window.material = "glass"`: the desktop, blurred, behind everything.
     let material = NSVisualEffectView()
     let ring = RingView()
+    let ornaments = OrnamentView()
     /// A fixture's stand-in for the desktop behind glass (HAUNT_BACKDROP), so captures don't depend on the wallpaper.
     var backdrop: NSImageView? {
         didSet {
@@ -98,7 +134,7 @@ private final class RootView: NSView {
         material.material = .hudWindow
         material.blendingMode = .behindWindow
         material.state = .active
-        for v in [material, titleBar, sidebar, topRow, pane, scrim, agents, toast, ring] { addSubview(v) }
+        for v in [material, titleBar, sidebar, topRow, pane, scrim, agents, toast, ring, ornaments] { addSubview(v) }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -112,8 +148,10 @@ private final class RootView: NSView {
         ring.radius = fx.windowRadius
         ring.ring = Theme.current.app.windowRing
         ring.highlight = Theme.current.app.windowHighlight
-        layer?.cornerRadius = fx.windowRadius
-        layer?.masksToBounds = fx.windowRadius > 0
+        layer?.cornerRadius = fx.windowSquare ? 0 : fx.windowRadius
+        layer?.masksToBounds = fx.windowRadius > 0 || fx.windowSquare
+        ornaments.isHidden = fx.ornament == "none" && !fx.windowBorder
+        ornaments.needsDisplay = true
     }
 
     override func layout() {
@@ -122,6 +160,7 @@ private final class RootView: NSView {
         material.frame = bounds
         backdrop?.frame = bounds
         ring.frame = bounds
+        ornaments.frame = bounds
         if agentsOn {
             toast.frame = toast.frame(in: bounds)
             return
@@ -140,6 +179,7 @@ private final class RootView: NSView {
         let rightW = rightPane == nil ? 0 : min(paneW, max(bounds.width - w - Tok.App.minPaneW, 0))
         pane.frame = NSRect(x: w, y: top, width: bounds.width - w - rightW, height: bounds.height - top)
         rightPane?.frame = NSRect(x: bounds.width - rightW, y: top, width: rightW, height: bounds.height - top)
+        ornaments.pane = pane.frame
         review?.frame = reviewCoversSidebar ? NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top) : pane.frame
         scrim.frame = NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top)
     }
@@ -581,7 +621,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
     /// A glass or rounded theme needs a see-through window, its shape drawn by the root view.
     private static func setBackground(_ win: NSWindow) {
         let fx = Theme.current.effects
-        let clear = fx.windowMaterial == "glass" || fx.windowRadius > 0
+        let clear = fx.windowMaterial == "glass" || fx.windowRadius > 0 || fx.windowSquare
         win.isOpaque = !clear
         win.backgroundColor = clear ? .clear : Tok.Color.windowBg
         win.invalidateShadow()

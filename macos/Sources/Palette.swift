@@ -140,7 +140,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
         didSet { view.singleLine = layout.singleLine && !view.plainMode }
     }
     /// The cards' bottom-right palette sits this far in from the window's right and bottom edges.
-    static let cornerInset: CGFloat = 22
+    static var cornerInset: CGFloat { Theme.current.effects.paletteInset }
     private var top: CGFloat = 0
 
     /// Centred on `parent`, `top` points below its top edge, or in its bottom-right corner growing upwards; the
@@ -499,7 +499,7 @@ final class PaletteView: NSView {
 
     /// `maxRows`, cut to what fits in `heightLimit` with every entry at its full (ruled) height.
     private var rowsShown: Int {
-        let fixed = 2 * edge + inputH + footH + Tok.Size.paletteListPad[0] * 2
+        let fixed = 2 * edge + headH + inputH + footH + Tok.Size.paletteListPad[0] * 2
         let entry = Tok.Size.paletteEntryPad[0] * 2 + textLines + (pill ? 0 : border)
         let fit = heightLimit.isFinite ? Int(((heightLimit - fixed) / entry).rounded(.down)) : maxRows
         return max(Self.minRows, min(maxRows, fit))
@@ -516,7 +516,17 @@ final class PaletteView: NSView {
     private var icons: Bool { !plainMode && Theme.current.effects.paletteIcons }
     private var width: CGFloat { panelW - 2 * edge }
     private var padX: CGFloat { Tok.Size.paletteInputPad[1] }
-    private var inputH: CGFloat { Tok.Size.paletteInputPad[0] * 2 + Tok.Size.paletteInputFont * lh + border }
+    private var inputH: CGFloat {
+        Tok.Size.paletteInputPad[0] * 2 + Tok.Size.paletteInputFont * lh + border + (inputRules ? 2 * Self.ruleMargin + border : 0)
+    }
+    /// `[effects] palette.header`: the header's height, its type set solid with 10 pt above and 4 below.
+    private var headH: CGFloat { header == nil ? 0 : 10 + Theme.current.app.paletteHeaderFont + 4 }
+    private var header: String? { plainMode || !Theme.current.effects.paletteHeader ? nil : Theme.current.string("palette.header") }
+    private var inputRules: Bool { !plainMode && Theme.current.effects.paletteInputRules }
+    /// `palette.input.rules`: the rules stand this far from the header and the list.
+    private static let ruleMargin: CGFloat = 6
+    /// The theme's own hints line, in place of the controller's.
+    private var footText: String? { plainMode ? nil : Theme.current.string("palette.foot") }
     /// An entry's content height: its text, or its icon when that is taller, as in the mockup's grid.
     private var textLines: CGFloat {
         let text = singleLine ? max(Tok.Size.paletteFont, Tok.Size.paletteSmallFont) * lh : Tok.Size.paletteFont * lh + Tok.Size.paletteSmallFont * lh
@@ -540,7 +550,7 @@ final class PaletteView: NSView {
 
     /// Content heights are whole points; the mockup's foot ends at a fractional .25 that its crop drops.
     override var fittingSize: NSSize {
-        NSSize(width: panelW, height: (inputH + listH + footH).rounded(.down) + 2 * edge)
+        NSSize(width: panelW, height: (headH + inputH + listH + footH).rounded(.down) + 2 * edge)
     }
 
     // MARK: Drawing
@@ -570,6 +580,11 @@ final class PaletteView: NSView {
 
         ctx.saveGState()
         ctx.translateBy(x: edge, y: edge)
+        if let header, let f = Draw.display(Theme.current.app.paletteHeaderFont) {
+            let line = Draw.line(header, f, Tok.Color.paletteInk), size = Theme.current.app.paletteHeaderFont
+            Draw.chromeText(line, font: f, x: ((width - Draw.width(line)) / 2).rounded(), top: 10, lineHeight: size, in: ctx)
+        }
+        ctx.translateBy(x: 0, y: headH)
         drawInput(ctx)
         var y = inputH + Tok.Size.paletteListPad[0]
         for i in visible {
@@ -589,13 +604,20 @@ final class PaletteView: NSView {
     }
 
     private func drawInput(_ ctx: CGContext) {
+        let ruleX = Tok.Size.paletteListPad[1]
+        if inputRules {
+            Draw.fill(NSRect(x: ruleX, y: Self.ruleMargin, width: width - 2 * ruleX, height: border), Tok.Color.paletteRule)
+            ctx.saveGState()
+            ctx.translateBy(x: 0, y: Self.ruleMargin + border)
+        }
+        defer { if inputRules { ctx.restoreGState() } }
         let padY = Tok.Size.paletteInputPad[0], gap = Tok.Size.paletteInputGap
         let lineH = Tok.Size.paletteInputFont * lh
         let mid = padY + lineH / 2
         var x = padX
         if Theme.current.effects.paletteInputIcon {
             let f = Draw.ui(Tok.Size.paletteInputFont - 1)
-            let glyph = Draw.line("⌕", f, Tok.Color.paletteMute)
+            let glyph = Draw.line(plainMode ? "⌕" : Theme.current.string("palette.input.glyph") ?? "⌕", f, Tok.Color.paletteMute)
             Draw.text(glyph, font: f, x: x, top: padY, lineHeight: lineH, in: ctx)
             x += Draw.width(glyph) + Tok.Size.paletteInputGap
         }
@@ -623,7 +645,12 @@ final class PaletteView: NSView {
             Draw.text(line, font: f, x: x + gap, top: padY, lineHeight: lineH, in: ctx)
         }
         drawKey("esc", right: width - padX, mid: mid, font: Tok.Size.paletteSmallFont, ctx: ctx)
-        Draw.fill(NSRect(x: 0, y: inputH - border, width: width, height: border), Tok.Color.paletteRule)
+        let bottom = padY * 2 + lineH
+        if inputRules {
+            Draw.fill(NSRect(x: ruleX, y: bottom, width: width - 2 * ruleX, height: border), Tok.Color.paletteRule)
+        } else {
+            Draw.fill(NSRect(x: 0, y: bottom, width: width, height: border), Tok.Color.paletteRule)
+        }
     }
 
     /// The mockup's `.kbd` (and `.jmp` with its own font and line height), right-aligned at `right`.
@@ -668,6 +695,8 @@ final class PaletteView: NSView {
             shape.fill()
             NSGraphicsContext.saveGraphicsState()
             shape.addClip()
+            let stops = Theme.current.chromeStops
+            if !stops.isEmpty { Draw.chrome(box, stops, in: ctx) }
             Draw.fill(NSRect(x: box.minX, y: top, width: box.width, height: border), app.palettePillHighlight)
             NSGraphicsContext.restoreGraphicsState()
         } else if isSel && plainMode {
@@ -762,8 +791,14 @@ final class PaletteView: NSView {
     }
 
     private func drawFoot(top: CGFloat, ctx: CGContext) {
-        Draw.fill(NSRect(x: 0, y: top, width: width, height: border), Tok.Color.paletteRule)
         let f = mono(Tok.Size.paletteSmallFont), h = Tok.Size.paletteSmallFont * lh
+        if let footText {
+            let size = Tok.Size.paletteSmallFont
+            let line = Draw.line(footText, f, Tok.Color.paletteMute, kern: size * 0.25)
+            Draw.text(line, font: f, x: ((width - Draw.width(line)) / 2).rounded(), top: top + border + Tok.Size.paletteFootPad[0], lineHeight: h, in: ctx)
+            return
+        }
+        Draw.fill(NSRect(x: 0, y: top, width: width, height: border), Tok.Color.paletteRule)
         var x = Tok.Size.paletteFootPad[1]
         for hint in foot {
             let line = Draw.line(hint, f, Tok.Color.paletteMute)
@@ -815,7 +850,7 @@ final class PaletteView: NSView {
 
     /// The visible entry at `p`, in view coordinates.
     private func entry(at p: NSPoint) -> Int? {
-        var y = edge + inputH + Tok.Size.paletteListPad[0]
+        var y = edge + headH + inputH + Tok.Size.paletteListPad[0]
         for i in visible {
             let h = entryH(i)
             if p.y >= y && p.y < y + h { return i }

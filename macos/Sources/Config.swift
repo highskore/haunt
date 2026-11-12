@@ -563,6 +563,9 @@ enum TitleFormat {
             if rest.hasPrefix("{tab}") {
                 out.append((tab, true))
                 rest = rest.dropFirst(5)
+            } else if rest.hasPrefix("{app}") {
+                out.append(("Haunt", true))
+                rest = rest.dropFirst(5)
             } else if rest.hasPrefix("{meta}") {
                 if meta.isEmpty, let last = out.last, !last.1 { out.removeLast() }
                 if !meta.isEmpty { out.append((meta, false)) }

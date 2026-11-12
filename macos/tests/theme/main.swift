@@ -440,5 +440,43 @@ check(pickCfg.themeName == "fxglass" && (try! String(contentsOf: home.appendingP
       "choosing saves and applies")
 Theme.current = Theme()
 
+// Ornament hooks are off in black and white, so it draws exactly as before them.
+let bwfx = Effects(), bwapp = AppTokens()
+check(!bwfx.windowSquare && !bwfx.windowBorder && !bwfx.titlebarDouble && bwfx.lightsShape == "circle" && bwfx.labelRule == "none"
+      && bwfx.rowSelect == "fill" && !bwfx.iconRing && bwfx.iconShell == "tile" && bwfx.progressStyle == "bar" && !bwfx.needsGlow
+      && bwfx.ornament == "none" && bwfx.paletteInset == 22 && !bwfx.paletteHeader && !bwfx.paletteInputRules,
+      "every ornament effect is off by default")
+check(bwapp.displayFont.isEmpty && bwapp.textChrome.isEmpty && bwapp.strings.isEmpty && Theme().chromeStops.isEmpty,
+      "and no display face, chrome or theme words")
+
+// [strings]: known places only, one plain line each, capped; tokens fill in when drawn.
+write(user, "words", """
+[strings]
+palette.header = "Invoke"
+titlebar.right = "{day.roman} · {month.roman} · {year.roman}"
+sidebar.foot = "AGENTS {agents.roman} ({agents})"
+palette.foot = "\u{202E}evil"
+row.sub.prefix = "\(String(repeating: "x", count: 49))"
+command = "rm -rf ~"
+""")
+let words = load("words")
+check(words.theme.app.strings["palette.header"] == "Invoke", "a string loads: \(words.problems)")
+check(words.theme.app.strings["palette.foot"] == nil && words.problems.contains { $0.contains("strings.palette.foot: not one plain line") },
+      "a bidi override is refused")
+check(words.theme.app.strings["row.sub.prefix"] == nil && words.problems.contains { $0.contains("strings.row.sub.prefix: longer") }, "so is a long one")
+check(words.theme.app.strings["command"] == nil && words.problems.contains { $0.contains("strings.command: unknown string") }, "and an unknown place")
+let day = DateComponents(calendar: Calendar(identifier: .gregorian), year: 2026, month: 11, day: 4).date!
+check(words.theme.string("titlebar.right", now: day) == "IV · XI · MMXXVI", "dates come from the clock, in Roman numerals")
+check(words.theme.string("sidebar.foot", agents: 4) == "AGENTS IV (4)" && words.theme.string("palette.foot") == nil, "and the agent count")
+check(Theme.roman(0) == "0" && Theme.roman(3999) == "MMMCMXCIX" && Theme.roman(1994) == "MCMXCIV", "roman numerals")
+
+// Chrome text is drawn flat unless every stop reads on every background it is drawn over.
+write(user, "chromeok", "[color]\nwindow.bg = \"#040405\"\nsidebar.bg = \"#060607\"\npalette.bg = \"#050506\"\n[app]\npalette.pill.ink = \"#050506\"\ntext.chrome = [\"#ffffff\", \"#5b5b62\", \"#e8e8ec\"]\n")
+write(user, "chromedim", "[color]\nwindow.bg = \"#040405\"\n[app]\ntext.chrome = [\"#ffffff\", \"#3a3a40\"]\n")
+write(user, "chromebad", "[app]\ntext.chrome = [\"#ffffff\", \"nope\"]\n")
+check(load("chromeok").theme.chromeStops.count == 3, "readable stops are kept: \(load("chromeok").problems)")
+check(load("chromedim").theme.app.textChrome.isEmpty && load("chromedim").problems.contains { $0.contains("app.text.chrome") }, "a dim stop drops the gradient")
+check(load("chromebad").theme.app.textChrome.isEmpty, "so does a stop that isn't a colour")
+
 print(failures == 0 ? "theme: all passed" : "theme: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

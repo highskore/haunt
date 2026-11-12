@@ -100,6 +100,23 @@ Some looks need more than colours and sizes. The `[effects]` table switches on e
 | `palette.keys` | `"box"`, `"plain"` | shortcuts in a box or as text |
 | `palette.modes` | `"styled"`, `"plain"` | a plugin mode's rows (the decision log) styled like the rest, or in the black-and-white layout and mono font with an inverted selection, inside the themed panel |
 | `palette.input.icon`, `palette.input.weight` | bool; `"regular"`, `"light"` | a search glyph before the query, and the query's weight |
+| `window.square`, `window.border` | bool | square corners instead of the system's, and a 1 pt `color.window.border` inside the edge |
+| `titlebar.double` | bool | a second rule (`app.titlebar.rule2`) just above the title bar's |
+| `lights.shape` | `"circle"`, `"diamond"` | the traffic lights at rest, diamonds outlined in `app.ornament` |
+| `label.rule` | `"none"`, `"diamond"` | a group label between a short rule and diamond and a rule fading to the edge |
+| `row.select` | `"fill"`, `"brackets"` | the selected row filled, or two corner brackets over a glow from its left edge |
+| `icon.ring`, `icon.shell` | bool; `"tile"`, `"diamond"` | rings around the agent icons, and the shell glyph on a tile or in a diamond |
+| `progress.style` | `"bar"`, `"dotted"` | the progress bar solid, or a dotted track with a fading fill and a diamond knob (`app.bar.knob`) |
+| `needs.glow` | bool | a glow behind the needs-you status |
+| `ornament` | `"none"`, `"sigil"` | artwork drawn in code: a sigil in the pane at `app.ornament.alpha` and at the sidebar's foot, and marks in the window's corners |
+| `palette.inset` | 0–80, default 22 | how far the bottom-right palette stands in from the window's edges |
+| `palette.header`, `palette.input.rules` | bool | `[strings] palette.header` above the input, and rules above and below the input |
+
+Every effect is off by default, so black and white draws as it did before them.
+
+**Display type.** `[app] display.font` names a face for the title's `{tab}` or `{app}` part, the group labels and the palette header. `[app] text.chrome` lists gradient stops, top to bottom, that fill that text and a pill selection; every stop must be opaque, read 3:1 on the window, sidebar and palette backgrounds, and carry `palette.pill.ink` at 3:1, or the text is drawn flat and the theme logged.
+
+**`[strings]`.** A theme may word six places: `titlebar.right`, `palette.header`, `palette.foot` (replacing the hints), `palette.input.glyph`, `sidebar.foot` (with `ornament`) and `row.sub.prefix` (before a subagent line). Each is one plain line of up to 48 characters, with no control, bidi or invisible characters; anything else is refused and logged. `{day.roman}`, `{month.roman}` and `{year.roman}` come from the clock, `{agents}` and `{agents.roman}` from the sidebar.
 
 ## How it works
 

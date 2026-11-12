@@ -99,6 +99,149 @@ enum Draw {
         ctx.restoreGState()
     }
 
+    /// `app.display.font`, when a theme names one.
+    static func display(_ size: CGFloat) -> NSFont? {
+        let family = Theme.current.app.displayFont
+        guard !family.isEmpty else { return nil }
+        return ThemeFonts.uiFont(family: family, weight: .regular, size: size)
+            ?? NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: size)
+    }
+
+    /// Like `text`, filled with `app.text.chrome` top to bottom over the glyphs when the theme has one: the
+    /// line is drawn into an alpha mask, and the gradient through it.
+    static func chromeText(_ line: CTLine, font: NSFont, x: CGFloat, top: CGFloat, lineHeight: CGFloat, in ctx: CGContext) {
+        let stops = Theme.current.chromeStops
+        guard !stops.isEmpty else { return text(line, font: font, x: x, top: top, lineHeight: lineHeight, in: ctx) }
+        let ascent = font.ascender.rounded(), descent = (-font.descender).rounded()
+        let box = NSRect(x: x.rounded(.down), y: top, width: (width(line) + 2).rounded(.up), height: lineHeight)
+        let scale = max(ctx.userSpaceToDeviceSpaceTransform.d.magnitude, 1)
+        let w = Int((box.width * scale).rounded(.up)), h = Int((box.height * scale).rounded(.up))
+        guard w > 0, h > 0, let mask = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                                 space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return }
+        // The mask is y-up; its baseline sits as `text` would put it in the y-down view.
+        mask.scaleBy(x: scale, y: scale)
+        let baseline = (lineHeight - ascent - descent) / 2 + ascent
+        mask.textPosition = CGPoint(x: x - box.minX, y: lineHeight - baseline)
+        // Each glyph run drawn white, whatever colour the line was made in: the mask takes coverage only.
+        mask.setFillColor(gray: 1, alpha: 1)
+        for run in (CTLineGetGlyphRuns(line) as? [CTRun]) ?? [] {
+            let n = CTRunGetGlyphCount(run)
+            var glyphs = [CGGlyph](repeating: 0, count: n), pos = [CGPoint](repeating: .zero, count: n)
+            CTRunGetGlyphs(run, CFRange(location: 0, length: n), &glyphs)
+            CTRunGetPositions(run, CFRange(location: 0, length: n), &pos)
+            let attrs = CTRunGetAttributes(run) as NSDictionary
+            guard let runFont = attrs[kCTFontAttributeName] else { continue }
+            // Positions are relative to the text position, which CTFontDrawGlyphs adds.
+            CTFontDrawGlyphs(runFont as! CTFont, glyphs, pos, n, mask)
+        }
+        guard let image = mask.makeImage() else { return }
+        ctx.saveGState()
+        // Flipped view: draw the y-up mask upside down so it lands the right way round.
+        ctx.translateBy(x: box.minX, y: box.maxY)
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.clip(to: CGRect(origin: .zero, size: box.size), mask: image)
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.translateBy(x: -box.minX, y: -box.maxY)
+        chrome(NSRect(x: box.minX, y: top + (lineHeight - ascent - descent) / 2, width: box.width, height: ascent + descent), stops, in: ctx)
+        ctx.restoreGState()
+    }
+
+    /// `rect` filled with `stops`, top to bottom, inside the current clip.
+    static func chrome(_ rect: NSRect, _ stops: [NSColor], in ctx: CGContext) {
+        guard let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: stops.map(\.cgColor) as CFArray,
+                                 locations: stops.indices.map { CGFloat($0) / CGFloat(max(stops.count - 1, 1)) }) else { return }
+        ctx.saveGState()
+        ctx.clip(to: rect)
+        ctx.drawLinearGradient(g, start: CGPoint(x: rect.minX, y: rect.minY), end: CGPoint(x: rect.minX, y: rect.maxY), options: [])
+        ctx.restoreGState()
+    }
+
+    /// A square turned 45°, `size` across its sides, stroked or filled in the current colour.
+    static func diamond(center c: NSPoint, size: CGFloat, stroke: CGFloat? = nil) {
+        let k = size / 2 * 2.squareRoot()
+        let p = NSBezierPath()
+        p.move(to: NSPoint(x: c.x, y: c.y - k)); p.line(to: NSPoint(x: c.x + k, y: c.y))
+        p.line(to: NSPoint(x: c.x, y: c.y + k)); p.line(to: NSPoint(x: c.x - k, y: c.y)); p.close()
+        if let stroke { p.lineWidth = stroke; p.stroke() } else { p.fill() }
+    }
+
+    /// The haunt-themes card's sigil, `size` across with its top-left at `origin`: rings, ticks, a seven-point
+    /// star, a triangle, a hub and nodes, stroked in the current colour.
+    static func sigil(at origin: NSPoint, size: CGFloat, stroke: CGFloat) {
+        let c = NSPoint(x: origin.x + size / 2, y: origin.y + size / 2)
+        let big = size * 0.46, mid = size * 0.41, tri = size * 0.28
+        func pts(_ n: Int, _ r: CGFloat, _ rot: CGFloat = -90) -> [NSPoint] {
+            (0..<n).map { i in
+                let a = (rot + CGFloat(i) * 360 / CGFloat(n)) * .pi / 180
+                return NSPoint(x: c.x + r * cos(a), y: c.y + r * sin(a))
+            }
+        }
+        func circle(_ r: CGFloat, dash: [CGFloat]? = nil) {
+            let p = NSBezierPath(ovalIn: NSRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+            p.lineWidth = stroke
+            if let dash { p.setLineDash(dash, count: dash.count, phase: 0) }
+            p.stroke()
+        }
+        func poly(_ q: [NSPoint]) {
+            let p = NSBezierPath()
+            for (i, x) in q.enumerated() { if i == 0 { p.move(to: x) } else { p.line(to: x) } }
+            p.close()
+            p.lineWidth = stroke
+            p.stroke()
+        }
+        func line(_ a: NSPoint, _ b: NSPoint) {
+            let p = NSBezierPath()
+            p.move(to: a); p.line(to: b)
+            p.lineWidth = stroke
+            p.stroke()
+        }
+        circle(big)
+        circle(big - 10, dash: [1, 4])
+        circle(mid)
+        let outer = pts(72, big)
+        for i in 0..<72 { line(outer[i], pts(72, big - (i % 6 == 0 ? 8 : 3))[i]) }
+        let seven = pts(7, mid)
+        poly((0..<7).map { seven[($0 * 3) % 7] })
+        poly(pts(3, tri, 90))
+        circle(size * 0.07)
+        line(NSPoint(x: c.x, y: c.y - mid), NSPoint(x: c.x, y: c.y + mid))
+        line(NSPoint(x: c.x - size * 0.1, y: c.y + size * 0.12), NSPoint(x: c.x + size * 0.1, y: c.y + size * 0.12))
+        for p in seven {
+            let r = size * 0.016
+            let dot = NSBezierPath(ovalIn: NSRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r))
+            dot.lineWidth = stroke
+            dot.stroke()
+        }
+    }
+
+    /// The card's 46 pt corner ornament for the top-left corner at `origin`, turned by `quarterTurns` × 90°
+    /// about its centre; `bright` strokes the outer frame and flourishes, `dim` the inner frame.
+    static func cornerOrnament(at origin: NSPoint, quarterTurns: Int, bright: NSColor, dim: NSColor, in ctx: CGContext) {
+        ctx.saveGState()
+        ctx.translateBy(x: origin.x + 23, y: origin.y + 23)
+        ctx.rotate(by: CGFloat(quarterTurns) * .pi / 2)
+        ctx.translateBy(x: -23, y: -23)
+        func path(_ build: (NSBezierPath) -> Void, _ color: NSColor) {
+            let p = NSBezierPath()
+            build(p)
+            p.lineWidth = 1
+            color.setStroke()
+            p.stroke()
+        }
+        path({ $0.move(to: NSPoint(x: 3, y: 43)); $0.line(to: NSPoint(x: 3, y: 3)); $0.line(to: NSPoint(x: 43, y: 3)) }, bright)
+        path({ $0.move(to: NSPoint(x: 8, y: 38)); $0.line(to: NSPoint(x: 8, y: 8)); $0.line(to: NSPoint(x: 38, y: 8)) }, dim)
+        path({ $0.move(to: NSPoint(x: 3, y: 14)); $0.curve(to: NSPoint(x: 14, y: 3), controlPoint1: NSPoint(x: 9, y: 14), controlPoint2: NSPoint(x: 14, y: 9)) }, bright)
+        path({ $0.appendOval(in: NSRect(x: 11.5, y: 11.5, width: 5, height: 5)) }, bright)
+        path({
+            $0.move(to: NSPoint(x: 14, y: 14)); $0.line(to: NSPoint(x: 23, y: 23))
+            $0.move(to: NSPoint(x: 18, y: 9)); $0.line(to: NSPoint(x: 21, y: 6))
+            $0.move(to: NSPoint(x: 9, y: 18)); $0.line(to: NSPoint(x: 6, y: 21))
+            $0.move(to: NSPoint(x: 28, y: 3)); $0.line(to: NSPoint(x: 31, y: 6)); $0.line(to: NSPoint(x: 34, y: 3))
+            $0.move(to: NSPoint(x: 3, y: 28)); $0.line(to: NSPoint(x: 6, y: 31)); $0.line(to: NSPoint(x: 3, y: 34))
+        }, bright)
+        ctx.restoreGState()
+    }
+
     /// Over what is there, so a theme's see-through colours layer as they do in the mockups.
     static func fill(_ rect: NSRect, _ color: NSColor) {
         color.setFill()

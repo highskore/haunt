@@ -316,7 +316,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
                 drawRow(row, top: top, height: height, ctx: ctx)
             }
         }
-        if Theme.current.effects.sidebarFooter, !panel { drawFooter(ctx) }
+        if Theme.current.effects.ornament == "sigil", !panel { drawSigilFooter(ctx) } else if Theme.current.effects.sidebarFooter, !panel { drawFooter(ctx) }
         if let d = drop {
             Draw.fill(NSRect(x: rowPadX, y: d.y - Tok.App.dropLine / 2,
                              width: contentWidth - 2 * rowPadX, height: Tok.App.dropLine), Tok.Color.textPrimary)
@@ -336,11 +336,24 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         Draw.text(line, font: f, x: pad[1], top: bounds.height - pad[2] - lineH, lineHeight: lineH, in: ctx)
     }
 
+    /// `[effects] ornament = "sigil"`: the sigil centred at the foot over `[strings] sidebar.foot`, or the agent count.
+    private func drawSigilFooter(_ ctx: CGContext) {
+        let n = Self.agentCount(snapshot), pad = Tok.App.sidebarFootPad, size = Tok.App.sidebarFootFont
+        let f = Draw.ui(size, .light), lineH = size * lh
+        let text = Theme.current.string("sidebar.foot", agents: n) ?? (n == 1 ? "1 agent" : "\(n) agents")
+        let line = Draw.truncated(Draw.line(text, f, Tok.App.sidebarFootFg, kern: size * 0.35), contentWidth - 2 * pad[1], f, Tok.App.sidebarFootFg)
+        let textTop = bounds.height - pad[2] - lineH
+        Draw.text(line, font: f, x: ((contentWidth - Draw.width(line)) / 2).rounded(), top: textTop, lineHeight: lineH, in: ctx)
+        let d: CGFloat = 56
+        Tok.App.ornamentDim.setStroke()
+        Draw.sigil(at: NSPoint(x: ((contentWidth - d) / 2).rounded(), y: textTop - Tok.App.sidebarFootGap - d), size: d, stroke: 1)
+    }
+
     /// Names for the row fonts; Draw keeps the only cache.
     private enum Fonts {
         static var label: NSFont {
             let w: [String: NSFont.Weight] = ["medium": .medium, "semibold": .semibold]
-            return Draw.ui(Tok.Size.labelFont, w[Theme.current.effects.labelWeight] ?? .regular)
+            return Draw.display(Tok.Size.labelFont) ?? Draw.ui(Tok.Size.labelFont, w[Theme.current.effects.labelWeight] ?? .regular)
         }
         static var status: NSFont { Draw.uiTabular(Tok.Size.rowRight) }
         static var name: NSFont { Draw.ui(Tok.Size.rowName) }
@@ -375,8 +388,33 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             labelLines[text] = l
             return l
         }()
-        Draw.text(line, font: Fonts.label, x: Tok.Size.labelPad[1], top: top + Tok.Size.labelPad[0],
-                  lineHeight: Tok.Size.labelFont * lh, in: ctx)
+        let lineTop = top + Tok.Size.labelPad[0], lineH = Tok.Size.labelFont * lh
+        guard Theme.current.effects.labelRule == "diamond" else {
+            return Draw.chromeText(line, font: Fonts.label, x: Tok.Size.labelPad[1], top: lineTop, lineHeight: lineH, in: ctx)
+        }
+        // ── ◇ Label ─────: a 14 pt rule, the diamond, the label, then a rule fading out towards the edge.
+        let gap: CGFloat = 8, lead: CGFloat = 14, d: CGFloat = 5, hl = Tok.App.hairline
+        let mid = (lineTop + lineH / 2).rounded() + hl / 2
+        var x = Tok.Size.labelPad[1]
+        Draw.chrome(NSRect(x: x, y: mid - hl, width: lead, height: hl), [Tok.Color.textMeta.withAlphaComponent(0), Tok.Color.textMeta], in: ctx)
+        x += lead + gap
+        Tok.App.ornament.setStroke()
+        Draw.diamond(center: NSPoint(x: x + d / 2 * 2.squareRoot(), y: mid - hl / 2), size: d, stroke: hl)
+        x += d * 2.squareRoot() + gap
+        Draw.chromeText(line, font: Fonts.label, x: x, top: lineTop, lineHeight: lineH, in: ctx)
+        x += Draw.width(line) + gap
+        let end = contentWidth - Tok.Size.labelPad[1]
+        if end > x { horizontalFade(NSRect(x: x, y: mid - hl, width: end - x, height: hl), from: Tok.Color.textMeta, ctx: ctx) }
+    }
+
+    /// A rule fading from `color` to nothing, left to right.
+    private func horizontalFade(_ r: NSRect, from color: NSColor, ctx: CGContext) {
+        guard let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [color.cgColor, color.withAlphaComponent(0).cgColor] as CFArray,
+                                 locations: [0, 1]) else { return }
+        ctx.saveGState()
+        ctx.clip(to: r)
+        ctx.drawLinearGradient(g, start: CGPoint(x: r.minX, y: r.midY), end: CGPoint(x: r.maxX, y: r.midY), options: [])
+        ctx.restoreGState()
     }
 
     /// A row's text, laid out once per change of the row, the width, or its hover (the × narrows the name).
@@ -446,7 +484,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let subs = row.subagents.map { s in
             let m = Draw.line(s.meta, Fonts.sub, Tok.Color.textSub)
             let mw = Draw.width(m)
-            let label = Draw.truncated(Draw.line("↳ " + s.label, Fonts.sub, Tok.Color.textSub),
+            let label = Draw.truncated(Draw.line((Theme.current.string("row.sub.prefix") ?? "↳ ") + s.label, Fonts.sub, Tok.Color.textSub),
                                        right - col2 - mw - Tok.Size.subGap, Fonts.sub, Tok.Color.textSub)
             return (label: label, meta: m, metaW: mw)
         }
@@ -461,7 +499,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let box = NSRect(x: fx.rowInset, y: top, width: contentWidth - 2 * fx.rowInset, height: height)
         let shape = NSBezierPath(roundedRect: box, xRadius: fx.rowRadius, yRadius: fx.rowRadius)
         if row.selected {
-            if fx.rowRaised { drawRaised(shape, box) } else {
+            if fx.rowSelect == "brackets" { drawBrackets(box, ctx: ctx) } else if fx.rowRaised { drawRaised(shape, box) } else {
                 Tok.Color.rowSelected.setFill()
                 shape.fill()
             }
@@ -509,8 +547,11 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         } else if let d = l.decor, d.rightWidth != nil {
             d.drawRight(right: right, top: y, height: rowLine1, lineHeight: Tok.Size.rowRight * lh, ctx: ctx)
         } else {
+            ctx.saveGState()
+            if row.needsYou && fx.needsGlow { ctx.setShadow(offset: .zero, blur: 8, color: Tok.Color.needs.withAlphaComponent(0.6).cgColor) }
             Draw.text(l.status, font: Fonts.status, x: right - l.statusW, top: y + (rowLine1 - Tok.Size.rowRight * lh) / 2,
                       lineHeight: Tok.Size.rowRight * lh, in: ctx)
+            ctx.restoreGState()
         }
         Draw.text(l.name, font: Fonts.name, x: col2, top: y + (rowLine1 - Tok.Size.rowName * lh) / 2,
                   lineHeight: Tok.Size.rowName * lh, in: ctx)
@@ -543,6 +584,31 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         }
     }
 
+    /// `[effects] row.select = "brackets"`: a glow from the left edge in `row.selected`, and two 9 pt corner
+    /// brackets, top left and bottom right.
+    private func drawBrackets(_ box: NSRect, ctx: CGContext) {
+        let c = Tok.Color.rowSelected
+        if let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [c.cgColor, c.withAlphaComponent(0).cgColor] as CFArray,
+                              locations: [0, 1]) {
+            ctx.saveGState()
+            ctx.clip(to: box)
+            ctx.translateBy(x: box.minX, y: box.midY)
+            ctx.scaleBy(x: 1.2, y: 1)
+            let r = box.height / 2 * 1.4
+            ctx.drawRadialGradient(g, startCenter: .zero, startRadius: 0, endCenter: .zero, endRadius: max(r, box.width * 0.7), options: [])
+            ctx.restoreGState()
+        }
+        let k: CGFloat = 9, inset: CGFloat = 6, v: CGFloat = 3, hl = Tok.App.hairline
+        let p = NSBezierPath()
+        p.move(to: NSPoint(x: box.minX + inset + hl / 2, y: box.minY + v + k)); p.line(to: NSPoint(x: box.minX + inset + hl / 2, y: box.minY + v + hl / 2))
+        p.line(to: NSPoint(x: box.minX + inset + k, y: box.minY + v + hl / 2))
+        p.move(to: NSPoint(x: box.maxX - inset - hl / 2, y: box.maxY - v - k)); p.line(to: NSPoint(x: box.maxX - inset - hl / 2, y: box.maxY - v - hl / 2))
+        p.line(to: NSPoint(x: box.maxX - inset - k, y: box.maxY - v - hl / 2))
+        p.lineWidth = hl
+        Tok.Color.textPrimary.setStroke()
+        p.stroke()
+    }
+
     /// `[effects] row.raised`: the fill with a soft shadow under it, a ring, and a highlight along the top.
     private func drawRaised(_ shape: NSBezierPath, _ box: NSRect) {
         let app = Theme.current.app, hl = Tok.App.hairline, r = Theme.current.effects.rowRadius
@@ -568,6 +634,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     /// The progress bar, with `[effects] bar.radius` and `bar.glow`.
     private func drawBar(_ track: NSRect, fill: NSRect) {
         let fx = Theme.current.effects, r = min(fx.barRadius, track.height / 2)
+        if fx.progressStyle == "dotted" { return drawDottedBar(track, fill: fill) }
         guard r > 0 || fx.barGlow else {
             Draw.fill(track, Tok.Color.barTrack)
             Draw.fill(fill, Tok.Color.barFill)
@@ -588,6 +655,30 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         NSGraphicsContext.restoreGraphicsState()
     }
 
+    /// `[effects] progress.style = "dotted"`: a 2-on 3-off track, a fill fading in from the track's colour, and a
+    /// glowing diamond knob at its end.
+    private func drawDottedBar(_ track: NSRect, fill: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        var x = track.minX
+        while x < track.maxX {
+            Draw.fill(NSRect(x: x, y: track.minY, width: min(2, track.maxX - x), height: track.height), Tok.Color.barTrack)
+            x += 5
+        }
+        guard fill.width > 0 else { return }
+        if let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [Tok.Color.barTrack.cgColor, Tok.Color.barFill.cgColor] as CFArray,
+                              locations: [0, 1]) {
+            ctx.saveGState()
+            ctx.clip(to: fill)
+            ctx.drawLinearGradient(g, start: CGPoint(x: fill.minX, y: fill.midY), end: CGPoint(x: fill.maxX, y: fill.midY), options: [])
+            ctx.restoreGState()
+        }
+        ctx.saveGState()
+        ctx.setShadow(offset: .zero, blur: 8, color: Theme.current.app.barKnob.cgColor)
+        Theme.current.app.barKnob.setFill()
+        Draw.diamond(center: NSPoint(x: fill.maxX, y: fill.midY), size: 6)
+        ctx.restoreGState()
+    }
+
     /// How far a raised row's shadow reaches past it, for redrawing.
     private var shadowReach: CGFloat {
         Theme.current.effects.rowRaised ? Theme.current.app.rowRaisedBlur + Theme.current.app.rowRaisedDrop : 0
@@ -597,18 +688,37 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         switch kind {
         case .claude:
             let s = Tok.Size.claudeIcon
+            if Theme.current.effects.iconRing { drawRings(r) }
             Draw.claudeMark(in: NSRect(x: r.midX - s / 2, y: r.midY - s / 2, width: s, height: s))
         case .codex:
             let s = Draw.openAIMarkSize
             let box = backingAlignedRect(NSRect(x: r.midX - s / 2, y: r.midY - s / 2, width: s, height: s),
                                          options: .alignAllEdgesNearest)
             Draw.codexMark(in: box, color: Tok.Color.textPrimary, ctx: ctx)
+        case .shell where Theme.current.effects.iconShell == "diamond":
+            let hl = Tok.App.hairline
+            Tok.App.ornamentDim.setStroke()
+            Draw.diamond(center: NSPoint(x: r.midX, y: r.midY), size: r.width * 14 / 18 - hl, stroke: hl)
+            let glyphLH = Tok.Size.iconGlyph * lh
+            Draw.text(shellGlyph, font: Fonts.glyph, x: r.midX - Draw.width(shellGlyph) / 2, top: r.midY - glyphLH / 2,
+                      lineHeight: glyphLH, in: ctx)
         case .shell:
             Tok.Color.iconBg.setFill()
             NSBezierPath(roundedRect: r, xRadius: Tok.Size.iconRadius, yRadius: Tok.Size.iconRadius).fill()
             let glyphLH = Tok.Size.iconGlyph * lh
             Draw.text(shellGlyph, font: Fonts.glyph, x: r.midX - Draw.width(shellGlyph) / 2, top: r.midY - glyphLH / 2,
                       lineHeight: glyphLH, in: ctx)
+        }
+    }
+
+    /// `[effects] icon.ring`: a ring on the icon's edge and a fainter one 3 pt out.
+    private func drawRings(_ r: NSRect) {
+        let hl = Tok.App.hairline
+        for (inset, color) in [(hl / 2, Tok.App.ornament), (-3 - hl / 2, Tok.App.ornamentDim)] {
+            let p = NSBezierPath(ovalIn: r.insetBy(dx: inset, dy: inset))
+            p.lineWidth = hl
+            color.setStroke()
+            p.stroke()
         }
     }
 

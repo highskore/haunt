@@ -100,6 +100,19 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
     private func drawLights() {
         for i in 0..<3 {
             let r = lightRect(i)
+            if Theme.current.effects.lightsShape == "diamond" && !lightsHover {
+                // An outlined diamond; the close light's carries an ×.
+                Tok.App.ornament.setStroke()
+                Draw.diamond(center: NSPoint(x: r.midX, y: r.midY), size: r.width * 0.61, stroke: 1)
+                if i == 0 {
+                    let k = r.width / 6, p = NSBezierPath()
+                    p.move(to: NSPoint(x: r.midX - k, y: r.midY - k)); p.line(to: NSPoint(x: r.midX + k, y: r.midY + k))
+                    p.move(to: NSPoint(x: r.midX + k, y: r.midY - k)); p.line(to: NSPoint(x: r.midX - k, y: r.midY + k))
+                    p.lineWidth = 1
+                    p.stroke()
+                }
+                continue
+            }
             (lightsHover || Theme.current.effects.titlebarLights == "color" ? Tok.Lights.fill[i] : Tok.Color.lights).setFill()
             NSBezierPath(ovalIn: r).fill()
             guard lightsHover else { continue }
@@ -200,6 +213,9 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
             }
         } else if Theme.current.effects.titlebarRule {
             Draw.fill(NSRect(x: 0, y: bounds.height - Tok.App.hairline, width: bounds.width, height: Tok.App.hairline), Tok.Color.hairline)
+            if Theme.current.effects.titlebarDouble {
+                Draw.fill(NSRect(x: 0, y: bounds.height - 3 * Tok.App.hairline, width: bounds.width, height: Tok.App.hairline), Theme.current.app.titlebarRule2)
+            }
         }
 
         drawLights()
@@ -229,10 +245,49 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
         case .empty:
             break
         }
+        if let (line, font, r) = rightLayout() {
+            Draw.text(line, font: font, x: r.minX, top: r.minY, lineHeight: r.height, in: ctx)
+        }
         if let (line, r) = crumbLayout() {
             Draw.text(line, font: Draw.ui(Tok.Size.crumbFont), x: r.minX, top: r.minY, lineHeight: r.height, in: ctx)
+        } else if Draw.display(Tok.App.titleFont) != nil {
+            drawDisplayTitle(ctx)
         } else if let (line, r) = titleLayout() {
             Draw.text(line, font: Draw.ui(Tok.App.titleFont, .semibold), x: r.minX, top: r.minY, lineHeight: r.height, in: ctx)
+        }
+    }
+
+    /// The theme's `[strings] titlebar.right`, where the icons would sit.
+    private func rightLayout() -> (CTLine, NSFont, NSRect)? {
+        guard !zen, crumb.isEmpty, buttons.isEmpty || accessory != .icons,
+              let text = Theme.current.string("titlebar.right") else { return nil }
+        let app = Theme.current.app, font = Draw.ui(app.titlebarRightFont, .light)
+        let line = Draw.line(text, font, Tok.Color.textSub, kern: app.titlebarRightFont * app.titlebarRightTracking)
+        let w = Draw.width(line), lh = app.titlebarRightFont * Tok.Font.baseLine
+        return (line, font, NSRect(x: bounds.width - Tok.Size.titlebarPadx - w, y: rowTop + (rowH - lh) / 2, width: w, height: lh))
+    }
+
+    /// With a display face: the tab part in it, chrome-filled, the rest small and tracked, all centred.
+    private func drawDisplayTitle(_ ctx: CGContext) {
+        guard crumb.isEmpty, !zen, !titleFormat.isEmpty, let tab, let big = Draw.display(Tok.App.titleFont) else { return }
+        let app = Theme.current.app
+        let smallSize = app.titleMetaFont > 0 ? app.titleMetaFont : Tok.App.titleFont
+        let small = Draw.ui(smallSize, .light)
+        let parts = TitleFormat.parts(titleFormat, tab: tab.name, meta: tab.meta).map { text, isTab in
+            isTab ? (Draw.line(text, big, Tok.App.titleFg), big, true)
+                : (Draw.line(text, small, Tok.App.titleMeta, kern: smallSize * app.titleMetaTracking), small, false)
+        }
+        let total = parts.reduce(0) { $0 + Draw.width($1.0) }
+        var x = ((bounds.width - total) / 2).rounded()
+        let lh = Tok.App.titleFont * Tok.Font.baseLine, top = rowTop + (rowH - lh) / 2
+        for (line, font, isTab) in parts {
+            if isTab {
+                Draw.chromeText(line, font: font, x: x, top: top, lineHeight: lh, in: ctx)
+            } else {
+                Draw.text(line, font: font, x: x, top: top + (lh - smallSize * Tok.Font.baseLine) / 2,
+                          lineHeight: smallSize * Tok.Font.baseLine, in: ctx)
+            }
+            x += Draw.width(line)
         }
     }
 
