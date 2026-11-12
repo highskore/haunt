@@ -116,7 +116,7 @@ enum Layers {
     static let below: [String: [String]] = [
         "row": ["sidebar"], "row.selected": ["sidebar", "row"], "row.hover": ["sidebar", "row"],
         "status.needs": ["sidebar", "row", "row.selected", "row.hover"], "label.group": ["sidebar"], "sidebar.footer": ["sidebar"],
-        "palette.field": ["palette"], "palette.row.selected": ["palette", "palette.field"], "palette.row.hover": ["palette", "palette.field"],
+        "palette.field": ["palette"], "palette.caption": ["palette"], "button": ["palette"], "button.default": ["palette"], "palette.row.selected": ["palette", "palette.field"], "palette.row.hover": ["palette", "palette.field"],
     ]
     /// Bitmaps under text, and anything behind the terminal, are kept this faint, all of a slot's together.
     static let faintAlpha: CGFloat = 0.12
@@ -164,7 +164,8 @@ enum Layers {
     /// The last redraw's layer time, checks included.
     private(set) static var lastFrameMs = 0.0
 
-    /// Whether a window is being resized live: its redraws are many and cheap to lose, so they never turn layers off.
+    /// Whether a window is being resized live: its redraws are many, so they don't count as slow; one over
+    /// `stopMs` still turns layers off.
     static var liveResize: () -> Bool = { NSApp?.windows.contains { $0.inLiveResize } ?? false }
 
     static func endFrame() {
@@ -178,8 +179,8 @@ enum Layers {
     /// Counts a redraw whose layers took `ms`.
     static func judge(_ ms: Double) {
         lastFrameMs = ms
-        guard !current.isEmpty, !liveResize() else { return }
-        if ms > slowMs { slowFrames += 1 }
+        guard !current.isEmpty else { return }
+        if ms > slowMs && !liveResize() { slowFrames += 1 }
         guard ms > stopMs || slowFrames >= 2 else { return }
         tooSlow.append(source)
         current = [:]
@@ -205,6 +206,8 @@ enum Layers {
     /// text may take. If the layers, as painted, leave any run unreadable, none of the slot's layers are drawn.
     static func draw(_ slot: String, _ bounds: NSRect, within: NSRect? = nil, exclude: NSRect? = nil, textRun: NSRect? = nil,
                      text: [Run]? = nil, base: [NSColor] = [], state: Set<String> = [], index: Int? = nil, in ctx: CGContext) {
+        // A slot that draws nothing this time is not under the next slot's text.
+        drawn[slot] = nil
         guard let layers = current[slot] else { return }
         if slot == "pane.backdrop" && !terminalSeeThrough { return }
         let b = bleed[slot] ?? 0
@@ -212,8 +215,9 @@ enum Layers {
         if let within { clip = clip.intersection(within) }
         guard !clip.isEmpty else { return }
         recorder?(slot, clip)
-        let shown = layers.filter { l in l.when.isSubset(of: state) && (l.index == nil || l.index == index) }
-        guard !shown.isEmpty else { return }
+        let picked = layers.indices.filter { layers[$0].when.isSubset(of: state) && (layers[$0].index == nil || layers[$0].index == index) }
+        guard !picked.isEmpty else { return }
+        let shown = picked.map { layers[$0] }, names = picked.map { layers[$0].id ?? "#\($0)" }
         if !frame.open {
             frame.open = true
             DispatchQueue.main.async { endFrame() }
@@ -226,22 +230,29 @@ enum Layers {
         // Never under 2x: a hairline that 1x would blend away is a solid line on a Retina screen.
         let scale = max(2, abs(ctx.userSpaceToDeviceSpaceTransform.a).rounded(.up))
         if !runs.isEmpty, let why = verdict(shown, slot: slot, bounds: bounds, clip: clip, exclude: exclude, run: run, runs: runs, base: base,
-                                            state: state, index: index, scale: scale, ctm: ctx.ctm) {
+                                            state: state, index: index, scale: scale, ctm: ctx.ctm, names: names, context: ObjectIdentifier(ctx)) {
             let said = "layers on \(slot) skipped: \(why)"
             if skipped.insert(said).inserted { report(said) }
             return
         }
-        drawn[slot] = Drawn(shown: shown, bounds: bounds, clip: clip, exclude: exclude, run: run, ctm: ctx.ctm)
-        paint(drawn[slot]!, slot: slot, in: ctx)
+        let d = Drawn(shown: shown, names: names, bounds: bounds, clip: clip, exclude: exclude, run: run, state: state, index: index,
+                      ctm: ctx.ctm, context: ObjectIdentifier(ctx))
+        drawn[slot] = d
+        paint(d, slot: slot, in: ctx)
     }
 
     /// A slot's layers as last drawn in this redraw, for the checks of the slots drawn over it.
     private struct Drawn {
         var shown: [ResolvedLayer]
+        var names: [String] = []
         var bounds, clip: NSRect
         var exclude: NSRect?
         var run: NSRect
+        var state: Set<String> = []
+        var index: Int? = nil
         var ctm: CGAffineTransform
+        /// The context it was drawn into: another window's slots are never under this one's text.
+        var context: ObjectIdentifier? = nil
     }
     private static var drawn: [String: Drawn] = [:]
 
@@ -266,22 +277,24 @@ enum Layers {
     /// painted (stacking, winding, every kind), and says which run, if any, it leaves under 3:1. Fails closed: a
     /// run it can't measure is unreadable.
     static func verdict(_ shown: [ResolvedLayer], slot: String, bounds: NSRect, clip: NSRect, exclude: NSRect? = nil, run: NSRect, runs: [Run],
-                        base: [NSColor], state: Set<String>, index: Int?, scale: CGFloat = 2, ctm: CGAffineTransform = .identity) -> String? {
+                        base: [NSColor], state: Set<String>, index: Int?, scale: CGFloat = 2, ctm: CGAffineTransform = .identity,
+                        names: [String]? = nil, context: ObjectIdentifier? = nil) -> String? {
         let inside = runs.map { $0.rect.intersection(clip) }.filter { !$0.isEmpty }
         guard !inside.isEmpty else { return nil }
         let area = inside.dropFirst().reduce(inside[0]) { $0.union($1) }.integral
         func rel(_ r: NSRect) -> String { String(format: "%.1f,%.1f,%.1f,%.1f", r.minX - clip.minX, r.minY - clip.minY, r.width, r.height) }
         // The lower slots, mapped from where they were drawn into this slot's space.
         let lower: [(String, Drawn, CGAffineTransform)] = (below[slot] ?? []).compactMap { s in
-            guard let d = drawn[s] else { return nil }
+            guard let d = drawn[s], d.context == context else { return nil }
             let to = d.ctm.concatenating(ctm.inverted())
             return d.clip.applying(to).intersects(area) ? (s, d, to) : nil
         }
-        var key = "\(slot)|\(shown.map { $0.id ?? "" })|\(shown.count)|\(rel(clip))|\(exclude.map(rel) ?? "")|\(rel(bounds))|\(rel(run))|\(state.sorted())|"
+        var key = "\(slot)|\(names ?? shown.indices.map { shown[$0].id ?? "#\($0)" })|\(rel(clip))|\(exclude.map(rel) ?? "")|\(rel(bounds))|\(rel(run))|\(state.sorted())|"
             + "\(index ?? -1)|\(scale)|" + runs.map { "\(rel($0.rect))\($0.ink.themeHex)\($0.on?.themeHex ?? "")" }.joined(separator: ";") + "|"
             + base.map(\.themeHex).joined()
         for (s, d, to) in lower {
-            key += "|\(s):\(d.shown.map { $0.id ?? "" })\(d.shown.count)\(rel(d.clip.applying(to)))\(rel(d.bounds.applying(to)))\(d.exclude.map(rel) ?? "")"
+            key += "|\(s):\(d.names)\(rel(d.clip.applying(to)))\(rel(d.bounds.applying(to)))\(d.exclude.map { rel($0.applying(to)) } ?? "")"
+                + "\(rel(d.run.applying(to)))\(d.state.sorted())\(d.index ?? -1)"
         }
         if let v = verdicts[key] { return v }
         if verdicts.count >= 512 { verdicts = [:] }

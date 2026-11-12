@@ -686,6 +686,48 @@ do {
     let faint = PrimSpec(kind: "rect", fill: "#ffffff60")
     check(drawn("row.selected", [faint], text: inner) > 0, "a fainter veil alone is fine on a row")
     check(stacked("row", "row.selected", ink: white.color.textPrimary, veil: faint) == (true, false), "and a row's veil under a selected row's")
+    // Another window's row is never under this one's text, and a row that drew nothing this time isn't either.
+    do {
+        let (l, _) = Layers.resolve([LayerSpec(id: "u", slot: "row", when: ["selected"], prims: [veil]), LayerSpec(id: "o", slot: "status.needs", prims: [veil])],
+                                    images: [], theme: white)
+        Layers.set(l, source: LayerSource())
+        let box = CGRect(x: 10, y: 10, width: 80, height: 40), run = [Layers.Run(rect: inner[0], ink: needs)]
+        let a = canvas(), b = canvas()
+        Layers.draw("row", box, text: run, state: ["selected"], in: a.ctx)
+        Layers.draw("status.needs", box, text: run, in: b.ctx)
+        check(!Layers.skipped.contains { $0.hasPrefix("layers on status.needs ") }, "a row in another window is not under the needs word")
+        Layers.draw("row", box, text: run, state: ["selected"], in: a.ctx)
+        Layers.draw("row", box, text: run, in: a.ctx)
+        Layers.draw("status.needs", box, text: run, in: a.ctx)
+        check(!Layers.skipped.contains { $0.hasPrefix("layers on status.needs ") }, "nor a row that drew nothing this time")
+        Layers.draw("row", box, text: run, state: ["selected"], in: a.ctx)
+        Layers.draw("status.needs", box, text: run, in: a.ctx)
+        check(Layers.skipped.contains { $0.hasPrefix("layers on status.needs ") }, "while the same window's row is")
+        Layers.endFrame()
+    }
+    // A lower slot drawn in another translation is mapped into the upper one's: the palette's veil sits only
+    // where the field's text lands after the palette view's translate.
+    do {
+        let paletteInk = white[keyPath: Theme.colorPath("color.palette.ink")!]
+        let patch = PrimSpec(kind: "rect", x: SpanSpec(a: 30, b: 10), y: SpanSpec(a: 50, b: 10), fill: "#ffffff60")
+        let (l, _) = Layers.resolve([LayerSpec(id: "p", slot: "palette", prims: [patch]),
+                                     LayerSpec(id: "f", slot: "palette.field", prims: [PrimSpec(kind: "rect", fill: "#ffffff60")])],
+                                    images: [], theme: white)
+        Layers.set(l, source: LayerSource())
+        let c = canvas(), field = CGRect(x: 0, y: 0, width: 80, height: 50), run = [Layers.Run(rect: CGRect(x: 10, y: 10, width: 60, height: 40), ink: paletteInk)]
+        c.ctx.saveGState()
+        c.ctx.translateBy(x: 20, y: 40)
+        Layers.draw("palette.field", field, text: run, in: c.ctx)
+        c.ctx.restoreGState()
+        let alone = !Layers.skipped.contains { $0.hasPrefix("layers on palette.field ") }
+        Layers.endFrame()
+        Layers.draw("palette", CGRect(x: 0, y: 0, width: 100, height: 100), text: [], in: c.ctx)
+        c.ctx.translateBy(x: 20, y: 40)
+        Layers.draw("palette.field", field, text: run, in: c.ctx)
+        check(alone && Layers.skipped.contains { $0.hasPrefix("layers on palette.field ") },
+              "the palette's veil, translated, is under the field's text: alone \(alone), \(Layers.skipped)")
+        Layers.endFrame()
+    }
     // At the screen's scale: half-point rules every point read as a grey at 1x, as solid lines on a Retina screen.
     var rules: [PrimSpec.Cmd] = []
     for y in 0..<40 {
@@ -812,12 +854,16 @@ do {
     check(!Layers.current.isEmpty, "two 50 ms redraws leave layers on")
     Layers.judge(61); Layers.judge(61)
     check(Layers.current.isEmpty, "two over 60 ms turn them off")
-    Layers.set(Layers.resolve(worst, images: [], theme: white).0, source: worstSource)
-    // A live resize never turns layers off, though its redraws are still timed.
+    // In a live resize slow redraws aren't counted, but one over the 200 ms cut still turns layers off.
+    let resized = [LayerSpec(id: "resize", slot: "sidebar", prims: [PrimSpec(kind: "rect", fill: "#000000")])]
+    Layers.set(Layers.resolve(resized, images: [], theme: white).0, source: LayerSource(specs: resized))
     Layers.liveResize = { true }
-    for _ in 0..<2 { drawWindow(); Layers.endFrame() }
-    check(!Layers.current.isEmpty && Layers.lastFrameMs > Layers.slowMs, "slow redraws in a live resize leave layers on: \(Int(Layers.lastFrameMs)) ms")
+    Layers.judge(150); Layers.judge(150)
+    check(!Layers.current.isEmpty && Layers.lastFrameMs == 150, "slow redraws in a live resize leave layers on")
+    Layers.judge(250)
+    check(Layers.current.isEmpty, "but one over 200 ms in a live resize turns them off")
     Layers.liveResize = { false }
+    Layers.set(Layers.resolve(worst, images: [], theme: white).0, source: worstSource)
     // Too slow to draw: the theme's layers are turned off for the session, said once, and the next redraw is fast.
     var said: [String] = []
     Layers.report = { said.append($0) }
@@ -849,13 +895,24 @@ do {
 
     // Under text by construction: in every function that draws slots, every slot's layers come before any text,
     // and layers are clipped to their slot, so none reaches text drawn earlier in another.
+    // A call to a function of the same file that draws text counts as text where it is called, one level deep.
     var sites = 0
+    let textCalls = ["Draw.text(", "Draw.chromeText(", "CTLineDraw("]
     for file in ["SidebarView", "TitleBarView", "Palette", "MainWindow"] {
         let src = try! String(contentsOfFile: "macos/Sources/\(file).swift", encoding: .utf8)
-        for body in src.components(separatedBy: "func ").dropFirst() where body.contains("Layers.draw(") {
+        let bodies = src.components(separatedBy: "func ").dropFirst()
+        let drawsText = Set(bodies.filter { b in textCalls.contains { b.contains($0) } }.map { String($0.prefix { $0.isLetter || $0.isNumber || $0 == "_" }) })
+        for body in bodies where body.contains("Layers.draw(") {
             sites += 1
+            let name = body.prefix { $0.isLetter || $0.isNumber || $0 == "_" }
             let lastLayer = body.range(of: "Layers.draw(", options: .backwards)!.lowerBound
-            let text = ["Draw.text(", "Draw.chromeText(", "CTLineDraw("].compactMap { body.range(of: $0)?.lowerBound }.min()
+            let calls = drawsText.filter { $0 != name }.compactMap { callee in
+                body.ranges(of: callee + "(").first { r in
+                    r.lowerBound == body.startIndex || !(body[body.index(before: r.lowerBound)].isLetter || body[body.index(before: r.lowerBound)].isNumber
+                                                         || body[body.index(before: r.lowerBound)] == ".")
+                }?.lowerBound
+            }
+            let text = (textCalls.compactMap { body.range(of: $0)?.lowerBound } + calls).min()
             check(text.map { $0 > lastLayer } ?? true, "\(file): text drawn before a layer in func \(body.prefix(40))")
         }
     }
