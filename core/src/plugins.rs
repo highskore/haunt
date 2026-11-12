@@ -1452,8 +1452,10 @@ pub fn local_offset_min() -> i32 {
     (tm.tm_gmtoff / 60) as i32
 }
 
-/// Characters of a command, path or summary a plugin gets.
+/// Characters of a command, path or summary a plugin gets; a plan's per line.
 pub const EVENT_TEXT: usize = 1024;
+/// Lines of a plan a plugin gets.
+pub const PLAN_LINES: usize = 200;
 
 /// One line of plain text: whitespace becomes a space, other hidden characters go, at most `max` characters.
 pub fn plain(s: &str, max: usize) -> String {
@@ -1489,6 +1491,7 @@ fn agent_event(t: &Tapped, g: EventGrant) -> wit::AgentEvent {
         }
         _ => None,
     };
+    let plan = matches!(e.kind, EventKind::PlanExit { .. });
     let summary = match &e.kind {
         EventKind::TaskCreated { subject, .. } => subject.clone(),
         EventKind::TaskUpdated { status, .. } => Some(status.clone()),
@@ -1517,7 +1520,7 @@ fn agent_event(t: &Tapped, g: EventGrant) -> wit::AgentEvent {
         session_id: e.session_id.as_deref().map(|s| plain(s, 256)),
         agent_id: e.agent_id.as_deref().map(|s| plain(s, 256)),
         cwd: e.cwd.as_deref().map(|s| shown(s, EVENT_TEXT)),
-        summary: summary.map(|s| plain(&s, EVENT_TEXT)),
+        summary: summary.map(|s| if plan { plain_lines(&s, PLAN_LINES, EVENT_TEXT) } else { plain(&s, EVENT_TEXT) }),
         verified: t.verified,
         surface: Some(t.surface.clone()),
         tool: tool.map(|s| plain(&s, 256)),
@@ -2384,6 +2387,12 @@ mod tests {
 
         let prompt = agent_event(&tapped(EventKind::PromptSubmit { query: Some("fix\u{2066} it\nnow".into()) }, true, None), all);
         assert_eq!(prompt.summary.as_deref(), Some("fix it now"));
+
+        let steps = (0..300).map(|i| format!("{i}. step\u{200b}")).collect::<Vec<_>>().join("\n");
+        let plan = agent_event(&tapped(EventKind::PlanExit { summary: Some(steps) }, true, None), all).summary.unwrap();
+        assert!(plan.starts_with("0. step\n1. step\n") && plan.lines().count() == PLAN_LINES, "a plan keeps its lines, up to {PLAN_LINES}");
+        let long = agent_event(&tapped(EventKind::PlanExit { summary: Some(format!("{}\nend", "x".repeat(2000))) }, true, None), all).summary.unwrap();
+        assert_eq!(long.split('\n').map(|l| l.chars().count()).collect::<Vec<_>>(), [EVENT_TEXT, 3]);
 
         let edit = agent_event(&tapped(EventKind::FileEdited { tool_name: Some("Edit".into()), file_path: Some("/a\u{200b}b".into()) }, true, None), all);
         assert_eq!(edit.file_path.as_deref(), Some("/a\\u{200b}b"));

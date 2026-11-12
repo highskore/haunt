@@ -184,6 +184,11 @@ pub fn clean(s: &str) -> String {
         .collect()
 }
 
+/// `clean`, line by line: `\n` is kept and CR dropped, for text that is a plan.
+pub fn clean_lines(s: &str) -> String {
+    s.split('\n').map(|l| clean(&l.replace('\r', ""))).collect::<Vec<_>>().join("\n")
+}
+
 /// Characters a terminal shows as nothing or as layout: anything but a plain space that is a
 /// control, a format (Cf) character, whitespace (Zl and Zp included) or default-ignorable.
 pub fn is_hidden(c: char) -> bool {
@@ -276,7 +281,7 @@ fn event_of(w: &Wire) -> Result<AgentEvent, ParseError> {
         "notification" => {
             EventKind::Notification { notification_type: s(&w.notification_type), message: s(&w.message) }
         }
-        "plan_exit" => EventKind::PlanExit { summary: s(&w.summary) },
+        "plan_exit" => EventKind::PlanExit { summary: w.summary.text().map(clean_lines) },
         "question_answered" => EventKind::QuestionAnswered { summary: s(&w.summary) },
         "todos_written" => EventKind::TodosWritten { count: n(w.tool_count), done: n(w.todos_done) },
         "file_edited" => EventKind::FileEdited { tool_name: s(&w.tool_name), file_path: s(&w.tool_input.file_path) },
@@ -393,6 +398,12 @@ mod tests {
     fn escaped_control_chars_are_stripped() {
         let e = parse_body(r#"{"v":1,"event":"prompt_submit","query":"a\u001b[2Jb\u0007c\nd"}"#).unwrap();
         assert_eq!(e.kind, EventKind::PromptSubmit { query: Some("a[2Jbc d".into()) });
+    }
+
+    #[test]
+    fn a_plan_keeps_its_lines() {
+        let e = parse_body(r#"{"v":1,"event":"plan_exit","summary":"Goal\r\n- a\tb\u001b[2J\n- c\u202e"}"#).unwrap();
+        assert_eq!(e.kind, EventKind::PlanExit { summary: Some("Goal\n- a b[2J\n- c".into()) });
     }
 
     #[test]

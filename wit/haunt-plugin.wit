@@ -16,7 +16,8 @@ interface types {
     cwd: option<string>,
     // A task's subject (task_created) or status (task_updated), the tool name (tool_ran,
     // subagent_tool), the prompt (prompt_submit) or the plan (plan_exit); one line, at most 1024
-    // characters, hidden characters removed. The prompt and plan need `event_details`.
+    // characters, hidden characters removed. A plan keeps "\n": up to 200 lines of up to 1024 each.
+    // The prompt and plan need `event_details`.
     summary: option<string>,
     // Came over the socket with the surface's nonce. Unverified events (OSC, wrong or no nonce) can be
     // forged by anything in the terminal; plugins holding pty_write, allowlist_suggest or
