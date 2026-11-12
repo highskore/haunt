@@ -37,7 +37,7 @@ final class PluginDock {
     private struct Shown { let plugin: String, image: String?, badge: UInt32?, blink: String? }
     private var shown: Shown?
     private var timer: Timer?
-    /// Each plugin's images by id, at most 8 a plugin.
+    /// Each plugin's images by id, at most 4 a plugin.
     private var images: [String: [String: NSImage]] = [:]
 
     /// Replaces `pluginId`'s images; none drops them.
