@@ -916,22 +916,23 @@ pub fn says_status(text: &str) -> bool {
         let waiting = crate::layout::WAITING.split(' ').next();
         status_phrases(crate::layout::STATUS_TEXTS.iter().copied().chain(waiting).chain(["Allow", "Deny"]))
     });
-    says_phrase(text, &PHRASES)
+    says_phrase(text, &PHRASES, false)
 }
 
-/// `says_status` for a theme's words, which also may not read as a permission request or its answer.
+/// `says_status` for a theme's words, which also may not read as a permission request or its answer: no word
+/// (or run of words) may start with these stems, so "Approving", "denies" and "permitted" are refused too.
 pub fn theme_says_status(text: &str) -> bool {
-    static PHRASES: std::sync::LazyLock<Vec<Vec<char>>> = std::sync::LazyLock::new(|| {
-        status_phrases(["Permission", "Permissions", "Request", "Requests", "Approved", "Allowed", "Denied"])
-    });
-    says_status(text) || says_phrase(text, &PHRASES)
+    static STEMS: std::sync::LazyLock<Vec<Vec<char>>> =
+        std::sync::LazyLock::new(|| status_phrases(["Allow", "Deny", "Deni", "Approv", "Permi", "Request"]));
+    says_status(text) || says_phrase(text, &STEMS, true)
 }
 
 fn status_phrases<'a>(all: impl IntoIterator<Item = &'a str>) -> Vec<Vec<char>> {
     all.into_iter().map(|p| status_fold(p).iter().filter(|g| status_kept(g)).map(|g| g.c).collect()).collect()
 }
 
-fn says_phrase(text: &str, phrases: &[Vec<char>]) -> bool {
+/// Whether a word, or a run of words read together, is one of `phrases`, or with `stem` starts with one.
+fn says_phrase(text: &str, phrases: &[Vec<char>], stem: bool) -> bool {
     let longest = phrases.iter().map(Vec::len).max().unwrap_or(0);
     let folded = status_fold(text);
     let says = |brk: &dyn Fn(&Glyph) -> bool| {
@@ -940,7 +941,11 @@ fn says_phrase(text: &str, phrases: &[Vec<char>]) -> bool {
             let mut run: Vec<Glyph> = Vec::new();
             words[i..].iter().any(|w| {
                 run.extend_from_slice(w);
-                run.len() <= longest && phrases.iter().any(|p| status_same(&run, p))
+                if stem {
+                    phrases.iter().any(|p| run.len() >= p.len() && status_same(&run[..p.len()], p))
+                } else {
+                    run.len() <= longest && phrases.iter().any(|p| status_same(&run, p))
+                }
             })
         })
     };
@@ -3034,7 +3039,8 @@ mod tests {
             assert!(says_status(t), "{t:?}");
         }
         for t in ["Permission", "REQUEST", "Re\u{2800}quest", "p\u{435}rmission needed", "You approved", "You denied",
-                  "Allowed in terminal:", "Approved", "Denied", "Permissions", "Requests", "\u{410}pproved"] {
+                  "Allowed in terminal:", "Approved", "Denied", "Permissions", "Requests", "\u{410}pproved", "allows", "allowing",
+                  "denies", "denying", "approves", "approving", "permits", "permitted", "requesting", "requested", "Re quested"] {
             assert!(theme_says_status(t) && !says_status(t), "{t:?}");
         }
         for t in ["Invoke", "\u{21B5} SUMMON \u{B7} ESC BANISH", "XII \u{B7} XI \u{B7} MMXXVI", "AGENTS III", "Go To", "Open:",

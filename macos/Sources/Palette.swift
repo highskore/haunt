@@ -539,14 +539,33 @@ final class PaletteView: NSView {
     /// `palette.frame = "dialog"`: a raised dialog with a caption, a sunken field and list, and OK / Cancel.
     private var dialog: Bool { !plainMode && Theme.current.effects.paletteFrame == "dialog" }
     private static let captionH: CGFloat = 18, buttonSize = NSSize(width: 75, height: 23), fieldH: CGFloat = 21, messageH: CGFloat = 32
+    // A theme's words are drawn whole or not at all: clipped, they could read as a status ("Done").
+    private static func whole(_ s: String?, _ font: NSFont, kern: CGFloat = 0, room: CGFloat) -> String? {
+        s.flatMap { Draw.width(Draw.line($0, font, .black, kern: kern)) <= room ? $0 : nil }
+    }
     /// The dialog's `[strings] palette.message`, beside an info icon.
-    private var message: String? { dialog ? Theme.current.string("palette.message") : nil }
-    private var header: String? { plainMode || !Theme.current.effects.paletteHeader ? nil : Theme.current.string("palette.header") }
+    var message: String? {
+        dialog ? Self.whole(Theme.current.string("palette.message"), Draw.ui(Tok.Size.paletteSmallFont), room: width - 2 * padX - Self.messageH - 10) : nil
+    }
+    var header: String? {
+        guard !plainMode, Theme.current.effects.paletteHeader, let s = Theme.current.string("palette.header") else { return nil }
+        if dialog { return Self.whole(s, Draw.ui(Tok.Size.paletteSmallFont, .bold), room: dialogClose.minX - 3 - 8) }
+        return Draw.display(Theme.current.app.paletteHeaderFont).flatMap { Self.whole(s, $0, room: width) }
+    }
+    /// The field's glyph: the theme's when it fits in half the input, else Haunt's.
+    var inputGlyph: String {
+        guard !plainMode else { return "⌕" }
+        return Self.whole(Theme.current.string("palette.input.glyph"), Draw.ui(Tok.Size.paletteInputFont - 1), room: min(width / 2, width - 2 * padX)) ?? "⌕"
+    }
     private var inputRules: Bool { !plainMode && Theme.current.effects.paletteInputRules }
     /// `palette.input.rules`: the rules stand this far from the header and the list.
     private static let ruleMargin: CGFloat = 6
     /// The theme's own hints line, in place of the default hints only: a mode's hints are always Haunt's.
-    private var footText: String? { plainMode || chip != nil || foot.isEmpty ? nil : Theme.current.string("palette.foot") }
+    var footText: String? {
+        guard !plainMode, chip == nil, !foot.isEmpty else { return nil }
+        let size = Tok.Size.paletteSmallFont
+        return Self.whole(Theme.current.string("palette.foot"), mono(size), kern: size * 0.25, room: width - 2 * Tok.Size.paletteFootPad[1])
+    }
     /// An entry's content height: its text, or its icon when that is taller, as in the mockup's grid.
     private var textLines: CGFloat {
         let text = singleLine ? max(Tok.Size.paletteFont, Tok.Size.paletteSmallFont) * lh : Tok.Size.paletteFont * lh + Tok.Size.paletteSmallFont * lh
@@ -615,10 +634,8 @@ final class PaletteView: NSView {
         ctx.translateBy(x: edge, y: edge)
         if dialog {
             // Drawn by drawDialog.
-        } else if let header, let f = Draw.display(Theme.current.app.paletteHeaderFont),
-                  case let line = Draw.line(header, f, Tok.Color.paletteInk), Draw.width(line) <= width {
-            // A theme's words are drawn whole or not at all.
-            let size = Theme.current.app.paletteHeaderFont
+        } else if let header, let f = Draw.display(Theme.current.app.paletteHeaderFont) {
+            let line = Draw.line(header, f, Tok.Color.paletteInk), size = Theme.current.app.paletteHeaderFont
             Draw.chromeText(line, font: f, x: ((width - Draw.width(line)) / 2).rounded(), top: 10, lineHeight: size, in: ctx)
         }
         ctx.translateBy(x: 0, y: headH)
@@ -647,9 +664,9 @@ final class PaletteView: NSView {
         let cap = NSRect(x: 3, y: 3, width: bounds.width - 6, height: Self.captionH)
         let stops = app.titlebarFill.compactMap { NSColor(themeHex: $0) }
         if stops.count > 1, let g = NSGradient(colors: stops) { g.draw(in: cap, angle: 0) } else { Draw.fill(cap, app.rowSelectFill) }
-        if let header, case let f = Draw.ui(Tok.Size.paletteSmallFont, .bold), case let line = Draw.line(header, f, app.rowSelectInk),
-           Draw.width(line) <= cap.width - 8 {
-            Draw.text(line, font: f, x: cap.minX + 4, top: cap.minY + (cap.height - Tok.Size.paletteSmallFont * lh) / 2,
+        if let header {
+            let f = Draw.ui(Tok.Size.paletteSmallFont, .bold)
+            Draw.text(Draw.line(header, f, app.rowSelectInk), font: f, x: cap.minX + 4, top: cap.minY + (cap.height - Tok.Size.paletteSmallFont * lh) / 2,
                       lineHeight: Tok.Size.paletteSmallFont * lh, in: ctx)
         }
         let top = edge + headH, pad = padX
@@ -657,17 +674,15 @@ final class PaletteView: NSView {
             let mt = 3 + Self.captionH + 10
             drawInfoIcon(NSRect(x: x0 + pad, y: mt, width: Self.messageH, height: Self.messageH))
             let f = Draw.ui(Tok.Size.paletteSmallFont), h = Tok.Size.paletteSmallFont * lh
-            let line = Draw.line(message, f, Tok.Color.paletteInk)
-            if Draw.width(line) <= inner - 2 * pad - Self.messageH - 10 {
-                Draw.text(line, font: f, x: x0 + pad + Self.messageH + 10, top: mt + (Self.messageH - h) / 2, lineHeight: h, in: ctx)
-            }
+            Draw.text(Draw.line(message, f, Tok.Color.paletteInk), font: f, x: x0 + pad + Self.messageH + 10, top: mt + (Self.messageH - h) / 2,
+                      lineHeight: h, in: ctx)
         }
         // The input glyph labels the field from outside it, like the card's "Open:".
         var fx = x0 + pad
-        if Theme.current.effects.paletteInputIcon, let glyph = Theme.current.string("palette.input.glyph") {
-            fx = x0 + padX + Draw.width(Draw.line(glyph, Draw.ui(Tok.Size.paletteInputFont - 1), Tok.Color.paletteMute)) + 6
+        if Theme.current.effects.paletteInputIcon {
+            fx = x0 + padX + Draw.width(Draw.line(inputGlyph, Draw.ui(Tok.Size.paletteInputFont - 1), Tok.Color.paletteMute)) + 6
         }
-        let field = NSRect(x: fx, y: top, width: x0 + inner - pad - fx, height: Self.fieldH)
+        let field = NSRect(x: fx, y: top, width: max(x0 + inner - pad - fx, 0), height: Self.fieldH)
         Draw.fill(field, app.paletteField)
         Draw.bevel(field, "in")
         let list = NSRect(x: x0 + pad, y: top + inputH, width: inner - 2 * pad, height: listH)
@@ -739,7 +754,7 @@ final class PaletteView: NSView {
         if Theme.current.effects.paletteInputIcon {
             let f = Draw.ui(Tok.Size.paletteInputFont - 1)
             // The dialog's field label ("Open:") is text, so in ink; elsewhere the glyph is a mark.
-            let glyph = Draw.line(plainMode ? "⌕" : Theme.current.string("palette.input.glyph") ?? "⌕", f,
+            let glyph = Draw.line(inputGlyph, f,
                                   dialog ? Tok.Color.paletteInk : Tok.Color.paletteMute)
             Draw.text(glyph, font: f, x: x, top: padY, lineHeight: lineH, in: ctx)
             x += Draw.width(glyph) + Tok.Size.paletteInputGap
@@ -923,8 +938,8 @@ final class PaletteView: NSView {
 
     private func drawFoot(top: CGFloat, ctx: CGContext) {
         let f = mono(Tok.Size.paletteSmallFont), h = Tok.Size.paletteSmallFont * lh
-        if let footText, case let line = Draw.line(footText, f, Tok.Color.paletteMute, kern: Tok.Size.paletteSmallFont * 0.25),
-           Draw.width(line) <= width - 2 * Tok.Size.paletteFootPad[1] {
+        if let footText {
+            let line = Draw.line(footText, f, Tok.Color.paletteMute, kern: Tok.Size.paletteSmallFont * 0.25)
             Draw.fill(NSRect(x: 0, y: top, width: width, height: border), Theme.current.app.paletteFootRule)
             Draw.text(line, font: f, x: ((width - Draw.width(line)) / 2).rounded(), top: top + border + Tok.Size.paletteFootPad[0], lineHeight: h, in: ctx)
             return
