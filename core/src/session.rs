@@ -42,6 +42,8 @@ pub struct Permission {
     /// The user typed into the surface after it was shown, so the terminal is answering; it only
     /// waits for its outcome.
     in_terminal: bool,
+    /// Plugins whose refused answer to it is already logged: once each, however often they retry.
+    refused_by: Vec<String>,
 }
 
 /// How a verified permission request ended.
@@ -123,6 +125,7 @@ impl Permission {
             thread: e.agent_id.clone(),
             generation,
             in_terminal: false,
+            refused_by: Vec::new(),
         })
     }
 
@@ -396,6 +399,14 @@ impl Session {
         } else {
             None
         }
+    }
+
+    /// The request `key` names, the first time `plugin_id` is refused on it; None after, or for
+    /// another key.
+    pub fn first_refusal(&mut self, key: u64, plugin_id: &str) -> Option<Permission> {
+        let p = self.permission.as_mut().filter(|p| p.key() == key && !p.refused_by.iter().any(|id| id == plugin_id))?;
+        p.refused_by.push(plugin_id.to_owned());
+        Some(p.clone())
     }
 
     /// `answer`, logging `outcome` (an `…InHaunt` or `…ByPlugin` one).
@@ -689,7 +700,7 @@ mod tests {
         assert!(p.suspicious());
         assert!(!s.answer(p.key(), true, now), "answered in the terminal only");
         assert_eq!(s.live_permission(), Some(&p), "a refused answer leaves it live");
-        let p = Permission { tool: "Bash".into(), input: Some("a\u{202e}b".into()), tool_use_id: None, raw_command: None, cwd: None, agent: Agent::Claude, thread: None, generation: 0, in_terminal: false };
+        let p = Permission { tool: "Bash".into(), input: Some("a\u{202e}b".into()), tool_use_id: None, raw_command: None, cwd: None, agent: Agent::Claude, thread: None, generation: 0, in_terminal: false, refused_by: Vec::new() };
         assert_eq!(p.preview(), "a\\u{202e}b", "preview shows even input that skipped the parser");
     }
 

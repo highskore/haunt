@@ -657,10 +657,7 @@ impl Core {
                 }
             };
             let Some(id) = plugin_id else { return false };
-            let on_screen = st
-                .surface(surface_id)
-                .and_then(|s| s.session.live_permission().filter(|p| p.key() == request_key).cloned());
-            if let Some(p) = on_screen {
+            if let Some(p) = st.surface(surface_id).and_then(|s| s.session.first_refusal(request_key, id)) {
                 let outcome = Outcome::RefusedPlugin { plugin_id: id.to_owned(), reason: why };
                 st.decisions.record(Decision::new(surface_id, &p, outcome));
             }

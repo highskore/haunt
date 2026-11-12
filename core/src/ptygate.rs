@@ -104,11 +104,14 @@ mod tests {
         assert_eq!(c.gate_plugin_request(&answer(&a.surface_id, key)), None);
         assert_eq!(c.gate_plugin_request(&answer(&a.surface_id, key + 1)), None);
         assert_eq!(c.gate_plugin_request(&answer("nope", key)), None);
+        assert_eq!(c.gate_plugin_request(&answer(&a.surface_id, key)), None, "a retry");
         let refusal = |reason| PluginRefusal { plugin_id: "p".into(), reason };
-        assert_eq!(c.take_plugin_refusals(), [refusal(Refusal::TerminalOnly), refusal(Refusal::NotOnScreen), refusal(Refusal::NoTab)]);
+        let terminal = refusal(Refusal::TerminalOnly);
+        assert_eq!(c.take_plugin_refusals(), [terminal.clone(), refusal(Refusal::NotOnScreen), refusal(Refusal::NoTab), terminal]);
         assert!(c.take_plugin_refusals().is_empty(), "taken once");
 
-        // Only the answer that named the request on screen is logged; the request stays for the user.
+        // Only an answer that named the request on screen is logged, once per plugin; the request stays
+        // for the user.
         let log = c.decisions("", 10);
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].outcome, crate::Outcome::RefusedPlugin { plugin_id: "p".into(), reason: Refusal::TerminalOnly });
