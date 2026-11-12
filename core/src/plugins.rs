@@ -649,16 +649,79 @@ fn plain_opt(s: Option<String>, max: usize) -> Option<String> {
     s.map(|s| plain(&s, max)).filter(|s| !s.trim().is_empty())
 }
 
-/// Haunt's own row status words: a label saying one could pass for it.
-const STATUS_WORDS: [&str; 8] = ["needs you", "waiting", "approve", "allow", "deny", "running", "idle", "done"];
+/// `s` after NFKD with combining marks dropped, lowercased, lookalikes folded (0→o, 1/i/|→l, 5→s, rn→m,
+/// vv→w).
+fn status_fold(s: &str) -> String {
+    use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
+    let folded: String = s
+        .nfkd()
+        .filter(|&c| !is_combining_mark(c))
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            '0' => 'o',
+            '1' | 'i' | '|' => 'l',
+            '5' => 's',
+            c => c,
+        })
+        .collect();
+    folded.replace("rn", "m").replace("vv", "w")
+}
 
-/// Whether `label`'s letters and digits spell a status word, ignoring case, spacing and punctuation; any
-/// non-ASCII letter counts as a match, so a lookalike from another script can't slip by.
-fn says_status(label: &str) -> bool {
-    let key: Vec<char> = label.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect();
-    STATUS_WORDS.iter().any(|w| {
-        let w: Vec<char> = w.chars().filter(char::is_ascii_alphanumeric).collect();
-        key.len() == w.len() && key.iter().zip(&w).all(|(k, w)| k == w || !k.is_ascii())
+/// Where the sidebar itself breaks text: words split here, and only here.
+fn status_separator(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '·' | ':' | '?')
+}
+
+/// The words of `s` (`status_fold`ed), split at whitespace and `status_separator`s with any other
+/// punctuation inside a word dropped, so "Do.ne" is one word; a run of one-letter words is joined ("d o n e").
+fn status_tokens(s: &str) -> Vec<Vec<char>> {
+    let mut tokens: Vec<Vec<char>> = Vec::new();
+    let mut joining = false;
+    for word in status_fold(s).split(status_separator) {
+        let word: Vec<char> = word.chars().filter(|c| c.is_alphanumeric()).collect();
+        if word.is_empty() {
+            continue;
+        }
+        let one = word.len() == 1;
+        match tokens.last_mut() {
+            Some(last) if one && joining => last.extend(word),
+            _ => tokens.push(word),
+        }
+        joining = one;
+    }
+    tokens
+}
+
+/// Whether `label` spells one of Haunt's status words or phrases: the sidebar's own (`layout::STATUS_TEXTS`,
+/// and "Waiting" alone) and the Allow/Deny buttons. Refused when a run of its words matches a phrase, apart
+/// or run together, or when its letters and digits alone equal one, or start or end with one at a break
+/// in the label ("Al·low ok"; "allowlist" is fine). A non-ASCII letter matches any letter, so a lookalike
+/// from another script can't slip by.
+pub(crate) fn says_status(label: &str) -> bool {
+    static PHRASES: std::sync::LazyLock<Vec<Vec<Vec<char>>>> = std::sync::LazyLock::new(|| {
+        let waiting = crate::layout::WAITING.split(' ').next();
+        let phrases = crate::layout::STATUS_TEXTS.iter().copied().chain(waiting).chain(["Allow", "Deny"]).map(status_tokens);
+        phrases.flat_map(|p| [vec![p.concat()], p]).collect()
+    });
+    let same = |w: &[char], p: &[char]| w.len() == p.len() && w.iter().zip(p).all(|(w, p)| w == p || !w.is_ascii());
+    let words = status_tokens(label);
+    if PHRASES.iter().any(|p| words.windows(p.len()).any(|run| run.iter().zip(p).all(|(w, p)| same(w, p)))) {
+        return true;
+    }
+    // The whole label's letters and digits, with a break marked wherever anything else stood.
+    let (mut text, mut breaks) = (Vec::new(), vec![true]);
+    for c in status_fold(label).chars() {
+        if c.is_alphanumeric() {
+            text.push(c);
+            breaks.push(false);
+        } else if let Some(b) = breaks.last_mut() {
+            *b = true;
+        }
+    }
+    *breaks.last_mut().unwrap() = true;
+    PHRASES.iter().filter(|p| p.len() == 1).map(|p| &p[0]).any(|p| {
+        let n = p.len();
+        n <= text.len() && ((same(&text[..n], p) && breaks[n]) || (same(&text[text.len() - n..], p) && breaks[text.len() - n]))
     })
 }
 
@@ -2084,10 +2147,15 @@ mod tests {
             spark: Some(wrows::Spark { points: vec![1, 2], tone: wrows::Tone::Text }),
         };
         assert!(decoration(d("CI 7/9", wrows::Tone::Text)).unwrap_err().contains("never text"));
-        for bad in ["Needs You", "needs  you", "NEEDS\u{200b}YOU", "N-E-E-D-S you!", "n\u{0435}eds you", "\u{FF24}one", "Waiting", "approve", "Allow.", "deny", "RUNNING", "idle", "done"] {
+        for bad in [
+            "Needs You", "needs  you", "NEEDS\u{200b}YOU", "N-E-E-D-S you!", "n\u{0435}eds you", "\u{FF24}one", "Waiting", "approve", "Allow.",
+            "deny", "RUNNING", "idle", "done", "d0ne", "ldle", "|dle", "1DLE", "Waiting for…", "✓ done", "FAILED", "approve?", "needs you later",
+            "done 3/4", "CI: d o n e", "fai1ed", "nee\u{1D41D}s you", "runn1ng", "allovv", "WaitingForYou",
+            "Al·low", "Do.ne", "Allo\u{0353}w", "Al·low ok", "ok De·ny", "d\u{f3}ne", "ap-prove",
+        ] {
             assert!(decoration(d(bad, wrows::Tone::Dim)).is_err(), "{bad:?}");
         }
-        for ok in ["CI 7/9", "needs you later", "done 3/4", "idler", "✓"] {
+        for ok in ["CI 7/9", "spec 11/18", "3 edits", "idler", "✓", "abandoned", "wait 2m", "allowlist", "allowlist ok", "undone·x"] {
             let dec = decoration(d(ok, wrows::Tone::Warn)).unwrap();
             assert_eq!(dec.spark.unwrap().tone, Tone::Text, "the sparkline may keep text");
         }

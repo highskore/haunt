@@ -237,8 +237,8 @@ interface rows {
 
   record decoration {
     // The right-hand slot. Its tone is dim or warn (text is refused: it would pass for needs-you), and a
-    // label spelling one of haunt's status words (needs you, waiting, approve, allow, deny, running, idle,
-    // done), however cased, spaced or lookalike, is refused.
+    // label containing one of haunt's status words (needs you, waiting, approve, allow, deny, running, idle,
+    // done, failed) anywhere, however cased, spaced or lookalike, is refused; "CI 7/9" is fine.
     label: option<string>,
     label-tone: tone,
     // After the meta line, separated by " · ".

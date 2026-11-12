@@ -96,6 +96,12 @@ pub struct Subrow {
 pub const NEEDS_YOU: &str = "NEEDS YOU";
 pub const RUNNING: &str = "RUNNING";
 pub const IDLE: &str = "IDLE";
+pub const WAITING: &str = "Waiting for you";
+pub const APPROVE: &str = "Approve";
+pub const DONE: &str = "Done";
+pub const FAILED: &str = "Failed";
+/// Every fixed word a row or group shows for a status; a plugin's row label may spell none of them.
+pub const STATUS_TEXTS: [&str; 7] = [NEEDS_YOU, RUNNING, IDLE, WAITING, APPROVE, DONE, FAILED];
 pub const NEEDS_YOU_ID: &str = "needs-you";
 pub const RUNNING_ID: &str = "running";
 pub const IDLE_ID: &str = "idle";
@@ -185,23 +191,23 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
     let status = session.shown_status(now);
     let task = match status {
         Status::NeedsYou => Some(match session.live_permission() {
-            Some(p) => format!("Approve: {}?", p.preview()),
-            None => "Waiting for you".to_owned(),
+            Some(p) => format!("{APPROVE}: {}?", p.preview()),
+            None => WAITING.to_owned(),
         }),
         Status::Running => session.progress.current_task().map(str::to_owned).or_else(|| session.prompt.clone()),
         // Done once its background subagents are too.
         Status::Done => Some(match session.turn_started.zip(session.turn_finished) {
-            Some((a, b)) => format!("Done in {}", coarse(session.progress.last_stop().map_or(b, |c| b.max(c)).saturating_duration_since(a))),
-            None => "Done".to_owned(),
+            Some((a, b)) => format!("{DONE} in {}", coarse(session.progress.last_stop().map_or(b, |c| b.max(c)).saturating_duration_since(a))),
+            None => DONE.to_owned(),
         }),
-        Status::Failed => Some("Failed".to_owned()),
+        Status::Failed => Some(FAILED.to_owned()),
         Status::Idle => None,
     };
     let status_text = match (status, progress) {
-        (Status::NeedsYou, _) => "needs you".to_owned(),
+        (Status::NeedsYou, _) => NEEDS_YOU.to_lowercase(),
         (Status::Running, Some(p)) => format!("{}/{}", p.done, p.total),
-        (Status::Done, _) => "done".to_owned(),
-        (Status::Failed, _) => "failed".to_owned(),
+        (Status::Done, _) => DONE.to_lowercase(),
+        (Status::Failed, _) => FAILED.to_lowercase(),
         _ => String::new(),
     };
     let active = matches!(status, Status::Running | Status::NeedsYou);
@@ -476,6 +482,58 @@ mod tests {
         let warp = &snap.groups[2].rows[1];
         assert_eq!(warp.progress, Some(Progress { done: 6, total: 6 }));
         assert!(warp.subagents.is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "plugins")]
+    fn a_plugin_label_cant_spell_any_status_a_row_shows() {
+        use crate::plugins::says_status;
+        let (t, s) = (Instant::now(), Duration::from_secs);
+        let session = |events: &[&str], verified: bool| {
+            let mut x = Session::new(t);
+            for e in events {
+                x.apply(&ev(e), verified, t + s(5));
+            }
+            x
+        };
+        let start = r#"{"event":"prompt_submit","query":"go"}"#;
+        let tasks = [r#"{"event":"task_created","task_id":"1","task_subject":"a"}"#, r#"{"event":"task_created","task_id":"2","task_subject":"b"}"#];
+        let tabs: Vec<Tab> = [
+            session(&[start, r#"{"event":"permission_seen","tool_name":"Bash","tool_input":{"command":"ls"}}"#], true),
+            session(&[start, r#"{"event":"permission_request"}"#], false),
+            session(&[start, tasks[0], tasks[1]], true),
+            session(&[start, r#"{"event":"stop"}"#], true),
+            session(&[r#"{"event":"stop"}"#], true),
+            session(&[start, r#"{"event":"stop_failure"}"#], false),
+            Session::new(t),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, x)| (format!("t{i}"), "/w".to_owned(), None, x))
+        .collect();
+        let snap = render(&tabs, t + s(60));
+        let statuses: Vec<_> = tabs.iter().map(|tab| tab.3.status).collect();
+        for st in [Status::NeedsYou, Status::Running, Status::Done, Status::Failed, Status::Idle] {
+            assert!(statuses.contains(&st), "{st:?} not covered");
+        }
+        for g in &snap.groups {
+            assert!(says_status(&g.label), "group {:?}", g.label);
+            for r in &g.rows {
+                let st = tabs.iter().find(|tab| tab.0 == r.surface_id).unwrap().3.status;
+                if r.status_text.contains('/') {
+                    assert!(!says_status(&r.status_text), "progress {:?} stays allowed", r.status_text);
+                } else if !r.status_text.is_empty() {
+                    assert!(says_status(&r.status_text), "{st:?} status {:?}", r.status_text);
+                }
+                // A running row's task is the agent's own words, not Haunt's.
+                if st != Status::Running && !r.task.is_empty() {
+                    assert!(says_status(&r.task), "{st:?} task {:?}", r.task);
+                }
+            }
+        }
+        for w in STATUS_TEXTS {
+            assert!(says_status(w) && says_status(&w.to_lowercase()), "{w}");
+        }
     }
 
     #[test]
