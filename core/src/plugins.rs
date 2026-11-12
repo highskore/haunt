@@ -588,6 +588,16 @@ fn cwd_globs(globs: &[String]) -> Vec<String> {
     globs.iter().filter(|g| g.starts_with(crate::plugin_manifest::FS_PREFIX)).cloned().collect()
 }
 
+/// The pinned fs globs `cwd_globs` drops, as the load error the user sees for each.
+pub fn dropped_fs_grants(caps: &Capabilities) -> Vec<String> {
+    let dropped = |what: &'static str, gs: &[String]| {
+        gs.iter().filter(|g| !g.starts_with(crate::plugin_manifest::FS_PREFIX)).map(move |g| {
+            format!("{what} {g:?} is off: a plugin now reaches only the agent's project folder ({}…)", crate::plugin_manifest::FS_PREFIX)
+        }).collect::<Vec<_>>()
+    };
+    [dropped("reading", &caps.fs_read), dropped("writing", &caps.fs_write)].concat()
+}
+
 impl wpanel::Host for HostState {
     fn show(&mut self, id: String, placement: wpanel::Placement, title: String, nodes: Vec<wpanel::PanelNode>) -> Result<(), String> {
         let mut panel = crate::plugin_panel::build(id, placement, title, nodes)?;
@@ -1499,6 +1509,9 @@ mod tests {
     #[test]
     fn a_lockfile_cannot_widen_fs_grants_past_agent_folders() {
         assert_eq!(cwd_globs(&["/etc/hosts".into(), "${cwd}/a".into(), "${cwd}x".into()]), ["${cwd}/a"]);
+        let caps = Capabilities { fs_read: vec!["/etc/hosts".into(), "${cwd}/a".into()], fs_write: vec!["~/x".into()], ..Default::default() };
+        let errs = dropped_fs_grants(&caps);
+        assert!(errs.len() == 2 && errs[0].starts_with("reading \"/etc/hosts\" is off") && errs[1].starts_with("writing \"~/x\""), "{errs:?}");
     }
 
     #[test]

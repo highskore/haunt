@@ -18,7 +18,7 @@ use crate::plugin_pack::{self, ThemeContribution};
 use crate::plugin_settings::PluginConfig;
 use crate::plugin_theme::{Theme, ThemeToken};
 use crate::plugin_panel::PanelPlacement;
-use crate::plugins::{HostRequest, HostState, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost, RowMenuItem};
+use crate::plugins::{dropped_fs_grants, HostRequest, HostState, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost, RowMenuItem};
 
 pub const LOCKFILE: &str = "plugins.lock";
 pub const WASM: &str = "plugin.wasm";
@@ -561,6 +561,7 @@ impl Store {
                 }
                 continue;
             }
+            set.errors.extend(dropped_fs_grants(&e.granted).into_iter().map(|why| format!("{}: {why}", e.id)));
             let loaded = self.verify(&e).and_then(|(manifest, wasm, wasm_digest)| {
                 let cache = cache.as_ref().map_err(|err| StoreError::Invalid(err.to_string()))?;
                 let data = self.data_dir(&e.id);
