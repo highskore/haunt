@@ -35,6 +35,8 @@ pub mod plugin_settings;
 pub mod plugin_theme;
 #[cfg(feature = "plugins")]
 pub mod plugins;
+#[cfg(feature = "plugins")]
+pub mod theme_layers;
 pub mod progress;
 pub mod ptygate;
 mod serve;

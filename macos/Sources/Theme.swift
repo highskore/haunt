@@ -339,6 +339,19 @@ struct LoadedTheme {
     /// The user-installed plugin fonts it uses: never registered, only `font.ui` draws with them.
     var uiFonts: [URL] = []
     var problems: [String] = []
+    /// The chain's `[[layer]]` tables as core checked them, and their images; `layers` is them resolved against `theme`.
+    var layerSource = LayerSource()
+    var layers: [ResolvedLayer] = []
+
+    /// Core's `theme_layers`: each chain file's name, text and the PNGs it names, ancestors first. Nil without the
+    /// real core, where a theme has no layers.
+    #if HAUNT_REAL_CORE
+    static var layerParser: ((_ chain: [(name: String, toml: String, files: [(String, Data)])]) -> (LayerSource, [String]))? = coreLayerParser
+    #else
+    static var layerParser: ((_ chain: [(name: String, toml: String, files: [(String, Data)])]) -> (LayerSource, [String]))?
+    #endif
+    /// A layer image's file, like the plugin store's own cap on one.
+    static let maxImageBytes = 256 << 10
 
     static let maxDepth = 4
     /// The same cap the plugin store puts on a theme plugin's file.
@@ -423,7 +436,29 @@ struct LoadedTheme {
         out.problems += out.enforceContrast()
         let opacity = out.ghostty["background-opacity"]?.strings.first.flatMap(Double.init) ?? 1
         out.theme.app.terminalSeeThrough = opacity < 1 && out.theme.color.windowBg.alphaComponent < 1
+        if let parse = layerParser {
+            let sources = chain.reversed().map { _, _, file, url in (name: file, toml: readTheme(url) ?? "", files: layerFiles(url)) }
+            let (source, problems) = parse(sources)
+            out.problems += problems
+            out.layerSource = source
+            let (layers, unreadable) = Layers.resolve(source.specs, images: source.images.map(\.image), theme: out.theme)
+            out.layers = layers
+            out.problems += unreadable
+        }
         return out
+    }
+
+    /// The PNGs beside a theme file that its text names as `"<name>.png"`; core refuses any name it shouldn't read.
+    static func layerFiles(_ url: URL) -> [(String, Data)] {
+        guard let text = readTheme(url) else { return [] }
+        let names = Set(text.matches(of: #/"([a-z0-9-]{1,32}\.png)"/#).map { String($0.output.1) })
+        return names.sorted().compactMap { name -> (String, Data)? in
+            let file = url.deletingLastPathComponent().appendingPathComponent(name)
+            guard let h = try? FileHandle(forReadingFrom: file) else { return nil }
+            defer { try? h.close() }
+            guard let data = try? h.read(upToCount: maxImageBytes + 1) else { return nil }
+            return (name, data)
+        }
     }
 
     /// WCAG's ratio for large text and indicators.

@@ -20,6 +20,28 @@ let builtInCheck = Theme.statusCheck
 Theme.statusCheck = { _ in false }
 let bw = Theme()
 
+/// A 100×100 pt canvas drawn top-down, like Haunt's flipped views, at 1 px per pt.
+struct Canvas {
+    let ctx: CGContext
+    func alpha(x: Int, y: Int) -> Int {
+        let d = ctx.data!.assumingMemoryBound(to: UInt8.self)
+        return Int(d[(y * ctx.bytesPerRow) + x * 4 + 3])
+    }
+    func painted() -> Int { (0..<100).reduce(0) { n, y in n + (0..<100).filter { alpha(x: $0, y: y) > 0 }.count } }
+}
+func canvas() -> Canvas {
+    let ctx = CGContext(data: nil, width: 100, height: 100, bitsPerComponent: 8, bytesPerRow: 400, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    // Row 0 of the buffer is the top, as in a flipped view.
+    ctx.translateBy(x: 0, y: 100)
+    ctx.scaleBy(x: 1, y: -1)
+    return Canvas(ctx: ctx)
+}
+extension PrimSpec {
+    func withFrame(of other: PrimSpec) -> PrimSpec { var p = self; p.x = other.x; p.y = other.y; return p }
+}
+
+
 // The default.
 check(load(nil).theme == bw && load(nil).problems.isEmpty, "no theme is the default")
 check(load("bw").theme == bw && load("bw").files.isEmpty, "bw is the default and reads no file")
@@ -551,6 +573,123 @@ check(load("loud").theme.app.ornamentAlpha == AppTokens().ornamentAlpha && load(
       "and no more: \(load("loud").problems)")
 write(user, "clear", "[color]\nwindow.bg = \"#0e101680\"\n[ghostty]\nbackground-opacity = 0.55\n")
 check(load("clear").theme.app.terminalSeeThrough && !load("faint").theme.app.terminalSeeThrough, "a terminal is see-through only when its window and Ghostty both fade")
+// Layers: core checks the tables (cargo test); here, what the app does with them.
+do {
+    // Black and white has none, so nothing is drawn and nothing recorded.
+    check(load(nil).layers.isEmpty && load(nil).layerSource == LayerSource(), "bw has no layers")
+    Layers.set([], source: LayerSource())
+    var recorded: [(String, CGRect)] = []
+    Layers.recorder = { recorded.append(($0, $1)) }
+    let probe = canvas(); for slot in Layers.slots { Layers.draw(slot, CGRect(x: 0, y: 0, width: 40, height: 40), in: probe.ctx) }
+    check(recorded.isEmpty && probe.painted() == 0, "with no layers no slot draws")
+
+    // The chain goes to core ancestors first, with the PNGs each file names from its own folder.
+    var seen: [(name: String, toml: String, files: [(String, Data)])] = []
+    LoadedTheme.layerParser = { chain in
+        seen = chain
+        let fill = LayerSpec(id: "a", slot: "sidebar", prims: [PrimSpec(kind: "rect", fill: "@row.selected")])
+        let bad = LayerSpec(slot: "sidebar", prims: [PrimSpec(kind: "rect", fill: "@no.such.token")])
+        return (LayerSource(specs: [fill, bad], images: []), ["from core"])
+    }
+    write(user, "lp", "extends = \"lc\"\n[[layer]]\nslot = \"sidebar\"\n  [[layer.draw]]\n  kind = \"image\"\n  file = \"mark.png\"\n")
+    write(user, "lc", "[color]\nrow.selected = \"#0a0a0a\"\n")
+    try! Data([1, 2, 3]).write(to: user.appendingPathComponent("mark.png"))
+    try! Data([9]).write(to: user.appendingPathComponent("other.png"))
+    let lp = load("lp")
+    check(seen.map(\.name) == ["lc.toml", "lp.toml"], "ancestors first: \(seen.map(\.name))"); guard seen.count == 2 else { fatalError("no chain") }
+    check(seen[1].files.map(\.0) == ["mark.png"] && seen[1].files[0].1 == Data([1, 2, 3]) && seen[0].files.isEmpty, "only named PNGs are read")
+    check(lp.layers.count == 1 && lp.layers[0].prims[0].fill?.themeHex == "#0a0a0aff", "@tokens resolve against the finished theme")
+    check(lp.problems.contains("from core") && lp.problems.contains { $0.contains("no.such.token") }, "problems: \(lp.problems)")
+    LoadedTheme.layerParser = nil
+
+    // A flat colour under text must leave the text readable; a thin stroke and a bitmap needn't.
+    let white = Theme()
+    func resolved(_ slot: String, _ p: PrimSpec) -> ([ResolvedLayer], [String]) {
+        Layers.resolve([LayerSpec(slot: slot, prims: [p])], images: [], theme: white)
+    }
+    let primary = white.color.textPrimary.themeHex
+    check(resolved("row.selected", PrimSpec(kind: "rect", fill: primary)).0.isEmpty, "a fill the size of the text's own colour is dropped")
+    check(resolved("row.selected", PrimSpec(kind: "rect", fill: primary)).1.first?.contains("color.text.primary") == true, "and says why")
+    check(resolved("row.selected", PrimSpec(kind: "rect", stroke: primary)).0.count == 1, "a 1 pt stroke isn't held to it")
+    check(resolved("row.selected", PrimSpec(kind: "rect", stroke: primary, width: 4)).0.isEmpty, "a wide one is")
+    check(resolved("row.selected", PrimSpec(kind: "gradient", stops: [.init(color: "#00000000", at: 0), .init(color: primary, at: 1)])).0.isEmpty,
+          "nor may a gradient's stops")
+    check(resolved("window.bg", PrimSpec(kind: "rect", fill: primary)).0.count == 1, "a slot without text may use any colour")
+
+    // Clipped to the slot (bleed included), never into the excluded terminal, and states pick layers.
+    func layer(_ slot: String, _ p: PrimSpec, when: [String] = [], opacity: Double = 1) -> ResolvedLayer {
+        Layers.resolve([LayerSpec(slot: slot, when: when, opacity: opacity, prims: [p])], images: [], theme: white).0[0]
+    }
+    let everywhere = PrimSpec(kind: "rect", x: SpanSpec(a: -400, b: -400), y: SpanSpec(a: -400, b: -400), fill: "#000000")
+    Layers.set([layer("window.bg", everywhere), layer("row.selected", everywhere), layer("sidebar", everywhere, when: ["focused"])], source: LayerSource())
+    var c = canvas()
+    Layers.draw("window.bg", CGRect(x: 0, y: 0, width: 100, height: 100), exclude: CGRect(x: 50, y: 0, width: 50, height: 100), in: c.ctx)
+    check(c.alpha(x: 10, y: 10) == 255 && c.alpha(x: 60, y: 10) == 0 && c.alpha(x: 99, y: 99) == 0, "window.bg skips the terminal")
+    c = canvas()
+    Layers.draw("row.selected", CGRect(x: 20, y: 20, width: 40, height: 20), within: CGRect(x: 0, y: 0, width: 64, height: 100), in: c.ctx)
+    check(c.alpha(x: 30, y: 30) == 255 && c.alpha(x: 30, y: 15) == 255 && c.alpha(x: 30, y: 13) == 0, "a row's layer bleeds 6 pt, no more")
+    check(c.alpha(x: 63, y: 30) == 255 && c.alpha(x: 65, y: 30) == 0, "and never past the sidebar")
+    c = canvas()
+    Layers.draw("sidebar", CGRect(x: 0, y: 0, width: 40, height: 40), state: ["inactive"], in: c.ctx)
+    check(c.painted() == 0, "a focused-only layer stays off in an inactive window")
+    Layers.draw("sidebar", CGRect(x: 0, y: 0, width: 40, height: 40), state: ["focused"], in: c.ctx)
+    check(c.alpha(x: 5, y: 5) == 255 && c.alpha(x: 45, y: 5) == 0, "and draws, clipped, in a focused one")
+
+    // Bitmaps under text, and the backdrop behind the terminal, are kept faint; the backdrop only shows through.
+    let dots = PrimSpec(kind: "pattern", cell: [1, 1], dots: [.init(color: "#ffffff", x: 0, y: 0)])
+    Layers.set([layer("sidebar", dots), layer("pane.backdrop", everywhere), layer("bar.track", dots)], source: LayerSource())
+    c = canvas()
+    Layers.draw("sidebar", CGRect(x: 0, y: 0, width: 40, height: 40), in: c.ctx)
+    check((1...32).contains(c.alpha(x: 5, y: 5)), "a pattern under text is at most 12% opaque: \(c.alpha(x: 5, y: 5))")
+    c = canvas()
+    Layers.draw("bar.track", CGRect(x: 0, y: 0, width: 40, height: 40), in: c.ctx)
+    check(c.alpha(x: 5, y: 5) == 255, "but not where there's no text")
+    recorded = []
+    c = canvas()
+    Layers.terminalSeeThrough = false
+    Layers.draw("pane.backdrop", CGRect(x: 0, y: 0, width: 40, height: 40), in: c.ctx)
+    check(c.painted() == 0 && recorded.isEmpty, "the backdrop is never drawn behind an opaque terminal")
+    Layers.terminalSeeThrough = true
+    Layers.draw("pane.backdrop", CGRect(x: 0, y: 0, width: 40, height: 40), in: c.ctx)
+    check((1...32).contains(c.alpha(x: 5, y: 5)) && c.alpha(x: 45, y: 5) == 0, "behind a see-through one, at most 12%: \(c.alpha(x: 5, y: 5))")
+    Layers.terminalSeeThrough = false
+
+    // Geometry: anchors, text anchors, and corners turning inward.
+    let slot = CGRect(x: 10, y: 20, width: 100, height: 40), run = CGRect(x: 30, y: 25, width: 20, height: 10)
+    check(Layers.frame(PrimSpec(kind: "rect", x: SpanSpec(mode: "right", a: -2, b: 6), y: SpanSpec(mode: "center", b: 4)), in: slot, textRun: run)
+          == CGRect(x: 102, y: 38, width: 6, height: 4), "anchored frame")
+    check(Layers.frame(PrimSpec(kind: "line", x: SpanSpec(a: 4, b: 0, fromText: true)), in: slot, textRun: run) == CGRect(x: 54, y: 20, width: 56, height: 40),
+          "from the text's end to the edge")
+    let mark = PrimSpec(kind: "rect", x: SpanSpec(mode: "left", b: 4), y: SpanSpec(mode: "top", b: 4), fill: "#ffffff")
+    var corner = mark
+    corner.repeatMode = "corners"
+    Layers.set([layer("window.bg", PrimSpec(kind: "path", fill: "#ffffff", repeatMode: "corners", path: [.init(op: "M", pts: [0, 0]), .init(op: "L", pts: [4, 0]),
+                                            .init(op: "L", pts: [0, 4]), .init(op: "Z", pts: [])], view: [4, 4]).withFrame(of: mark))], source: LayerSource())
+    c = canvas()
+    Layers.draw("window.bg", CGRect(x: 0, y: 0, width: 64, height: 64), in: c.ctx)
+    check(c.alpha(x: 0, y: 0) == 255 && c.alpha(x: 63, y: 0) == 255 && c.alpha(x: 63, y: 63) == 255 && c.alpha(x: 0, y: 63) == 255,
+          "a corner mark in each corner")
+    check(c.alpha(x: 3, y: 3) == 0 && c.alpha(x: 60, y: 3) == 0 && c.alpha(x: 32, y: 32) == 0, "pointing into each corner, nowhere else")
+    Layers.set([], source: LayerSource())
+    Layers.recorder = nil
+
+    // Under text by construction: a function that draws slots draws one before any text. Layers are clipped to
+    // their slot, so a later slot's layers can't reach text drawn earlier in another.
+    var sites = 0
+    for file in ["SidebarView", "TitleBarView", "Palette", "MainWindow"] {
+        let src = try! String(contentsOfFile: "macos/Sources/\(file).swift", encoding: .utf8)
+        for body in src.components(separatedBy: "func ").dropFirst() where body.contains("Layers.draw(") {
+            sites += 1
+            let firstLayer = body.range(of: "Layers.draw(")!.lowerBound
+            let text = ["Draw.text(", "Draw.chromeText(", "CTLineDraw("].compactMap { body.range(of: $0)?.lowerBound }.min()
+            check(text.map { $0 > firstLayer } ?? true, "\(file): text drawn before a layer in func \(body.prefix(40))")
+        }
+    }
+    check(sites >= 8, "found the drawing sites: \(sites)")
+    let slotsDrawn = ["SidebarView", "TitleBarView", "Palette", "MainWindow"].map { try! String(contentsOfFile: "macos/Sources/\($0).swift", encoding: .utf8) }.joined()
+    let missing = Layers.slots.filter { !slotsDrawn.contains("\"\($0)\"") }
+    check(missing.isEmpty, "every slot has a site: \(missing)")
+}
 
 print(failures == 0 ? "theme: all passed" : "theme: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

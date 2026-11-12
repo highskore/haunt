@@ -140,6 +140,9 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
             }
             (lightsHover || Theme.current.effects.titlebarLights == "color" ? Tok.Lights.fill[i] : Tok.Color.lights).setFill()
             NSBezierPath(ovalIn: r).fill()
+            if let ctx = NSGraphicsContext.current?.cgContext {
+                Layers.draw("lights", r, within: bounds, state: Layers.state(self, hover: lightsHover), index: i, in: ctx)
+            }
             guard lightsHover else { continue }
             Tok.Lights.glyph[i].set()
             let c = NSPoint(x: r.midX, y: r.midY), k = r.width * Tok.Lights.glyphHalf, bar = k * Tok.Lights.barScale
@@ -307,6 +310,7 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
                 Draw.fill(NSRect(x: 0, y: bounds.height - 3 * Tok.App.hairline, width: bounds.width, height: Tok.App.hairline), Theme.current.app.titlebarRule2)
             }
         }
+        Layers.draw("titlebar", bounds, state: Layers.state(self), in: ctx)
 
         if caption { drawCaption(ctx) }
         drawLights()

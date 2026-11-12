@@ -630,6 +630,7 @@ final class PaletteView: NSView {
             inner.addClip()
         }
 
+        Layers.draw("palette", bounds, state: Layers.state(self), in: ctx)
         ctx.saveGState()
         ctx.translateBy(x: edge, y: edge)
         if dialog {
@@ -750,6 +751,7 @@ final class PaletteView: NSView {
         let padY = Tok.Size.paletteInputPad[0], gap = Tok.Size.paletteInputGap
         let lineH = Tok.Size.paletteInputFont * lh
         let mid = padY + lineH / 2
+        Layers.draw("palette.field", NSRect(x: 0, y: 0, width: width, height: inputH), state: Layers.state(self), in: ctx)
         var x = padX
         if Theme.current.effects.paletteInputIcon {
             let f = Draw.ui(Tok.Size.paletteInputFont - 1)
@@ -849,6 +851,13 @@ final class PaletteView: NSView {
         } else if isSel {
             Draw.fill(NSRect(x: 0, y: top, width: width, height: h), Tok.Color.paletteSel)
             Draw.fill(NSRect(x: 0, y: top, width: Tok.Size.paletteSelBar, height: h), Tok.Color.paletteInk)
+        }
+        if isSel || index == hovered && row.action != .none {
+            let inset = pill ? app.palettePillInset : 0
+            let slot = isSel ? "palette.row.selected" : "palette.row.hover"
+            Layers.draw(slot, NSRect(x: inset, y: top, width: width - 2 * inset, height: h),
+                        within: NSRect(x: -edge, y: -edge, width: bounds.width, height: bounds.height),
+                        state: Layers.state(self, selected: isSel, hover: index == hovered), in: ctx)
         }
         // A plain mode's selection is inverted: its row is ink, its text whichever of black or white reads on it.
         let inverted = isSel && plainMode ? Tok.Color.paletteInk.readable : nil

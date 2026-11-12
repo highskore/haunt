@@ -314,6 +314,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             let w = max(Tok.App.hairline, Theme.current.app.sidebarEdge)
             Draw.fill(NSRect(x: bounds.width - w, y: 0, width: w, height: bounds.height), Tok.Color.hairline)
         }
+        Layers.draw("sidebar", bounds, state: Layers.state(self), in: ctx)
         if groupBox { drawGroupBoxes() }
         for item in items {
             switch item {
@@ -361,7 +362,9 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let f = Draw.ui(size), lineH = size * lh
         let line = Draw.truncated(Draw.line(n == 1 ? "1 agent" : "\(n) agents", f, Tok.App.sidebarFootFg),
                                   contentWidth - 2 * pad[1], f, Tok.App.sidebarFootFg)
-        let top = bounds.height - pad[2] - lineH
+        let band = pad[0] + lineH + pad[2], top = bounds.height - pad[2] - lineH
+        Layers.draw("sidebar.footer", NSRect(x: 0, y: bounds.height - band, width: contentWidth, height: band),
+                    textRun: NSRect(x: pad[1], y: top, width: Draw.width(line), height: lineH), state: Layers.state(self), in: ctx)
         Draw.text(line, font: f, x: pad[1], top: top, lineHeight: lineH, in: ctx)
         let frame = Theme.current.app.sidebarFootFrame
         if frame.alphaComponent > 0 {
@@ -467,6 +470,9 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             labelLines[text] = l
             return l
         }()
+        let run = NSRect(x: Tok.Size.labelPad[1], y: top + Tok.Size.labelPad[0], width: Draw.width(line), height: Tok.Size.labelFont * lh)
+        Layers.draw("label.group", NSRect(x: 0, y: top, width: contentWidth, height: labelHeight), within: bounds, textRun: run,
+                    state: Layers.state(self), in: ctx)
         if groupBox {
             // On the box's top edge, over a gap in it.
             let lineH = Tok.Size.labelFont * lh, x = Theme.current.app.groupPad + Tok.Size.labelPad[1]
@@ -613,6 +619,10 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             shape.fill()
         }
         let l = lines(for: row)
+        let hover = hoverId == row.surfaceId, state = Layers.state(self, selected: row.selected, hover: hover)
+        Layers.draw("row", box, within: bounds, state: state, in: ctx)
+        if row.selected { Layers.draw("row.selected", box, within: bounds, state: state, in: ctx) }
+        if hover && !row.selected { Layers.draw("row.hover", box, within: bounds, state: state, in: ctx) }
         let padY = Tok.Size.rowPad[0], padX = rowPadX
         let gapY = Tok.Size.rowGap[0], gapX = Tok.Size.rowGap[1]
         let left = padX, right = contentWidth - padX
@@ -622,6 +632,11 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         // Line 1: icon, name, status.
         let icon = NSRect(x: left, y: y + (rowLine1 - Tok.Size.iconSize) / 2, width: Tok.Size.iconSize, height: Tok.Size.iconSize)
         drawIcon(row.kind, in: icon, ctx: ctx)
+        if row.needsYou && !l.hovered {
+            let textH = Tok.Size.rowRight * lh
+            let run = NSRect(x: right - l.statusW, y: y + (rowLine1 - textH) / 2, width: l.statusW, height: textH)
+            Layers.draw("status.needs", run, within: bounds, textRun: run, state: state, in: ctx)
+        }
 
         if l.hovered {
             let r = closeRect(top: top)
@@ -745,6 +760,8 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     /// The progress bar, with `[effects] bar.radius` and `bar.glow`.
     private func drawBar(_ track: NSRect, fill: NSRect) {
         let fx = Theme.current.effects, r = min(fx.barRadius, track.height / 2)
+        let ctx = NSGraphicsContext.current?.cgContext
+        defer { if let ctx, fill.width > 0 { Layers.draw("bar.fill", fill, in: ctx) } }
         if fx.progressStyle == "dotted" { return drawDottedBar(track, fill: fill) }
         if fx.progressStyle == "segments" {
             // A sunken (or `app.bar.frame`d) track, 2 pt in, filled with `app.bar.segment` blocks.
@@ -768,11 +785,13 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         }
         guard r > 0 || fx.barGlow else {
             Draw.fill(track, Tok.Color.barTrack)
+            if let ctx { Layers.draw("bar.track", track, in: ctx) }
             Draw.fill(fill, Tok.Color.barFill)
             return
         }
         Tok.Color.barTrack.setFill()
         NSBezierPath(roundedRect: track, xRadius: r, yRadius: r).fill()
+        if let ctx { Layers.draw("bar.track", track, in: ctx) }
         guard fill.width > 0 else { return }
         NSGraphicsContext.saveGraphicsState()
         if fx.barGlow {
@@ -812,10 +831,12 @@ final class SidebarView: NSView, NSTextFieldDelegate {
 
     /// How far a raised row's shadow reaches past it, for redrawing.
     private var shadowReach: CGFloat {
-        Theme.current.effects.rowRaised ? Theme.current.app.rowRaisedBlur + Theme.current.app.rowRaisedDrop : 0
+        let layers = ["row", "row.selected", "row.hover"].contains(where: Layers.has) ? Layers.bleed["row"] ?? 0 : 0
+        return max(layers, Theme.current.effects.rowRaised ? Theme.current.app.rowRaisedBlur + Theme.current.app.rowRaisedDrop : 0)
     }
 
     private func drawIcon(_ kind: RowKind, in r: NSRect, ctx: CGContext) {
+        if kind != .shell { Layers.draw("icon", r, state: Layers.state(self), in: ctx) }
         if kind != .codex, Draw.pixelIcon(claude: kind == .claude, in: r) { return }
         switch kind {
         case .claude:
@@ -837,6 +858,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         case .shell:
             Tok.Color.iconBg.setFill()
             NSBezierPath(roundedRect: r, xRadius: Tok.Size.iconRadius, yRadius: Tok.Size.iconRadius).fill()
+            Layers.draw("icon", r, state: Layers.state(self), in: ctx)
             let glyphLH = Tok.Size.iconGlyph * lh
             Draw.text(shellGlyph, font: Fonts.glyph, x: r.midX - Draw.width(shellGlyph) / 2, top: r.midY - glyphLH / 2,
                       lineHeight: glyphLH, in: ctx)

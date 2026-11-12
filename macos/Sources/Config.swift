@@ -127,8 +127,10 @@ final class HauntConfig {
             ghostty["minimum-contrast"] = .scalar(Self.num(CGFloat(min(max(theirs, Self.minimumContrast), 21))))
         }
         toml["ghostty"] = ghostty.merging(toml["ghostty"] ?? [:]) { _, user in user }
-        let themeChanged = loaded.theme != Theme.current
+        let themeChanged = loaded.theme != Theme.current || loaded.layerSource != Layers.source
         Theme.current = loaded.theme
+        Layers.set(loaded.layers, source: loaded.layerSource)
+        Layers.terminalSeeThrough = (toml["ghostty"]?["background-opacity"]?.strings.first.flatMap(Double.init) ?? 1) < 1
         themeName = loaded.name
         var problems: [String] = []
         let newKeys = KeyMap(table: toml["keys"] ?? [:], order: TOML.keyOrder(text, table: "keys"), pluginDefaults: pluginKeyDefaults) {

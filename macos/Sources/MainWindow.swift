@@ -23,6 +23,27 @@ final class RingView: NSView {
     }
 }
 
+/// The theme's `window.bg`, `pane.backdrop` and `pane.frame` layers, behind every other view: `window.bg` and
+/// `pane.frame` never reach into the terminal, and the backdrop shows only through a see-through terminal.
+final class WindowLayersView: NSView {
+    var pane = NSRect.zero { didSet { if pane != oldValue { needsDisplay = true } } }
+    /// How far `pane.frame` reaches out from the terminal.
+    static let paneFrameOutset: CGFloat = 4
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let state = Layers.state(self)
+        Layers.draw("window.bg", bounds, exclude: pane, state: state, in: ctx)
+        guard !pane.isEmpty else { return }
+        Layers.draw("pane.backdrop", pane, within: pane, state: state, in: ctx)
+        let o = Self.paneFrameOutset
+        Layers.draw("pane.frame", pane.insetBy(dx: -o, dy: -o), exclude: pane, state: state, in: ctx)
+    }
+}
+
 /// `ornament`'s watermark and corner marks, behind the content: shown only when the terminal's background lets them through.
 final class WatermarkView: NSView {
     override var isFlipped: Bool { true }
@@ -92,6 +113,7 @@ private final class RootView: NSView {
     let ring = RingView()
     let ornaments = OrnamentView()
     let watermark = WatermarkView()
+    let layers = WindowLayersView()
     /// A fixture's stand-in for the desktop behind glass (HAUNT_BACKDROP), so captures don't depend on the wallpaper.
     var backdrop: NSImageView? {
         didSet {
@@ -153,7 +175,7 @@ private final class RootView: NSView {
         material.material = .hudWindow
         material.blendingMode = .behindWindow
         material.state = .active
-        for v in [material, watermark, titleBar, sidebar, topRow, pane, ornaments, scrim, agents, toast, ring] { addSubview(v) }
+        for v in [material, layers, watermark, titleBar, sidebar, topRow, pane, ornaments, scrim, agents, toast, ring] { addSubview(v) }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -163,6 +185,8 @@ private final class RootView: NSView {
         scrim.layer?.backgroundColor = Tok.App.scrim.withAlphaComponent(Tok.Size.paletteScrimAlpha).cgColor
         let fx = Theme.current.effects
         material.isHidden = fx.windowMaterial != "glass" || backdrop != nil
+        layers.isHidden = !["window.bg", "pane.backdrop", "pane.frame"].contains(where: Layers.has)
+        layers.needsDisplay = true
         ring.isHidden = !fx.windowRing
         ring.radius = fx.windowRadius
         ring.ring = Theme.current.app.windowRing
@@ -179,6 +203,7 @@ private final class RootView: NSView {
         super.layout()
         agents.frame = bounds
         material.frame = bounds
+        layers.frame = bounds
         backdrop?.frame = bounds
         ring.frame = bounds
         ornaments.frame = bounds
@@ -209,6 +234,7 @@ private final class RootView: NSView {
         rightPane?.frame = NSRect(x: inner.maxX - rightW, y: bodyTop, width: rightW, height: inner.maxY - bodyTop)
         ornaments.pane = paneBox
         watermark.frame = pane.frame
+        layers.pane = pane.isHidden ? .zero : pane.frame
         review?.frame = reviewCoversSidebar ? NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top) : pane.frame
         scrim.frame = NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top)
     }

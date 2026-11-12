@@ -25,6 +25,13 @@ pub fn theme_says_status(text: String) -> bool {
     haunt_core::plugins::theme_says_status(&text)
 }
 
+/// A theme chain's `[[layer]]` tables, ancestors first, checked and capped, with the PNGs they name decoded.
+#[cfg(feature = "plugins")]
+#[uniffi::export]
+pub fn theme_layers(chain: Vec<ThemeSource>) -> LayerSet {
+    haunt_core::theme_layers::parse_chain(&chain)
+}
+
 #[uniffi::export]
 pub fn event_name(event: AgentEvent) -> String {
     event.kind.name().to_owned()
@@ -159,6 +166,8 @@ impl From<haunt_core::plugins::PluginError> for HostError {
 pub use haunt_core::plugins::{AuditClip, AuditLine, HostRequest, Mark, NotifyAction, PaletteItem, PluginKey, RowMenuItem};
 #[cfg(feature = "plugins")]
 pub use haunt_core::plugin_theme::ThemeToken;
+#[cfg(feature = "plugins")]
+pub use haunt_core::theme_layers::{Layer, LayerImage, LayerPathCmd, LayerPrim, LayerSet, LayerSpan, LayerStop, ThemeFile, ThemeSource};
 #[cfg(feature = "plugins")]
 pub use haunt_core::plugin_pack::ThemeContribution;
 #[cfg(feature = "plugins")]
