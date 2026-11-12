@@ -149,7 +149,9 @@ for i in "${!repos[@]}"; do
       echo "${repos[$i]}: refusing to build with $p in the way" >&2
       exit 1
     fi
-    ln -s "$ROOT/target/plugins" "$src/target"
+    # Its own target: plugin crates share a name, and cargo would take one's wasm as another's, fresh.
+    mkdir -p "$ROOT/target/plugins/$(basename "${repos[$i]}")"
+    ln -s "$ROOT/target/plugins/$(basename "${repos[$i]}")" "$src/target"
   fi
   srcs+=("$src")
 done
@@ -212,16 +214,19 @@ for i in "${!repos[@]}"; do
       cp "$src/$f" "$DEST/$id/$f"
     done < <(sed -n '3,$p' <<<"$info")
   else
-    # Our toolchain, whatever the plugin's own rust-toolchain file says.
-    (cd "$src" && RUSTUP_TOOLCHAIN="$TOOLCHAIN" cargo build -q --release --target wasm32-wasip2)
-    sed 's/^entry = .*/entry = "plugin.wasm"/' "$src/haunt-plugin.toml" >"$DEST/$id/haunt-plugin.toml"
-    # A CARGO_TARGET_DIR (relative to the source, as cargo reads it) holds what the entry's target/ would.
-    wasm="$src/$entry"
-    if [ -n "${CARGO_TARGET_DIR:-}" ] && [[ "$entry" == target/* ]]; then
+    # A CARGO_TARGET_DIR (relative to the source, as cargo reads it) holds what the entry's target/ would, one
+    # folder per plugin there too.
+    tdir=""
+    if [ -n "${CARGO_TARGET_DIR:-}" ]; then
       tdir="$CARGO_TARGET_DIR"
       [[ "$tdir" == /* ]] || tdir="$src/$tdir"
-      wasm="$tdir/${entry#target/}"
+      tdir="$tdir/$(basename "${repos[$i]}")"
     fi
+    # Our toolchain, whatever the plugin's own rust-toolchain file says.
+    (cd "$src" && { [ -z "$tdir" ] || export CARGO_TARGET_DIR="$tdir"; } && RUSTUP_TOOLCHAIN="$TOOLCHAIN" cargo build -q --release --target wasm32-wasip2)
+    sed 's/^entry = .*/entry = "plugin.wasm"/' "$src/haunt-plugin.toml" >"$DEST/$id/haunt-plugin.toml"
+    wasm="$src/$entry"
+    [ -n "$tdir" ] && [[ "$entry" == target/* ]] && wasm="$tdir/${entry#target/}"
     cp "$wasm" "$DEST/$id/plugin.wasm"
   fi
   echo "bundled plugin $id${rev:+ at ${rev:0:7}}"

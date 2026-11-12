@@ -27,9 +27,18 @@ git -C "$DIR/haunt-tabs-plus" show "$PIN:haunt-plugin.toml" | sed 's/^entry = .*
 cmp -s "$T/pinned.toml" "$T/tabs/dev.haunt.tabs-plus/haunt-plugin.toml" || fail "the bundled manifest isn't the pinned one"
 [ -z "$(ls -A target/plugin-src)" ] || fail "the staged sources were left behind: $(ls target/plugin-src)"
 # A CARGO_TARGET_DIR in the environment is where the wasm is found, not a stale one in the usual place.
-rm -f target/plugins/wasm32-wasip2/release/haunt_plugin.wasm
+rm -f target/plugins/haunt-tabs-plus/wasm32-wasip2/release/haunt_plugin.wasm
 CARGO_TARGET_DIR="$T/ctd" HAUNT_PLUGINS_DIR="$DIR" macos/bundle-plugins.sh "$T/ctd-out" tabs-plus >/dev/null
-[ -s "$T/ctd-out/dev.haunt.tabs-plus/plugin.wasm" ] && [ -s "$T/ctd/wasm32-wasip2/release/haunt_plugin.wasm" ] || fail "CARGO_TARGET_DIR not honoured"
+[ -s "$T/ctd-out/dev.haunt.tabs-plus/plugin.wasm" ] && [ -s "$T/ctd/haunt-tabs-plus/wasm32-wasip2/release/haunt_plugin.wasm" ] || fail "CARGO_TARGET_DIR not honoured"
+# Plugin crates share a name and often a lockfile: each is built on its own, never handed the wasm of the one
+# before it, which cargo would call fresh.
+if [ -f "$DIR/haunt-edge-glow/haunt-plugin.toml" ] && [ -f "$DIR/haunt-peek/haunt-plugin.toml" ]; then
+  HAUNT_PLUGINS_DIR="$DIR" macos/bundle-plugins.sh "$T/two" edge-glow,peek >/dev/null
+  grep -q "haunt:plugin/glow" "$T/two/dev.haunt.edge-glow/plugin.wasm" && grep -q "haunt:plugin/terminal" "$T/two/dev.haunt.peek/plugin.wasm" &&
+    ! grep -q "haunt:plugin/glow" "$T/two/dev.haunt.peek/plugin.wasm" || fail "a plugin got another's wasm"
+  CARGO_TARGET_DIR="$T/ctd2" HAUNT_PLUGINS_DIR="$DIR" macos/bundle-plugins.sh "$T/two-ctd" edge-glow,peek >/dev/null
+  ! grep -q "haunt:plugin/glow" "$T/two-ctd/dev.haunt.peek/plugin.wasm" || fail "a plugin got another's wasm from CARGO_TARGET_DIR"
+fi
 
 set +e
 HAUNT_PLUGINS_DIR="$DIR" macos/bundle-plugins.sh "$T/bad" tabs-plus,tabs 2>"$T/err"; code=$?
