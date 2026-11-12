@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::fs::{self, Metadata, OpenOptions};
 use std::io::Read;
+#[cfg(target_vendor = "apple")]
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -160,6 +161,7 @@ fn local(_: &Path) -> bool {
 }
 
 /// The flags of the innermost mount holding `path`.
+#[cfg(any(target_vendor = "apple", test))]
 fn mount_flags<'a>(path: &[u8], mounts: impl Iterator<Item = (&'a [u8], u32)>) -> Option<u32> {
     let under = |on: &[u8]| on == b"/" || path.strip_prefix(on).is_some_and(|rest| rest.first().is_none_or(|&b| b == b'/'));
     mounts.filter(|(on, _)| under(on)).max_by_key(|(on, _)| on.len()).map(|(_, f)| f)
@@ -328,6 +330,9 @@ mod tests {
         let wt = root.join("wt").to_str().unwrap().to_owned();
         fs::write(root.join("wt/.git"), format!("gitdir: {}\n", root.join("a/.git").display())).unwrap();
         assert_eq!(br.shell("s", &wt), Some("next".into()));
+        // Linux file times move with the kernel tick, so a same-size rewrite within one keeps its stamp.
+        #[cfg(target_os = "linux")]
+        std::thread::sleep(std::time::Duration::from_millis(20));
         fs::write(root.join("wt/.git"), format!("gitdir: {}\n", root.join("b/.git").display())).unwrap();
         assert_eq!(br.shell("s", &wt), Some("other".into()), "a rewritten gitdir file moves the repo");
         br.forget("s");

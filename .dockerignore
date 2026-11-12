@@ -1,0 +1,12 @@
+# The Linux check needs the Rust workspace, the WIT, the docs the tests read and design/tokens.json.
+**/target
+/build
+/.git
+/.toolchain
+/deps-src
+/.cache
+/macos
+/design/*
+!/design/tokens.json
+/docs/img
+/docs/spike/*.png

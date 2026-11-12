@@ -202,6 +202,16 @@ pub(crate) fn peer_allowed(stream: &UnixStream, me: u32) -> bool {
     peer_uid(stream) == Some(me)
 }
 
+#[cfg(target_os = "linux")]
+fn peer_uid(stream: &UnixStream) -> Option<u32> {
+    let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
+    let mut len = size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: the fd is a live socket owned by `stream`; cred and len are valid out-pointers of that size.
+    let rc = unsafe { libc::getsockopt(stream.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PEERCRED, (&raw mut cred).cast(), &mut len) };
+    (rc == 0 && len as usize == size_of::<libc::ucred>()).then_some(cred.uid)
+}
+
+#[cfg(not(target_os = "linux"))]
 fn peer_uid(stream: &UnixStream) -> Option<u32> {
     let (mut uid, mut gid) = (0, 0);
     // SAFETY: the fd is a live socket owned by `stream`; uid and gid are valid out-pointers.
