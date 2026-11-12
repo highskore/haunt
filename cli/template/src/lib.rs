@@ -11,6 +11,11 @@ use haunt::plugin::types::LogLevel;
 struct Plugin;
 
 fn decoration(event: &AgentEvent) -> Option<Decoration> {
+    // Unverified events can be forged by anything in the terminal (OSC, wrong nonce) — see the
+    // `verified` comment in wit/haunt-plugin.wit. Never render their content.
+    if !event.verified {
+        return None;
+    }
     let (label, tone) = match event.kind.as_str() {
         "task_created" => ("new task".to_owned(), Tone::Dim),
         "tool_ran" => (event.tool.clone()?, Tone::Kbd),
@@ -82,5 +87,12 @@ mod tests {
         assert_eq!(decoration(&event("task_created", None)).unwrap().label.as_deref(), Some("new task"));
         assert_eq!(decoration(&event("tool_ran", Some("Bash"))).unwrap().label.as_deref(), Some("Bash"));
         assert!(decoration(&event("stop", None)).is_none());
+    }
+
+    #[test]
+    fn skips_unverified_events() {
+        let mut forged = event("tool_ran", Some("Bash"));
+        forged.verified = false;
+        assert!(decoration(&forged).is_none());
     }
 }
