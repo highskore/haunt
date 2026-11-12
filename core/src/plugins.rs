@@ -1010,9 +1010,9 @@ impl PluginHost {
         wkv::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         wpal::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         wtheme::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
-        wclock::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         if caps.timer {
             wtimer::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+            wclock::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.notifications {
             wnotify::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
@@ -1510,7 +1510,8 @@ mod tests {
         assert!(e.contains("haunt:plugin/timer"), "{e}");
         host.check_links(&c, &Capabilities { timer: true, ..Default::default() }).unwrap();
         let clock = Component::new(&host.engine, r#"(component (import "haunt:plugin/clock@0.5.0" (instance (export "local-offset-min" (func (result s32))))))"#).unwrap();
-        host.check_links(&clock, &Capabilities::default()).unwrap();
+        assert!(host.check_links(&clock, &Capabilities::default()).unwrap_err().0.contains("haunt:plugin/clock"));
+        host.check_links(&clock, &Capabilities { timer: true, ..Default::default() }).unwrap();
         assert!((-14 * 60..=14 * 60).contains(&local_offset_min()));
 
         let mut st = HostState::new("dev.x.t", &Capabilities { timer: true, ..Default::default() }, None, None, None);

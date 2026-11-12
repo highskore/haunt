@@ -901,6 +901,11 @@ impl PluginSet {
         self.plugin(plugin_id)?.panel_action(panel_id, generation, action)
     }
 
+    /// Whether any plugin granted `timer` is still enabled.
+    pub fn ticking(&self) -> bool {
+        self.plugins.iter().any(|(caps, p)| caps.timer && p.disabled().is_none())
+    }
+
     /// Ticks the plugins granted `timer` whose interval has passed.
     pub fn tick(&mut self, now: std::time::Instant) {
         for (caps, p) in &mut self.plugins {
@@ -983,19 +988,27 @@ impl PluginSet {
 const TICK_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Sends the core's events to `set`'s plugins, and their timer ticks, for as long as `set` lives.
+/// The tick thread ends once no timer plugin is enabled. Plugin calls need the set's lock, so a
+/// tick skips a second the set is busy rather than queue behind an event.
 pub fn attach(core: &crate::Core, set: &Arc<Mutex<PluginSet>>) {
-    if crate::sync::lock(set).plugins.iter().any(|(caps, _)| caps.timer) {
+    if crate::sync::lock(set).ticking() {
         let weak = Arc::downgrade(set);
         let core = core.handle();
         let spawned = std::thread::Builder::new().name("haunt-tick".into()).spawn(move || {
             loop {
                 std::thread::sleep(TICK_POLL);
                 let Some(set) = weak.upgrade() else { return };
-                let pending = {
-                    let mut set = crate::sync::lock(&set);
-                    set.tick(std::time::Instant::now());
-                    set.pending_requests() > 0
+                let mut set = match set.try_lock() {
+                    Ok(s) => s,
+                    Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+                    Err(std::sync::TryLockError::WouldBlock) => continue,
                 };
+                if !set.ticking() {
+                    return;
+                }
+                set.tick(std::time::Instant::now());
+                let pending = set.pending_requests() > 0;
+                drop(set);
                 if pending {
                     core.requests_queued();
                 }
