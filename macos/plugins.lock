@@ -3,10 +3,10 @@ allowlist ssh://git@github.com/highskore/haunt-allowlist.git e28559eb52ca76b2c2f
 commands ssh://git@github.com/highskore/haunt-commands.git ac38db446966b480d198d716b1ff6123ac4d337d
 decision-log ssh://git@github.com/highskore/haunt-decision-log.git 5f689e2345309cc8dbdc18e1998532713a57bc4d
 tabs-plus ssh://git@github.com/highskore/haunt-tabs-plus.git 9ac8acadb8652e5203dafd757f2f16202dd258b4
-theme-glass ssh://git@github.com/highskore/haunt-theme-glass.git c9932a2997d660e0ad8f82e00f498e11610c75c9
-theme-sigil ssh://git@github.com/highskore/haunt-theme-sigil.git e88f26c9948eaf6e67b1f2ca5db49be367a8ff2c
-theme-win95 ssh://git@github.com/highskore/haunt-theme-win95.git 374ea62ae903a182107f404f8c25bfbb2eae4447
-theme-dmg ssh://git@github.com/highskore/haunt-theme-dmg.git 0e0a0d7e4e84ddc854105c8c9c79a1cbace3a354
+theme-glass ssh://git@github.com/highskore/haunt-theme-glass.git 5a7780e40a2fc73737f11a826d2dd7066308124c
+theme-sigil ssh://git@github.com/highskore/haunt-theme-sigil.git f12bdfa291df804662033b04cca3d5907324b248
+theme-win95 ssh://git@github.com/highskore/haunt-theme-win95.git efc80d347978e5aa231723d1456a61e38476444e
+theme-dmg ssh://git@github.com/highskore/haunt-theme-dmg.git e8f131220183f8f07d2dfae28b26977bbdce77ea
 relay ssh://git@github.com/highskore/haunt-relay.git 3f1abf57caf8f5f5d179808886c0c5dd321a956c
 ci-lights ssh://git@github.com/highskore/haunt-ci-lights.git 9594e571b2ee6a7a1e78446105f18025c81d4d5d
 checklist-meter ssh://git@github.com/highskore/haunt-checklist-meter.git a41c2daee76fc8084eebf945e88b1329b6b6126b
@@ -24,3 +24,4 @@ constellation ssh://git@github.com/highskore/haunt-constellation.git 9f86c406452
 year-of-agents ssh://git@github.com/highskore/haunt-year-of-agents.git 2902819c10e7b3a7a744549c7308310969517c63
 code-map ssh://git@github.com/highskore/haunt-code-map.git 445b909d87aa3e6ab9930d2665198f8111057ed9
 scope-creep ssh://git@github.com/highskore/haunt-scope-creep.git 0c636fbc64dbb617a20608ad34b2a4a56360206c
+theme-aero ssh://git@github.com/highskore/haunt-theme-aero.git 80f7db73e2bb3f7f4bf995c26e924bdebd95db70
