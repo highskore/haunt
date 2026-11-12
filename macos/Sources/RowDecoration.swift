@@ -15,11 +15,14 @@ struct RowDecor {
 
     static var labelFont: NSFont { Draw.mono(Tok.Size.rowRight) }
 
-    init?(_ d: Decoration?) {
+    /// `statusWins`: the row needs you or has a request, so Haunt's status keeps the slot (the core drops
+    /// the label and spark there too).
+    init?(_ d: Decoration?, statusWins: Bool) {
         guard let d else { return nil }
-        kbd = d.labelTone == .kbd && d.spark == nil
-        label = d.spark == nil ? d.label.map { Draw.line($0, Self.labelFont, Self.color(d.labelTone, kbd: Tok.Color.textPrimary)) } : nil
-        spark = d.spark
+        let spark = statusWins ? nil : d.spark
+        kbd = d.labelTone == .kbd && spark == nil
+        label = spark == nil && !statusWins ? d.label.map { Draw.line($0, Self.labelFont, Self.color(d.labelTone, kbd: Tok.Color.textPrimary)) } : nil
+        self.spark = spark
         suffix = d.suffix
         suffixColor = Self.color(d.suffixTone, kbd: Tok.Color.textPrimary)
         bar = d.barPermille.map { CGFloat(min($0, 1000)) / 1000 }

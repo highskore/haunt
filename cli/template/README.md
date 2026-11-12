@@ -33,7 +33,8 @@ Every plugin can add palette commands and modes, add entries to a tab's context 
 
 | key | grants |
 |---|---|
-| `events = [...]` | agent events delivered to `on-event`: `agent.session-start`, `agent.prompt`, `agent.task`, `agent.subagent`, `agent.tool`, `agent.permission-request`, `agent.notification`, `agent.plan-exit`, `agent.question`, `agent.todos`, `agent.file-edited`, `agent.stop`, `agent.unknown`, or `agent.*` for all. Events carry commands, paths and prompts, which can contain secrets. `terminal.*` names are accepted but not delivered yet. `verified` is false for an event anything in the terminal could have forged; plugins with `pty_write`, `decisions_read` or `allowlist_suggest` get verified events only. |
+| `events = [...]` | agent events delivered to `on-event`: `agent.session-start`, `agent.prompt`, `agent.task`, `agent.subagent`, `agent.tool`, `agent.permission-request`, `agent.notification`, `agent.plan-exit`, `agent.question`, `agent.todos`, `agent.file-edited`, `agent.stop`, `agent.unknown`, or `agent.*` for all. Commands, paths and prompts need `event_details` too. `terminal.*` names are accepted but not delivered yet. `verified` is false for an event anything in the terminal could have forged; plugins with `pty_write`, `decisions_read` or `allowlist_suggest` get verified events only. |
+| `event_details = true` | the `command`, `file-path`, prompt and plan text on events, which can contain secrets; shown in red at install. Without it those fields are none. |
 | `notifications = true` | `notify.notify`, notifications with action buttons; replies arrive at `on-action` |
 | `pty_write = true` | `pty.answer`: Allow or Deny for the surface's pending permission request, nothing else. A verified `permission_seen` haunt can answer carries its `request-key`. |
 | `pty_type = true` | `typing.type-text`: types text, then Return if asked, into the current tab, only while handling a palette command or key the user just ran and never while that tab has a prompt up. No control or invisible characters but a tab. |
@@ -46,7 +47,7 @@ Every plugin can add palette commands and modes, add entries to a tab's context 
 | `panel = true` | `panel.show(id, placement, title, nodes)`: a sheet, a right-hand pane, a floating card or a window the app draws from text, rows, buttons, dividers, a heat grid and a canvas. At most 512 nodes, 8 levels, 4 panels and 4 updates a second. Buttons and the user closing it arrive at `on-action(action, "panel:<id>")` (an empty action for a close). |
 | `sidebar = true` | `sidebar.rows` (tab names, kinds and state groups, no task text) and `sidebar.arrange`: pins, named sections, manual order and colours over Haunt's grouping. Rows needing you always stay first. Drags arrive at `on-row-moved`. |
 
-An `fs_read` glob starts with `${cwd}/`; an `fs_write` glob is absolute or starts with `${cwd}/` (the agent's folder, from verified events only, never `$HOME` or the haunt dir). It may use `*` within a path segment, but not `**`, `.` or `..`. Nothing inside the haunt dir is ever reachable.
+Every fs glob starts with `${cwd}/` (the agent's folder, from verified events only, never `$HOME` or the haunt dir). It may use `*` within a path segment, but not `**`, `.` or `..`. Nothing inside the haunt dir is ever reachable.
 
 `net`, `hid`, `exec`, `terminal_read` and `clipboard` are reserved: this Haunt version refuses a manifest that asks for them.
 

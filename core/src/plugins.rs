@@ -218,6 +218,7 @@ pub struct HostState {
     sidebar: Option<SidebarToken>,
     /// Set while this instance may decorate rows.
     rows: Option<RowsToken>,
+    events: EventGrant,
     /// The `timer.every` interval and when `on-tick` is next due.
     timer: Option<(Duration, Instant)>,
     panels: Panels,
@@ -244,7 +245,7 @@ impl HostState {
             kv: Kv::open(kv_path),
             palette: Vec::new(),
             outbox: Vec::new(),
-            fs: FsScope::new(&cwd_globs(&caps.fs_read), &caps.fs_write, haunt_dir),
+            fs: FsScope::new(&cwd_globs(&caps.fs_read), &cwd_globs(&caps.fs_write), haunt_dir),
             pty_times: VecDeque::new(),
             sidebar: match &core {
                 Some(c) if caps.sidebar => Some(c.attach_sidebar()),
@@ -260,6 +261,7 @@ impl HostState {
             core,
             theme: Theme::default_shared(),
             typing_into: None,
+            events: EventGrant { details: caps.event_details, answers: caps.pty_write },
         }
     }
 
@@ -578,9 +580,9 @@ impl wrows::Host for HostState {
     }
 }
 
-/// The `fs_read` globs the manifest check allows, again, so a hand-edited lockfile can't widen reads.
+/// The fs globs the manifest check allows, again, so a hand-edited lockfile can't widen a grant.
 fn cwd_globs(globs: &[String]) -> Vec<String> {
-    globs.iter().filter(|g| g.starts_with(crate::plugin_manifest::FS_READ_PREFIX)).cloned().collect()
+    globs.iter().filter(|g| g.starts_with(crate::plugin_manifest::FS_PREFIX)).cloned().collect()
 }
 
 impl wpanel::Host for HostState {
@@ -657,9 +659,18 @@ fn shown(s: &str, max: usize) -> String {
     visible(s).chars().take(max).collect()
 }
 
+/// What of an event a plugin may see beyond its kind and ids.
+#[derive(Debug, Clone, Copy, Default)]
+struct EventGrant {
+    /// `event_details`: commands, file paths, prompts and plans, which can hold secrets.
+    details: bool,
+    /// `pty_write`: only a plugin that can answer a request gets its key.
+    answers: bool,
+}
+
 /// The WIT event for `t`. Commands and paths keep what was sent, spelled out, so a plugin sees what
 /// the user would; summaries are plain text.
-fn agent_event(t: &Tapped) -> wit::AgentEvent {
+fn agent_event(t: &Tapped, g: EventGrant) -> wit::AgentEvent {
     let e = &t.event;
     let call = match &e.kind {
         EventKind::ToolStart { tool } | EventKind::ToolDone { tool } | EventKind::ToolFailed { tool } | EventKind::ToolRan { tool } | EventKind::PermissionSeen { tool } => {
@@ -672,8 +683,8 @@ fn agent_event(t: &Tapped) -> wit::AgentEvent {
         EventKind::TaskUpdated { status, .. } => Some(status.clone()),
         EventKind::ToolRan { tool } => Some(tool.tool_name.clone()),
         EventKind::SubagentTool { tool_name } => Some(tool_name.clone()),
-        EventKind::PromptSubmit { query } => query.clone(),
-        EventKind::PlanExit { summary } => summary.clone(),
+        EventKind::PromptSubmit { query } => query.clone().filter(|_| g.details),
+        EventKind::PlanExit { summary } => summary.clone().filter(|_| g.details),
         _ => None,
     };
     let tool = match &e.kind {
@@ -684,7 +695,8 @@ fn agent_event(t: &Tapped) -> wit::AgentEvent {
     let file_path = match &e.kind {
         EventKind::FileEdited { file_path, .. } => file_path.clone(),
         _ => call.and_then(|c| c.raw_file_path.clone().or_else(|| c.file_path.clone())),
-    };
+    }
+    .filter(|_| g.details);
     let task_id = match &e.kind {
         EventKind::TaskCreated { task_id, .. } | EventKind::TaskUpdated { task_id, .. } => Some(task_id.clone()),
         _ => None,
@@ -698,10 +710,10 @@ fn agent_event(t: &Tapped) -> wit::AgentEvent {
         verified: t.verified,
         surface: Some(t.surface.clone()),
         tool: tool.map(|s| plain(&s, 256)),
-        command: call.and_then(|c| c.raw_command.as_deref().or(c.command.as_deref())).map(|s| shown(s, EVENT_TEXT)),
+        command: call.filter(|_| g.details).and_then(|c| c.raw_command.as_deref().or(c.command.as_deref())).map(|s| shown(s, EVENT_TEXT)),
         file_path: file_path.map(|s| shown(&s, EVENT_TEXT)),
         task_id: task_id.map(|s| plain(&s, 256)),
-        request_key: t.request_key.filter(|_| t.verified),
+        request_key: t.request_key.filter(|_| t.verified && g.answers),
     }
 }
 
@@ -841,7 +853,7 @@ impl LoadedPlugin {
         if t.verified && let Some(cwd) = &t.event.cwd {
             self.store.data_mut().fs.add_cwd(cwd);
         }
-        let ev = agent_event(t);
+        let ev = agent_event(t, self.store.data().events);
         self.call(|b, s| b.call_on_event(s, &ev))
     }
 
@@ -1263,7 +1275,8 @@ mod tests {
             command: Some("ls #rm -rf ~/x".into()),
             ..Default::default()
         };
-        let e = agent_event(&tapped(EventKind::PermissionSeen { tool: call }, true, Some(7)));
+        let all = EventGrant { details: true, answers: true };
+        let e = agent_event(&tapped(EventKind::PermissionSeen { tool: call.clone() }, true, Some(7)), all);
         let cmd = e.command.unwrap();
         assert!(cmd.starts_with("ls #⏎rm -rf ~/x"), "{cmd}");
         assert_eq!(cmd.chars().count(), EVENT_TEXT);
@@ -1271,19 +1284,28 @@ mod tests {
         assert_eq!(e.session_id.as_deref(), Some("s1"));
         assert_eq!(e.cwd.as_deref(), Some("/w/a⏎b"));
 
-        let prompt = agent_event(&tapped(EventKind::PromptSubmit { query: Some("fix\u{2066} it\nnow".into()) }, true, None));
+        let prompt = agent_event(&tapped(EventKind::PromptSubmit { query: Some("fix\u{2066} it\nnow".into()) }, true, None), all);
         assert_eq!(prompt.summary.as_deref(), Some("fix it now"));
 
-        let edit = agent_event(&tapped(EventKind::FileEdited { tool_name: Some("Edit".into()), file_path: Some("/a\u{200b}b".into()) }, true, None));
+        let edit = agent_event(&tapped(EventKind::FileEdited { tool_name: Some("Edit".into()), file_path: Some("/a\u{200b}b".into()) }, true, None), all);
         assert_eq!(edit.file_path.as_deref(), Some("/a\\u{200b}b"));
-        let task = agent_event(&tapped(EventKind::TaskUpdated { task_id: "t9".into(), status: "completed".into() }, true, None));
+        let task = agent_event(&tapped(EventKind::TaskUpdated { task_id: "t9".into(), status: "completed".into() }, true, None), all);
         assert_eq!((task.task_id.as_deref(), task.summary.as_deref()), (Some("t9"), Some("completed")));
+
+        let none = EventGrant::default();
+        let e = agent_event(&tapped(EventKind::PermissionSeen { tool: call }, true, Some(7)), none);
+        assert_eq!((e.command, e.file_path, e.request_key, e.tool.as_deref()), (None, None, None, Some("Bash")), "no details, no key");
+        let prompt = agent_event(&tapped(EventKind::PromptSubmit { query: Some("my token is x".into()) }, true, None), none);
+        let plan = agent_event(&tapped(EventKind::PlanExit { summary: Some("plan".into()) }, true, None), none);
+        let edit = agent_event(&tapped(EventKind::FileEdited { tool_name: Some("Edit".into()), file_path: Some("/p/.env".into()) }, true, None), none);
+        assert_eq!((prompt.summary, plan.summary, edit.file_path), (None, None, None));
     }
 
     #[test]
     fn an_unverified_event_carries_no_request_key() {
         let call = crate::event::ToolCall { tool_name: "Bash".into(), command: Some("ls".into()), ..Default::default() };
-        assert_eq!(agent_event(&tapped(EventKind::PermissionSeen { tool: call }, false, Some(7))).request_key, None);
+        let all = EventGrant { details: true, answers: true };
+        assert_eq!(agent_event(&tapped(EventKind::PermissionSeen { tool: call }, false, Some(7)), all).request_key, None);
     }
 
     #[test]
@@ -1390,6 +1412,25 @@ mod tests {
     }
 
     #[test]
+    fn a_decoration_never_covers_a_row_that_needs_you() {
+        use wrows::Host as _;
+        let core = crate::Core::new(&*tempdir("rows-needs"));
+        let a = core.register_surface("/a").unwrap();
+        let mut st = HostState::new("dev.x.p", &Capabilities { decorate: true, ..Default::default() }, None, None, Some(core.handle()));
+        let spark = wrows::Spark { points: vec![1, 2], tone: wrows::Tone::Needs };
+        st.decorate(a.surface_id.clone(), Some(wrows::Decoration { suffix: Some("CI 9/9".into()), bar: Some(0.5), spark: Some(spark), ..deco("CI 9/9") })).unwrap();
+        let row = |core: &crate::Core| core.snapshot().groups.iter().flat_map(|g| g.rows.clone()).find(|r| r.surface_id == a.surface_id).unwrap();
+        assert_eq!(row(&core).decoration.unwrap().label.as_deref(), Some("CI 9/9"));
+        let line = format!(r#"{{"v":1,"surface_id":"{}","nonce":"{}","event":"permission_seen","tool_name":"Bash","tool_input":{{"command":"git push"}}}}"#, a.surface_id, a.nonce);
+        core.with_state(|s| s.handle_line(&line, Instant::now()));
+        let r = row(&core);
+        assert!(r.needs_you && r.pending.is_some());
+        let d = r.decoration.unwrap();
+        assert_eq!((d.label, d.spark), (None, None), "Haunt's status shows");
+        assert_eq!((d.suffix.as_deref(), d.bar_permille), (Some("CI 9/9"), Some(500)), "the suffix and bar may stay");
+    }
+
+    #[test]
     fn decorations_are_plain_capped_and_the_first_loaded_plugin_wins() {
         use wrows::Host as _;
         let core = crate::Core::new(&*tempdir("rows-core"));
@@ -1440,7 +1481,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lockfile_cannot_widen_fs_read_past_agent_folders() {
+    fn a_lockfile_cannot_widen_fs_grants_past_agent_folders() {
         assert_eq!(cwd_globs(&["/etc/hosts".into(), "${cwd}/a".into(), "${cwd}x".into()]), ["${cwd}/a"]);
     }
 

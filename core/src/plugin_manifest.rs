@@ -48,6 +48,7 @@ pub struct PluginMeta {
 #[serde(deny_unknown_fields, default)]
 pub struct Capabilities {
     pub events: Vec<String>,
+    pub event_details: bool,
     pub pty_write: bool,
     pub pty_type: bool,
     pub notifications: bool,
@@ -152,8 +153,8 @@ impl Capabilities {
                 return err(format!("unknown event {e:?} in [capabilities].events"));
             }
         }
-        if let Some(g) = self.fs_read.iter().find(|g| !g.starts_with(FS_READ_PREFIX)) {
-            return err(format!("fs_read glob {g:?} must start with {FS_READ_PREFIX}: a plugin reads only inside agent folders"));
+        if let Some(g) = self.fs_read.iter().chain(&self.fs_write).find(|g| !g.starts_with(FS_PREFIX)) {
+            return err(format!("fs glob {g:?} must start with {FS_PREFIX}: a plugin reads and writes only inside agent folders"));
         }
         for g in self.fs_read.iter().chain(&self.fs_write) {
             crate::plugin_fs::validate_glob(g).map_err(ManifestError)?;
@@ -169,9 +170,12 @@ impl Capabilities {
         }
         if !self.events.is_empty() {
             out.push((
-                format!("can see agent events ({}): commands, file paths and prompts, which can contain secrets", self.events.join(", ")),
+                format!("can see agent events ({}): which tab, tool and task, and when", self.events.join(", ")),
                 false,
             ));
+        }
+        if self.event_details {
+            out.push(("reads the commands, file paths and prompts your agents use; these can contain secrets".into(), true));
         }
         if self.notifications {
             out.push(("can show notifications with action buttons".into(), false));
@@ -213,6 +217,7 @@ impl Capabilities {
     pub fn added_since(&self, old: &Capabilities) -> Vec<(String, bool)> {
         let grown = Capabilities {
             events: self.events.iter().filter(|e| !old.events.contains(e)).cloned().collect(),
+            event_details: self.event_details && !old.event_details,
             pty_write: self.pty_write && !old.pty_write,
             pty_type: self.pty_type && !old.pty_type,
             notifications: self.notifications && !old.notifications,
@@ -231,8 +236,8 @@ impl Capabilities {
     }
 }
 
-/// Every `fs_read` glob starts with this: reads stay inside the folders agents work in.
-pub const FS_READ_PREFIX: &str = "${cwd}/";
+/// Every fs glob starts with this: reads and writes stay inside the folders agents work in.
+pub const FS_PREFIX: &str = "${cwd}/";
 
 /// The capabilities every plugin gets, for the install prompt.
 pub const ALWAYS: &str = "can add commands and modes to the palette and entries to tab menus, keep up to 10 MB of its own data, and write to its log";
@@ -458,16 +463,17 @@ mod tests {
         assert!(Manifest::parse(&manifest("fs_read = [\"relative/path\"]")).is_err());
         let e = Manifest::parse(&manifest("fs_read = [\"/etc/hosts\"]")).unwrap_err();
         assert!(e.0.contains("must start with ${cwd}/"), "{e}");
-        assert!(Manifest::parse(&manifest("fs_write = [\"/tmp/x\"]")).is_ok(), "fs_write keeps absolute globs");
+        assert!(Manifest::parse(&manifest("fs_write = [\"/tmp/x\"]")).is_err());
     }
 
     #[test]
     fn new_0_5_capabilities_parse_and_reading_files_is_shown_in_red() {
-        let m = Manifest::parse(&manifest("decorate = true\ntimer = true\nfs_read = [\"${cwd}/x\"]")).unwrap();
+        let m = Manifest::parse(&manifest("decorate = true\ntimer = true\nevent_details = true\nfs_read = [\"${cwd}/x\"]")).unwrap();
         let lines = m.capabilities.describe();
         assert!(lines.iter().any(|(l, red)| l.contains("label, a bar or a sparkline") && !red));
         assert!(lines.iter().any(|(l, red)| l.contains("every 15 seconds") && !red));
         assert!(lines.iter().any(|(l, red)| l.starts_with("can read files matching <agent folder>/x") && *red));
+        assert!(lines.iter().any(|(l, red)| l.starts_with("reads the commands, file paths and prompts") && *red));
     }
 
     #[test]

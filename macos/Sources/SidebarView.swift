@@ -410,7 +410,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let pill = row.needsYou && Theme.current.effects.needsPill
         let status = pill ? Draw.line(row.statusText, Draw.uiTabular(Tok.Size.rowRight, .semibold), Theme.current.app.pillFg)
             : Draw.line(row.statusText, Fonts.status, row.needsYou ? Tok.Color.needs : Tok.Color.textMeta)
-        let decor = RowDecor(row.decoration)
+        let decor = RowDecor(row.decoration, statusWins: row.needsYou || row.pending != nil)
         let statusW = hovered ? Tok.App.closeSize
             : pill ? Draw.width(status) + 2 * Theme.current.app.pillPad[1] : decor?.rightWidth ?? Draw.width(status)
         let dot = snapshot.colorStyle == .dot ? row.color : nil
