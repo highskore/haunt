@@ -319,6 +319,15 @@ enum Draw {
         "kkkkkkkkkkkkkkkk", "kkkkkkkkkkkkkkkk", "kkkkkkkkkkkkkkkk", "................",
     ]
 
+    /// A 1 pt dotted focus ring just inside `r`.
+    static func dottedRing(_ r: NSRect, _ color: NSColor) {
+        let ring = NSBezierPath(rect: r.insetBy(dx: 0.5, dy: 0.5))
+        ring.lineWidth = 1
+        ring.setLineDash([1, 1], count: 2, phase: 0)
+        color.setStroke()
+        ring.stroke()
+    }
+
     /// Over what is there, so a theme's see-through colours layer as they do in the mockups.
     static func fill(_ rect: NSRect, _ color: NSColor) {
         color.setFill()

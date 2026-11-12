@@ -502,7 +502,8 @@ final class SidebarView: NSView, NSTextFieldDelegate {
 
         let pill = row.needsYou && Theme.current.effects.needsPill
         let status = pill ? Draw.line(row.statusText, Draw.uiTabular(Tok.Size.rowRight, .semibold), Theme.current.app.pillFg)
-            : Draw.line(row.statusText, Fonts.status, row.needsYou ? Tok.Color.needs : Tok.Color.textMeta)
+            : Draw.line(row.statusText, row.needsYou && Theme.current.effects.needsWeight == "bold" ? Draw.uiTabular(Tok.Size.rowRight, .bold) : Fonts.status,
+                        row.needsYou ? Tok.Color.needs : Tok.Color.textMeta)
         let decor = RowDecor(row.decoration, statusWins: row.needsYou || row.pending != nil)
         let statusW = hovered ? Tok.App.closeSize
             : pill ? Draw.width(status) + 2 * Theme.current.app.pillPad[1] : decor?.rightWidth ?? Draw.width(status)
@@ -605,11 +606,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             let nameH = Tok.Size.rowName * lh
             let r = NSRect(x: col2 - 2, y: y + (rowLine1 - nameH) / 2, width: Draw.width(l.name) + 4, height: nameH).integral
             Draw.fill(r, Theme.current.app.rowSelectFill)
-            let ring = NSBezierPath(rect: r.insetBy(dx: 0.5, dy: 0.5))
-            ring.lineWidth = 1
-            ring.setLineDash([1, 1], count: 2, phase: 0)
-            Theme.current.app.rowSelectInk.setStroke()
-            ring.stroke()
+            Draw.dottedRing(r, Theme.current.app.rowSelectInk)
             let name = Draw.line(row.name, Fonts.name, Theme.current.app.rowSelectInk)
             Draw.text(name, font: Fonts.name, x: col2, top: y + (rowLine1 - nameH) / 2, lineHeight: nameH, in: ctx)
         } else {

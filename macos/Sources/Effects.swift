@@ -79,6 +79,8 @@ struct Effects: Equatable {
     var progressStyle = "bar"
     /// A glow behind the needs-you status, in its own colour.
     var needsGlow = false
+    /// The needs-you status's weight when it isn't a pill.
+    var needsWeight = "regular"
     /// Artwork drawn in code: "sigil" puts a star in the pane and the sidebar's foot and marks the window's corners.
     var ornament = "none"
     /// How far the bottom-right palette stands in from the window's edges.
@@ -146,6 +148,7 @@ struct Effects: Equatable {
         "icon.shell": .choice(\.iconShell, ["tile", "diamond"]),
         "progress.style": .choice(\.progressStyle, ["bar", "dotted", "segments"]),
         "needs.glow": .bool(\.needsGlow),
+        "needs.weight": .choice(\.needsWeight, ["regular", "bold"]),
         "ornament": .choice(\.ornament, ["none", "sigil"]),
         "palette.inset": .number(\.paletteInset, 0...80),
         "palette.header": .bool(\.paletteHeader),

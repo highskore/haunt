@@ -653,13 +653,32 @@ final class PaletteView: NSView {
         Draw.fill(list, app.paletteField)
         Draw.bevel(list, "in")
         let f = Draw.ui(Tok.Size.paletteSmallFont)
-        for (label, r, _) in dialogButtons {
-            Draw.bevel(r, "button")
-            let line = Draw.line(label, f, Tok.Color.paletteInk)
-            Draw.text(line, font: f, x: (r.midX - Draw.width(line) / 2).rounded(), top: r.minY + (r.height - Tok.Size.paletteSmallFont * lh) / 2,
-                      lineHeight: Tok.Size.paletteSmallFont * lh, in: ctx)
+        for (label, r, key) in dialogButtons {
+            // OK is the default button: a black ring outside its bevel and a dotted focus around its label.
+            let isDefault: Bool = if case .enter = key { true } else { false }
+            Draw.bevel(isDefault ? r.insetBy(dx: 1, dy: 1) : r, "button")
+            if isDefault {
+                let ring = NSBezierPath(rect: r.insetBy(dx: 0.5, dy: 0.5))
+                NSColor.black.setStroke()
+                ring.stroke()
+            }
+            let line = Draw.line(label, f, Tok.Color.paletteInk), lineH = Tok.Size.paletteSmallFont * lh
+            let tx = (r.midX - Draw.width(line) / 2).rounded(), ty = r.minY + (r.height - lineH) / 2
+            if isDefault { Draw.dottedRing(NSRect(x: tx - 3, y: ty - 1, width: Draw.width(line) + 6, height: lineH + 2).integral, .black) }
+            Draw.text(line, font: f, x: tx, top: ty, lineHeight: lineH, in: ctx)
         }
+        let close = dialogClose
+        Draw.bevel(close, "button")
+        let x = NSBezierPath(), c = close.insetBy(dx: 4.5, dy: 4)
+        x.move(to: NSPoint(x: c.minX, y: c.minY)); x.line(to: NSPoint(x: c.maxX, y: c.maxY))
+        x.move(to: NSPoint(x: c.maxX, y: c.minY)); x.line(to: NSPoint(x: c.minX, y: c.maxY))
+        x.lineWidth = 1.5
+        NSColor.black.setStroke()
+        x.stroke()
     }
+
+    /// The caption's close box, which does what Escape does.
+    private var dialogClose: NSRect { NSRect(x: bounds.width - 3 - 2 - 16, y: 3 + 2, width: 16, height: Self.captionH - 4) }
 
     /// The dialog's buttons, right-aligned under the list; each does what its key does.
     private var dialogButtons: [(String, NSRect, Key)] {
@@ -698,7 +717,9 @@ final class PaletteView: NSView {
         var x = padX
         if Theme.current.effects.paletteInputIcon {
             let f = Draw.ui(Tok.Size.paletteInputFont - 1)
-            let glyph = Draw.line(plainMode ? "⌕" : Theme.current.string("palette.input.glyph") ?? "⌕", f, Tok.Color.paletteMute)
+            // The dialog's field label ("Open:") is text, so in ink; elsewhere the glyph is a mark.
+            let glyph = Draw.line(plainMode ? "⌕" : Theme.current.string("palette.input.glyph") ?? "⌕", f,
+                                  dialog ? Tok.Color.paletteInk : Tok.Color.paletteMute)
             Draw.text(glyph, font: f, x: x, top: padY, lineHeight: lineH, in: ctx)
             x += Draw.width(glyph) + Tok.Size.paletteInputGap
         }
@@ -782,6 +803,7 @@ final class PaletteView: NSView {
             if !stops.isEmpty { Draw.chrome(box, stops, in: ctx) }
             Draw.fill(NSRect(x: box.minX, y: top, width: box.width, height: border), app.palettePillHighlight)
             NSGraphicsContext.restoreGraphicsState()
+            if dialog { Draw.dottedRing(box, app.palettePillInk) }
         } else if isSel && plainMode {
             Draw.fill(NSRect(x: 0, y: top, width: width, height: h), Tok.Color.paletteInk)
         } else if isSel {
@@ -946,6 +968,7 @@ final class PaletteView: NSView {
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         if let (_, _, key) = dialogButtons.first(where: { $0.1.contains(p) }) { return send(key) }
+        if dialog && dialogClose.contains(p) { return send(Key.escape) }
         guard let i = entry(at: p), rows[i].action != .none else { return }
         selected = i
         needsDisplay = true

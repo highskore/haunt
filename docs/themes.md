@@ -108,6 +108,7 @@ Some looks need more than colours and sizes. The `[effects]` table switches on e
 | `icon.ring`, `icon.shell` | bool; `"tile"`, `"diamond"` | rings around the agent icons, and the shell glyph on a tile or in a diamond |
 | `progress.style` | `"bar"`, `"dotted"`, `"segments"` | the progress bar solid, a dotted track with a fading fill and a diamond knob (`app.bar.knob`), or blocks in a sunken track |
 | `needs.glow` | bool | a glow behind the needs-you status |
+| `needs.weight` | `"regular"`, `"bold"` | the needs-you status's weight, when it isn't a pill |
 | `ornament` | `"none"`, `"sigil"` | artwork drawn in code: a sigil at the sidebar's foot (left out when the rows need its room), marks in the window's corners, and a sigil behind the terminal at `app.ornament.alpha` (0–0.12) when the window and Ghostty's background are both see-through |
 | `palette.inset` | 0–80, default 22 | how far the bottom-right palette stands in from the window's edges |
 | `palette.header`, `palette.input.rules` | bool | `[strings] palette.header` above the input, and rules above and below the input |
@@ -115,7 +116,7 @@ Some looks need more than colours and sizes. The `[effects]` table switches on e
 | `window.frame`, `pane.frame` | `"none"`, `"bevel"` | a raised bevel around the window inside `app.window.pad`, and a sunken one around the terminal, `app.pane.gap` from the sidebar (`app.bevel.*`) |
 | `titlebar.style`, `titlebar.icon`, `titlebar.menu` | `"plain"`, `"caption"`; bool; bool | the title bar as a caption filled with `app.titlebar.fill` and titled on the left in `app.row.select.ink`, a ghost before the title, and a row of Haunt's own menus under it that open them |
 | `icon.style` | `"vector"`, `"pixel"` | the claude and shell icons as pixel art |
-| `palette.frame` | `"panel"`, `"dialog"` | the palette as a raised dialog: a caption with `[strings] palette.header`, `palette.message` beside an information icon, a sunken field (`app.palette.field`) labelled with `palette.input.glyph`, a sunken list, and OK and Cancel |
+| `palette.frame` | `"panel"`, `"dialog"` | the palette as a raised dialog: a caption with `[strings] palette.header`, `palette.message` beside an information icon, a sunken field (`app.palette.field`) labelled with `palette.input.glyph` in `palette.ink`, a sunken list, OK (the default button, ringed in black with a dotted focus) and Cancel, and a close box in the caption that does what Escape does; the selected row gets a dotted focus ring |
 
 Every effect is off by default, so black and white draws as it did before them.
 
