@@ -324,6 +324,19 @@ impl EventKind {
 mod tests {
     use super::*;
 
+    #[test]
+    fn answer_bytes_match_the_shared_table() {
+        // The macOS app presses only these (macos/tests/answerkey.sh checks its side against the same file).
+        let table: serde_json::Value = serde_json::from_str(include_str!("../answer-keys.json")).unwrap();
+        for (agent, id) in [(Agent::Claude, "claude"), (Agent::Codex, "codex")] {
+            for (allow, key) in [(true, "allow"), (false, "deny")] {
+                let want = table[id][key].as_str().unwrap().as_bytes();
+                assert_eq!(agent.answer_bytes(allow), Some(want), "{id} {key}");
+            }
+        }
+        assert_eq!(table.as_object().unwrap().len(), 2, "every agent with keys is listed");
+    }
+
     const B: &str = r#""v":1,"agent":"claude","session_id":"s1","cwd":"/tmp""#;
 
     #[test]

@@ -1,0 +1,4 @@
+{
+  "claude": { "allow": "1", "deny": "\u001b" },
+  "codex": { "allow": "y", "deny": "\u001b" }
+}

@@ -13,6 +13,11 @@ check(AnswerKey(Data("1".utf8))?.action == "text:1", "Claude allow")
 check(AnswerKey(Data("y".utf8))?.action == "text:y", "Codex allow")
 check(AnswerKey(Data([0x1B]))?.action == "text:\\x1b", "deny")
 
+// The same keys as the core's, through the table both sides are tested against.
+let shared = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "core/answer-keys.json"))) as! [String: [String: String]]
+let coreKeys = Set(shared.values.flatMap(\.values).map { Data($0.utf8) })
+check(coreKeys == Set(AnswerKey.table.keys), "the table matches core/answer-keys.json: \(coreKeys) vs \(AnswerKey.table.keys)")
+
 // Nothing else is a key: no longer text, no Return, no escape sequence, no case change.
 for s in ["", "11", "1\r", "1\n", "y\r", "Y", "2", "n", "\u{1B}[201~", "\u{1B}\u{1B}", "\\x1b", "text:1", "rm -rf ~"] {
     check(AnswerKey(Data(s.utf8)) == nil, "not a key: \(s.debugDescription)")

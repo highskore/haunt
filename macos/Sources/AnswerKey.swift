@@ -8,7 +8,8 @@ struct AnswerKey: Equatable {
     /// The Ghostty `text:` binding action that sends it.
     let action: String
 
-    private static let table: [Data: String] = [
+    /// Matches core/answer-keys.json, as does the core's `Agent::answer_bytes`; both sides are tested against it.
+    static let table: [Data: String] = [
         Data("1".utf8): "text:1",
         Data("y".utf8): "text:y",
         Data([0x1B]): "text:\\x1b",
