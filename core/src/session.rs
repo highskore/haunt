@@ -57,6 +57,38 @@ pub enum Outcome {
     /// The matching call ran, so it was allowed at the terminal prompt.
     AnsweredInTerminal,
     Superseded,
+    /// A plugin tried to answer and the gate refused it; the request stays live for the user.
+    RefusedPlugin { plugin_id: String, reason: Refusal },
+}
+
+/// Why the gate refused a plugin's answer. The text is the host's own, never the plugin's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
+pub enum Refusal {
+    /// No such tab.
+    NoTab,
+    /// No request is up on that tab.
+    NoRequest,
+    /// The key isn't the request on screen: stale, or never issued.
+    NotOnScreen,
+    /// Multi-line, hidden characters, a tool that may touch more than it shows, or an earlier request
+    /// that may still be up: only the terminal answers it.
+    TerminalOnly,
+    /// The asking agent has no known answer keys.
+    NoKeys,
+}
+
+impl Refusal {
+    pub const fn text(self) -> &'static str {
+        match self {
+            Self::NoTab => "no such tab",
+            Self::NoRequest => "no request is up on that tab",
+            Self::NotOnScreen => "not the request on screen",
+            Self::TerminalOnly => "this request is answered in the terminal only",
+            Self::NoKeys => "this agent is answered in the terminal only",
+        }
+    }
 }
 
 impl Outcome {
@@ -69,6 +101,7 @@ impl Outcome {
             Self::DeniedByPlugin { .. } => "denied_by_plugin",
             Self::AnsweredInTerminal => "answered_in_terminal",
             Self::Superseded => "superseded",
+            Self::RefusedPlugin { .. } => "refused_plugin",
         }
     }
 }
@@ -346,6 +379,20 @@ impl Session {
     }
 
     /// `answer`, logging `outcome` (an `…InHaunt` or `…ByPlugin` one).
+    /// Why an answer with `key` would be refused, or None if `answer_as` would take it.
+    pub fn refusal(&self, key: u64) -> Option<Refusal> {
+        let Some(p) = self.live_permission() else { return Some(Refusal::NoRequest) };
+        if p.key() != key {
+            Some(Refusal::NotOnScreen)
+        } else if self.terminal_only(p) {
+            Some(Refusal::TerminalOnly)
+        } else if p.agent.answer_bytes(true).is_none() {
+            Some(Refusal::NoKeys)
+        } else {
+            None
+        }
+    }
+
     pub fn answer_as(&mut self, key: u64, outcome: Outcome, now: Instant) -> bool {
         if self.live_permission().is_none_or(|p| p.key() != key || self.terminal_only(p)) {
             return false;

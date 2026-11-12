@@ -10,6 +10,8 @@ private final class RootView: NSView {
     /// The palette mockup's scrim over everything below the title bar.
     let scrim = NSView()
     let agents = AgentsView()
+    /// One line at the foot of the window, for what Haunt refused on the user's behalf.
+    let toast = ToastView()
     var sidebarW = Tok.Size.sidebarW
     /// The review inbox covers the sidebar too; a tab's review only the pane.
     var reviewCoversSidebar = false
@@ -52,7 +54,7 @@ private final class RootView: NSView {
         scrim.layer?.backgroundColor = Tok.App.scrim.withAlphaComponent(Tok.Size.paletteScrimAlpha).cgColor
         scrim.isHidden = true
         agents.isHidden = true
-        for v in [titleBar, sidebar, pane, scrim, agents] { addSubview(v) }
+        for v in [titleBar, sidebar, pane, scrim, agents, toast] { addSubview(v) }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -60,6 +62,7 @@ private final class RootView: NSView {
     override func layout() {
         super.layout()
         agents.frame = bounds
+        toast.frame = toast.frame(in: bounds)
         if agentsOn { return }
         let top = TitleBarView.height(zen: sidebarHidden), w = sidebarHidden ? 0 : sidebarW
         titleBar.frame = NSRect(x: 0, y: 0, width: bounds.width, height: top)
@@ -175,6 +178,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             self?.bridge.plugins?.rowMoved(surfaceId: id, groupId: group, beforeSurfaceId: before)
             self?.bridge.drain()
         }
+        bridge.onRefused = { [weak self] line in self?.root.toast.show(line) }
         core.setListener(listener: listener)
 
         let nc = NotificationCenter.default

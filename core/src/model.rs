@@ -1,6 +1,6 @@
 //! `Core`: surfaces, their agent sessions, the socket intake and the sidebar snapshot.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex};
@@ -17,12 +17,21 @@ use crate::event::{AgentEvent, parse_osc};
 use crate::ids::{hex, random, uuid_v4};
 use crate::intake::{Delivery, Intake, IntakeError, Limits, Nonces, SOCKET_NAME};
 use crate::layout::{self, SidebarSnapshot, SurfaceView};
-use crate::session::{Outcome, Session};
+use crate::session::{Outcome, Refusal, Session};
 use crate::sync::{lock, write};
 use crate::turn::{ReviewTurn, TurnLog};
 
 const MAX_SURFACES: usize = 512;
 const MAX_PROPOSALS: usize = 256;
+const MAX_REFUSALS: usize = 32;
+
+/// A plugin's answer the gate refused: who, and the host's reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
+pub struct PluginRefusal {
+    pub plugin_id: String,
+    pub reason: Refusal,
+}
 /// Hand-offs queued per worker; past this a stalled worker's jobs are dropped, never waited on.
 const OFFLOAD_QUEUE: usize = 1024;
 
@@ -98,6 +107,8 @@ pub(crate) struct State {
     notified: bool,
     version: u64,
     pub(crate) decisions: DecisionLog,
+    /// Plugin answers the gate refused, for the app to show; the oldest drop past `MAX_REFUSALS`.
+    refusals: VecDeque<PluginRefusal>,
     /// (project, command) suggestions the user accepted or dismissed.
     allow_done: HashSet<(String, String)>,
     /// Rules plugins proposed, newest first, as (plugin id, project, command).
@@ -619,8 +630,36 @@ impl Core {
         self.answer_by(surface_id, request_key, allow, None)
     }
 
-    /// `answer_permission`, logged as the plugin's answer when `plugin_id` is set.
+    /// `answer_permission`, logged as the plugin's answer when `plugin_id` is set. A plugin's refused
+    /// answer is queued for `take_plugin_refusals`, and logged against the request when it named the
+    /// one on screen.
     pub(crate) fn answer_by(&self, surface_id: &str, request_key: u64, allow: bool, plugin_id: Option<&str>) -> Option<Vec<u8>> {
+        if let Some(id) = plugin_id {
+            let refused = self.update(|st, _| {
+                let why = match st.surface(surface_id) {
+                    None => Refusal::NoTab,
+                    Some(s) => match s.session.refusal(request_key) {
+                        None => return false,
+                        Some(why) => {
+                            let on_screen = s.session.live_permission().filter(|p| p.key() == request_key).cloned();
+                            if let Some(p) = on_screen {
+                                let outcome = Outcome::RefusedPlugin { plugin_id: id.to_owned(), reason: why };
+                                st.decisions.record(Decision::new(surface_id, &p, outcome));
+                            }
+                            why
+                        }
+                    },
+                };
+                if st.refusals.len() == MAX_REFUSALS {
+                    st.refusals.pop_front();
+                }
+                st.refusals.push_back(PluginRefusal { plugin_id: id.to_owned(), reason: why });
+                true
+            });
+            if refused {
+                return None;
+            }
+        }
         let outcome = match (plugin_id, allow) {
             (None, true) => Outcome::AllowedInHaunt,
             (None, false) => Outcome::DeniedInHaunt,
@@ -638,6 +677,11 @@ impl Core {
             bytes.is_some()
         });
         bytes.map(<[u8]>::to_vec)
+    }
+
+    /// Plugin answers refused since the last call, oldest first.
+    pub fn take_plugin_refusals(&self) -> Vec<PluginRefusal> {
+        lock(&self.state).refusals.drain(..).collect()
     }
 
     /// A key went to the surface's pty: from now on the terminal answers its pending request.

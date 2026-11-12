@@ -87,6 +87,53 @@ mod tests {
         assert_eq!(c.decisions("", 1)[0].outcome, crate::Outcome::AllowedByPlugin { plugin_id: "p".into() });
     }
 
+    #[test]
+    fn refused_answers_are_queued_and_logged_against_the_request_on_screen() {
+        use crate::{PluginRefusal, Refusal};
+        let c = Core::new(format!("/tmp/haunt-gate-refusal-{}", std::process::id()));
+        let a = c.register_surface("/a").unwrap();
+        // Two lines: terminal-only, so no answer from haunt, a plugin's included.
+        let line = format!(
+            r#"{{"v":1,"surface_id":"{}","nonce":"{}","event":"permission_seen","tool_name":"Bash","tool_input":{{"command":"ls\nrm -rf ~"}}}}"#,
+            a.surface_id, a.nonce
+        );
+        c.with_state(|st| st.handle_line(&line, std::time::Instant::now()));
+        let row = c.snapshot().groups[0].rows.iter().find(|r| r.surface_id == a.surface_id).unwrap().clone();
+        let key = row.pending.unwrap().key;
+
+        assert_eq!(c.gate_plugin_request(&answer(&a.surface_id, key)), None);
+        assert_eq!(c.gate_plugin_request(&answer(&a.surface_id, key + 1)), None);
+        assert_eq!(c.gate_plugin_request(&answer("nope", key)), None);
+        let refusal = |reason| PluginRefusal { plugin_id: "p".into(), reason };
+        assert_eq!(c.take_plugin_refusals(), [refusal(Refusal::TerminalOnly), refusal(Refusal::NotOnScreen), refusal(Refusal::NoTab)]);
+        assert!(c.take_plugin_refusals().is_empty(), "taken once");
+
+        // Only the answer that named the request on screen is logged; the request stays for the user.
+        let log = c.decisions("", 10);
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].outcome, crate::Outcome::RefusedPlugin { plugin_id: "p".into(), reason: Refusal::TerminalOnly });
+        assert_eq!(c.decisions("refused_plugin", 10).len(), 1);
+        assert!(c.has_unresolved(&a.surface_id));
+        assert!(c.snapshot().groups[0].rows.iter().any(|r| r.surface_id == a.surface_id && r.needs_you));
+    }
+
+    #[test]
+    fn an_accepted_answer_queues_no_refusal() {
+        let c = Core::new(format!("/tmp/haunt-gate-ok-{}", std::process::id()));
+        let a = c.register_surface("/a").unwrap();
+        let line = format!(
+            r#"{{"v":1,"surface_id":"{}","nonce":"{}","event":"permission_seen","tool_name":"Bash","tool_input":{{"command":"git push"}}}}"#,
+            a.surface_id, a.nonce
+        );
+        c.with_state(|st| st.handle_line(&line, std::time::Instant::now()));
+        let key = c.snapshot().groups[0].rows[0].pending.clone().unwrap().key;
+        assert!(c.gate_plugin_request(&answer(&a.surface_id, key)).is_some());
+        assert!(c.take_plugin_refusals().is_empty());
+        // The user's own stale answer is no refusal: refusals are plugins' only.
+        assert_eq!(c.answer_permission(&a.surface_id, key, true), None);
+        assert!(c.take_plugin_refusals().is_empty());
+    }
+
     fn typed(surface: &str, text: &str, enter: bool) -> HostRequest {
         HostRequest::PtyType { plugin_id: "p".into(), surface: surface.into(), text: text.into(), enter }
     }

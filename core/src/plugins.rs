@@ -417,6 +417,8 @@ impl wdec::Host for HostState {
         let Some(core) = &self.core else { return Vec::new() };
         core.decisions(&text, limit.min(MAX_DECISIONS))
             .into_iter()
+            // The 0.4 `outcome` variant has no case for a refused plugin answer; those rows stay out.
+            .filter(|d| !matches!(d.outcome, Outcome::RefusedPlugin { .. }))
             .map(|d| wdec::Decision {
                 at_ms: d.at_ms,
                 surface_id: d.surface_id,
@@ -429,7 +431,7 @@ impl wdec::Host for HostState {
                     Outcome::AllowedByPlugin { plugin_id } => wdec::Outcome::AllowedByPlugin(plugin_id),
                     Outcome::DeniedByPlugin { plugin_id } => wdec::Outcome::DeniedByPlugin(plugin_id),
                     Outcome::AnsweredInTerminal => wdec::Outcome::AnsweredInTerminal,
-                    Outcome::Superseded => wdec::Outcome::Superseded,
+                    Outcome::Superseded | Outcome::RefusedPlugin { .. } => wdec::Outcome::Superseded,
                 },
                 agent: d.agent.id().to_owned(),
             })

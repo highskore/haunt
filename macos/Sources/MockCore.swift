@@ -72,6 +72,7 @@ final class MockCore: CoreAPI {
     func reviewTurn(surfaceId: String) -> ReviewTurn? { fixture?.reviewTurn }
 
     func gatePluginRequest(request: HostRequest) -> PtyWrite? { nil }
+    func takePluginRefusals() -> [PluginRefusal] { [] }
 
     func snapshotIfNewer(version: UInt64) -> SidebarSnapshot? {
         version == self.version ? nil : snapshot()

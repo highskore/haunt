@@ -8,6 +8,8 @@ final class PluginBridge {
     var plugins: PluginsAPI?
     private let core: CoreAPI
     private let write: (PtyRoute) -> Void
+    /// A plugin's answer the gate refused, as one line of the host's own text.
+    var onRefused: ((String) -> Void)?
 
     init(core: CoreAPI, write: @escaping (PtyRoute) -> Void) {
         self.core = core
@@ -27,6 +29,14 @@ final class PluginBridge {
                 write(route)
             }
         }
+        for r in core.takePluginRefusals() {
+            onRefused?(Self.refusedLine(r))
+        }
+    }
+
+    /// "Refused <plugin id>: <reason>". The reason is the core's fixed text, never the plugin's.
+    static func refusedLine(_ r: PluginRefusal) -> String {
+        "Refused \(AgentNotifier.visible(r.pluginId)): \(refusalText(reason: r.reason))"
     }
 
     /// A palette item. `terminalShown`: the selected tab's terminal is on screen, which typing needs.

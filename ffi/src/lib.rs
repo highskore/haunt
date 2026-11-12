@@ -12,14 +12,20 @@ pub fn parse_osc(title: String, body: String) -> Result<AgentEvent, ParseError> 
     haunt_core::parse_osc(&title, &body)
 }
 
+/// The host's own text for a plugin refusal.
+#[uniffi::export]
+pub fn refusal_text(reason: Refusal) -> String {
+    reason.text().to_owned()
+}
+
 #[uniffi::export]
 pub fn event_name(event: AgentEvent) -> String {
     event.kind.name().to_owned()
 }
 
 pub use haunt_core::{
-    Agent, AllowSuggestion, ColorStyle, CommandOutcome, CoreError, Decision, Outcome, PendingRequest, Progress, ReviewTurn, Row, RowKind,
-    SidebarGroup, SidebarSnapshot, Subrow, SurfaceEnv, TabColor, TurnCommand, TurnSubagent, TurnTask,
+    Agent, AllowSuggestion, ColorStyle, CommandOutcome, CoreError, Decision, Outcome, PendingRequest, PluginRefusal, Progress, Refusal, ReviewTurn,
+    Row, RowKind, SidebarGroup, SidebarSnapshot, Subrow, SurfaceEnv, TabColor, TurnCommand, TurnSubagent, TurnTask,
 };
 
 /// Called after a change to the snapshot, on the thread that caused it (often the socket thread);
@@ -148,6 +154,11 @@ impl HauntCore {
     /// For each request from `HauntPlugins.takeRequests()`: the bytes to write, or nil to write nothing.
     pub fn gate_plugin_request(&self, request: HostRequest) -> Option<PtyWrite> {
         self.core.gate_plugin_request(&request)
+    }
+
+    /// Plugin answers the gate refused since the last call, oldest first, to show the user.
+    pub fn take_plugin_refusals(&self) -> Vec<PluginRefusal> {
+        self.core.take_plugin_refusals()
     }
 }
 

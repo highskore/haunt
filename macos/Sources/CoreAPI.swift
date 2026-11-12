@@ -17,6 +17,8 @@ protocol CoreAPI: AnyObject {
     func hasUnresolved(surfaceId: String) -> Bool
     func reviewTurn(surfaceId: String) -> ReviewTurn?
     func gatePluginRequest(request: HostRequest) -> PtyWrite?
+    /// Plugin answers the gate refused since the last call, to show the user.
+    func takePluginRefusals() -> [PluginRefusal]
 }
 
 /// `HauntPlugins` as the UI uses it.
@@ -70,6 +72,15 @@ func fixturePlugins(_ fixture: Fixture, bundledDir: String?) throws -> PluginsAP
         case let .deniedByPlugin(id): o["outcome"] = ["denied_by_plugin": ["plugin_id": id]]
         case .answeredInTerminal: o["outcome"] = "answered_in_terminal"
         case .superseded: o["outcome"] = "superseded"
+        case let .refusedPlugin(id, reason):
+            let why = switch reason {
+            case .noTab: "no_tab"
+            case .noRequest: "no_request"
+            case .notOnScreen: "not_on_screen"
+            case .terminalOnly: "terminal_only"
+            case .noKeys: "no_keys"
+            }
+            o["outcome"] = ["refused_plugin": ["plugin_id": id, "reason": why]]
         }
         return String(decoding: try JSONSerialization.data(withJSONObject: o), as: UTF8.self)
     }
@@ -148,6 +159,7 @@ final class FixturePlugins: PluginsAPI {
         case let .deniedByPlugin(id): return "\(id) denied"
         case .answeredInTerminal: return "Allowed in terminal:"
         case .superseded: return "Superseded:"
+        case let .refusedPlugin(id, _): return "Refused \(id):"
         }
     }
 
@@ -155,7 +167,7 @@ final class FixturePlugins: PluginsAPI {
         switch o {
         case .allowedInHaunt, .deniedInHaunt, .answeredInTerminal: return .open
         case .allowedByPlugin, .deniedByPlugin: return .filled
-        case .superseded: return .round
+        case .superseded, .refusedPlugin: return .round
         }
     }
 }
@@ -257,6 +269,27 @@ enum Outcome: Equatable, Hashable {
     case deniedByPlugin(pluginId: String)
     case answeredInTerminal
     case superseded
+    case refusedPlugin(pluginId: String, reason: Refusal)
+}
+
+enum Refusal: Equatable, Hashable {
+    case noTab, noRequest, notOnScreen, terminalOnly, noKeys
+}
+
+struct PluginRefusal: Equatable, Hashable {
+    var pluginId: String
+    var reason: Refusal
+}
+
+/// `Refusal::text` for the mock core.
+func refusalText(reason: Refusal) -> String {
+    switch reason {
+    case .noTab: "no such tab"
+    case .noRequest: "no request is up on that tab"
+    case .notOnScreen: "not the request on screen"
+    case .terminalOnly: "this request is answered in the terminal only"
+    case .noKeys: "this agent is answered in the terminal only"
+    }
 }
 
 struct PaletteItem: Equatable, Hashable {

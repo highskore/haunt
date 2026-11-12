@@ -62,7 +62,9 @@ impl Decision {
     /// What a query searches, lowercased once: fields joined by NUL, so a needle never spans two.
     fn haystack(&self) -> Box<str> {
         let plugin = match &self.outcome {
-            Outcome::AllowedByPlugin { plugin_id } | Outcome::DeniedByPlugin { plugin_id } => plugin_id.as_str(),
+            Outcome::AllowedByPlugin { plugin_id } | Outcome::DeniedByPlugin { plugin_id } | Outcome::RefusedPlugin { plugin_id, .. } => {
+                plugin_id.as_str()
+            }
             _ => "",
         };
         let fields = [self.tool.as_str(), &self.preview, self.cwd.as_deref().unwrap_or(""), self.outcome.as_str(), plugin, &self.surface_id, self.agent.id()];
