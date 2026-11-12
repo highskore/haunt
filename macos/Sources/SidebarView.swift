@@ -375,12 +375,34 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         }
     }
 
+    // A theme's words are drawn whole or not at all: cut short, they could read as a status ("Done…").
+
+    /// The Sigil foot's words: the theme's when they fit whole, else Haunt's count (which may be cut).
+    static func footText(agents n: Int, room: CGFloat) -> String {
+        let size = Tok.App.sidebarFootFont, f = Draw.ui(size, .light)
+        if let s = Theme.current.string("sidebar.foot", agents: n), Draw.width(Draw.line(s, f, .black, kern: size * 0.35)) <= room { return s }
+        return n == 1 ? "1 agent" : "\(n) agents"
+    }
+
+    /// A subagent's label after the theme's prefix, cut to fit here and checked exactly as drawn; if that could
+    /// pass for a status, after Haunt's own prefix.
+    static func subText(_ label: String, room: CGFloat) -> String {
+        guard let p = Theme.current.string("row.sub.prefix") else { return "↳ " + label }
+        let fits = { (s: String) in Draw.width(Draw.line(s, Fonts.sub, .black)) <= room }
+        var text = p + label, cut = label
+        while !fits(text), !cut.isEmpty {
+            cut.removeLast()
+            text = p + cut + "…"
+        }
+        return fits(text) && !Theme.statusCheck(text) ? text : "↳ " + label
+    }
+
     /// `[effects] ornament = "sigil"`: the sigil centred at the foot over `[strings] sidebar.foot`, or the agent count.
     private func drawSigilFooter(_ ctx: CGContext) {
         let n = Self.agentCount(snapshot), pad = Tok.App.sidebarFootPad, size = Tok.App.sidebarFootFont
         let f = Draw.ui(size, .light), lineH = size * lh
-        let text = Theme.current.string("sidebar.foot", agents: n) ?? (n == 1 ? "1 agent" : "\(n) agents")
-        let line = Draw.truncated(Draw.line(text, f, Tok.App.sidebarFootFg, kern: size * 0.35), contentWidth - 2 * pad[1], f, Tok.App.sidebarFootFg)
+        let line = Draw.truncated(Draw.line(Self.footText(agents: n, room: contentWidth - 2 * pad[1]), f, Tok.App.sidebarFootFg, kern: size * 0.35),
+                                  contentWidth - 2 * pad[1], f, Tok.App.sidebarFootFg)
         let textTop = bounds.height - pad[2] - lineH
         Draw.text(line, font: f, x: ((contentWidth - Draw.width(line)) / 2).rounded(), top: textTop, lineHeight: lineH, in: ctx)
         let d = Self.footSigil
@@ -557,8 +579,8 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let subs = row.subagents.map { s in
             let m = Draw.line(s.meta, Fonts.sub, subInk)
             let mw = Draw.width(m)
-            let label = Draw.truncated(Draw.line((Theme.current.string("row.sub.prefix") ?? "↳ ") + s.label, Fonts.sub, subInk),
-                                       right - col2 - mw - Tok.Size.subGap, Fonts.sub, subInk)
+            let room = right - col2 - mw - Tok.Size.subGap
+            let label = Draw.truncated(Draw.line(Self.subText(s.label, room: room), Fonts.sub, subInk), room, Fonts.sub, subInk)
             return (label: label, meta: m, metaW: mw)
         }
         let l = RowLines(row: row, width: contentWidth, hovered: hovered, status: status, statusW: statusW,

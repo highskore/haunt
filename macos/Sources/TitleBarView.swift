@@ -354,6 +354,7 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
         let app = Theme.current.app, font = Draw.ui(app.titlebarRightFont, .light)
         let line = Draw.line(text, font, Tok.Color.textSub, kern: app.titlebarRightFont * app.titlebarRightTracking)
         let w = Draw.width(line), lh = app.titlebarRightFont * Tok.Font.baseLine
+        guard w <= bounds.width - 2 * Tok.Size.titlebarPadx else { return nil }
         return (line, font, NSRect(x: bounds.width - Tok.Size.titlebarPadx - w, y: rowTop + (rowH - lh) / 2, width: w, height: lh))
     }
 

@@ -57,5 +57,21 @@ check(needs?.rightWidth == nil && needs?.label == nil && needs?.spark == nil, "a
 check(needs?.suffix == nil && needs?.bar == 0.5, "only the bar stays")
 check(RowDecor.color(.warn) != Tok.Color.needs, "warn is not the needs colour")
 
+// A theme's words are drawn whole and checked as drawn, or Haunt's own are.
+Theme.statusCheck = { $0 == "Done" }
+Theme.current.app.strings = ["sidebar.foot": "Doneness {agents}", "row.sub.prefix": "D"]
+Theme.current.app.sidebarFootFont = 400
+check(SidebarView.footText(agents: 3, room: 200) == "3 agents", "a foot too wide for the sidebar is Haunt's, never cut to \"Done…\"")
+Theme.current.app.sidebarFootFont = 9
+check(SidebarView.footText(agents: 3, room: 200) == "Doneness 3", "and the theme's when it fits")
+check(SidebarView.subText("one", room: 200) == "↳ one", "a prefix that spells a status with its label falls back to Haunt's")
+check(SidebarView.subText("builder", room: 200) == "Dbuilder", "otherwise the theme's prefix stays")
+Theme.statusCheck = { $0.hasPrefix("Done") }
+let doneW = Draw.width(Draw.line("Done…", Draw.ui(Tok.Size.subFont), .black))
+check(SidebarView.subText("onerous task", room: doneW) == "↳ onerous task", "a label cut to fit is checked as drawn (\"Done…\")")
+check(SidebarView.subText("builder", room: 5) == "↳ builder", "and the theme's prefix needs room for itself")
+Theme.current = Theme()
+Theme.statusCheck = { _ in true }
+
 print(failures == 0 ? "sidebar: all passed" : "sidebar: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

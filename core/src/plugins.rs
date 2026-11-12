@@ -919,9 +919,11 @@ pub fn says_status(text: &str) -> bool {
     says_phrase(text, &PHRASES)
 }
 
-/// `says_status` for a theme's words, which also may not read as a permission request.
+/// `says_status` for a theme's words, which also may not read as a permission request or its answer.
 pub fn theme_says_status(text: &str) -> bool {
-    static PHRASES: std::sync::LazyLock<Vec<Vec<char>>> = std::sync::LazyLock::new(|| status_phrases(["Permission", "Request"]));
+    static PHRASES: std::sync::LazyLock<Vec<Vec<char>>> = std::sync::LazyLock::new(|| {
+        status_phrases(["Permission", "Permissions", "Request", "Requests", "Approved", "Allowed", "Denied"])
+    });
     says_status(text) || says_phrase(text, &PHRASES)
 }
 
@@ -3031,7 +3033,8 @@ mod tests {
         for t in ["\u{13A0}one", "done\u{2800}", "needs  you", "\u{410}llow", "Approve", "RUNNING", "ALL IDLE", "a\u{300}llow"] {
             assert!(says_status(t), "{t:?}");
         }
-        for t in ["Permission", "REQUEST", "Re\u{2800}quest", "p\u{435}rmission needed"] {
+        for t in ["Permission", "REQUEST", "Re\u{2800}quest", "p\u{435}rmission needed", "You approved", "You denied",
+                  "Allowed in terminal:", "Approved", "Denied", "Permissions", "Requests", "\u{410}pproved"] {
             assert!(theme_says_status(t) && !says_status(t), "{t:?}");
         }
         for t in ["Invoke", "\u{21B5} SUMMON \u{B7} ESC BANISH", "XII \u{B7} XI \u{B7} MMXXVI", "AGENTS III", "Go To", "Open:",

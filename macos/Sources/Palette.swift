@@ -615,8 +615,10 @@ final class PaletteView: NSView {
         ctx.translateBy(x: edge, y: edge)
         if dialog {
             // Drawn by drawDialog.
-        } else if let header, let f = Draw.display(Theme.current.app.paletteHeaderFont) {
-            let line = Draw.line(header, f, Tok.Color.paletteInk), size = Theme.current.app.paletteHeaderFont
+        } else if let header, let f = Draw.display(Theme.current.app.paletteHeaderFont),
+                  case let line = Draw.line(header, f, Tok.Color.paletteInk), Draw.width(line) <= width {
+            // A theme's words are drawn whole or not at all.
+            let size = Theme.current.app.paletteHeaderFont
             Draw.chromeText(line, font: f, x: ((width - Draw.width(line)) / 2).rounded(), top: 10, lineHeight: size, in: ctx)
         }
         ctx.translateBy(x: 0, y: headH)
@@ -645,9 +647,9 @@ final class PaletteView: NSView {
         let cap = NSRect(x: 3, y: 3, width: bounds.width - 6, height: Self.captionH)
         let stops = app.titlebarFill.compactMap { NSColor(themeHex: $0) }
         if stops.count > 1, let g = NSGradient(colors: stops) { g.draw(in: cap, angle: 0) } else { Draw.fill(cap, app.rowSelectFill) }
-        if let header {
-            let f = Draw.ui(Tok.Size.paletteSmallFont, .bold)
-            Draw.text(Draw.line(header, f, app.rowSelectInk), font: f, x: cap.minX + 4, top: cap.minY + (cap.height - Tok.Size.paletteSmallFont * lh) / 2,
+        if let header, case let f = Draw.ui(Tok.Size.paletteSmallFont, .bold), case let line = Draw.line(header, f, app.rowSelectInk),
+           Draw.width(line) <= cap.width - 8 {
+            Draw.text(line, font: f, x: cap.minX + 4, top: cap.minY + (cap.height - Tok.Size.paletteSmallFont * lh) / 2,
                       lineHeight: Tok.Size.paletteSmallFont * lh, in: ctx)
         }
         let top = edge + headH, pad = padX
@@ -655,8 +657,10 @@ final class PaletteView: NSView {
             let mt = 3 + Self.captionH + 10
             drawInfoIcon(NSRect(x: x0 + pad, y: mt, width: Self.messageH, height: Self.messageH))
             let f = Draw.ui(Tok.Size.paletteSmallFont), h = Tok.Size.paletteSmallFont * lh
-            Draw.text(Draw.line(message, f, Tok.Color.paletteInk), font: f, x: x0 + pad + Self.messageH + 10, top: mt + (Self.messageH - h) / 2,
-                      lineHeight: h, in: ctx)
+            let line = Draw.line(message, f, Tok.Color.paletteInk)
+            if Draw.width(line) <= inner - 2 * pad - Self.messageH - 10 {
+                Draw.text(line, font: f, x: x0 + pad + Self.messageH + 10, top: mt + (Self.messageH - h) / 2, lineHeight: h, in: ctx)
+            }
         }
         // The input glyph labels the field from outside it, like the card's "Open:".
         var fx = x0 + pad
@@ -919,9 +923,8 @@ final class PaletteView: NSView {
 
     private func drawFoot(top: CGFloat, ctx: CGContext) {
         let f = mono(Tok.Size.paletteSmallFont), h = Tok.Size.paletteSmallFont * lh
-        if let footText {
-            let size = Tok.Size.paletteSmallFont
-            let line = Draw.line(footText, f, Tok.Color.paletteMute, kern: size * 0.25)
+        if let footText, case let line = Draw.line(footText, f, Tok.Color.paletteMute, kern: Tok.Size.paletteSmallFont * 0.25),
+           Draw.width(line) <= width - 2 * Tok.Size.paletteFootPad[1] {
             Draw.fill(NSRect(x: 0, y: top, width: width, height: border), Theme.current.app.paletteFootRule)
             Draw.text(line, font: f, x: ((width - Draw.width(line)) / 2).rounded(), top: top + border + Tok.Size.paletteFootPad[0], lineHeight: h, in: ctx)
             return
