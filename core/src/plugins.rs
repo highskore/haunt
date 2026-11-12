@@ -3538,6 +3538,17 @@ mod tests {
         p.on_event(&tapped(EventKind::Stop, true, None)).unwrap();
         assert_eq!(effects(&mut p), (vec![], vec![], vec![]));
 
+        let note = "https://github.com/o/r/pull/2";
+        p.store.data_mut().notified.extend([(note.to_string(), String::new()), (idle.to_string(), String::new())]);
+        p.notify_action(note, "").unwrap();
+        assert_eq!(effects(&mut p), (vec!["copied".to_string()], vec![note.to_string()], vec![tab.clone()]), "a notification action is a press");
+        assert!(disarmed(&p));
+        p.notify_action(idle, "").unwrap();
+        assert!(disarmed(&p), "an unspent notification action is disarmed when it returns");
+        p.on_event(&tapped(EventKind::Stop, true, None)).unwrap();
+        assert_eq!(effects(&mut p), (vec![], vec![], vec![]), "nothing left armed for an agent event");
+        assert!(p.notify_action("https://github.com/o/r/pull/3", "").is_err(), "only an action it posted");
+
         let trap = "!https://github.com/o/r";
         let g4 = show_button(&mut p, trap);
         assert!(p.panel_action("p", g4, trap).is_err());
