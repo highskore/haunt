@@ -407,13 +407,6 @@ enum HostRequest: Equatable, Hashable {
     case ambient(pluginId: String, sound: SoundName, level: Float)
     case say(pluginId: String, text: String)
     case stopSpeech(pluginId: String)
-    case dockImages(pluginId: String, images: [DockImage])
-    case dockShow(pluginId: String, image: String?, badge: UInt32?, blink: String?)
-}
-
-struct DockImage: Equatable, Hashable {
-    var id: String
-    var png: Data
 }
 
 enum SoundName: Equatable, Hashable {

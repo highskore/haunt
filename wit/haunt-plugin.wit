@@ -4,7 +4,7 @@
 // 0.4: `theme` and `typing` imports; `on-theme-changed` export.
 // 0.5: surface, tool, command, file path, task id and request key on agent-event; `rows`, `timer`,
 //      `clock` and `panel` imports; `on-tick` export; `on-event` returns nothing.
-//      `hold`, `top-row`, `keys`, `exec`, `sound`, `speech` and `dock` imports. Draft, not linked yet: `glow`,
+//      `hold`, `top-row`, `keys`, `exec`, `sound` and `speech` imports. Draft, not linked yet: `dock`, `glow`,
 //      `title` and `terminal` imports; `on-exec` and `on-away-changed` exports.
 package haunt:plugin@0.5.0;
 
@@ -406,19 +406,18 @@ interface speech {
   stop: func();
 }
 
+// --- Draft: 7-10. The shapes are settled for plugins to build against; the host doesn't link
+// --- these imports yet, and a manifest asking for their capabilities doesn't install yet.
+
 // Capability `dock`. The Dock tile: whole images, one per state, that the plugin ships.
 interface dock {
-  // Up to 8 PNGs, at most 1 MB and 16 to 1024 px a side each, by id (1 to 32 letters, digits, '-');
-  // replaces earlier ones.
+  // Up to 8 PNGs, at most 1 MB each, by id (letters, digits, '-'); replaces earlier ones.
   images: func(images: list<tuple<string, list<u8>>>) -> result<_, string>;
   // Shows image `id` (none: haunt's own icon) with `badge` as the Dock's count badge (none: no badge).
   // `blink` is an image haunt shows briefly every few seconds, except under Reduce Motion. The first
   // plugin to show owns the tile until it shows `none` with no badge.
   show: func(id: option<string>, badge: option<u32>, blink: option<string>) -> result<_, string>;
 }
-
-// --- Draft: 8-10. The shapes are settled for plugins to build against; the host doesn't link
-// --- these imports yet, and a manifest asking for their capabilities doesn't install yet.
 
 // Capability `glow`. A hairline glow along the top edge of the display haunt's window is on, over every
 // app, breathing (steady under Reduce Motion), with `label` (plain, at most 32 characters) at its right

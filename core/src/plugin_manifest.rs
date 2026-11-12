@@ -63,7 +63,6 @@ pub struct Capabilities {
     pub keys: bool,
     pub sound: bool,
     pub speech: bool,
-    pub dock: bool,
     pub fs_read: Vec<String>,
     pub fs_write: Vec<String>,
     pub net: Vec<String>,
@@ -215,9 +214,6 @@ impl Capabilities {
         if self.speech {
             out.push(("can speak short text aloud in the system voice".into(), false));
         }
-        if self.dock {
-            out.push(("can replace Haunt's Dock icon with its own images and show a count on it".into(), false));
-        }
         if self.timer {
             out.push(("can run on its own every 15 seconds or more, not only when an agent event arrives".into(), false));
         }
@@ -269,7 +265,6 @@ impl Capabilities {
             keys: self.keys && !old.keys,
             sound: self.sound && !old.sound,
             speech: self.speech && !old.speech,
-            dock: self.dock && !old.dock,
             fs_read: self.fs_read.iter().filter(|g| !old.fs_read.contains(g)).cloned().collect(),
             fs_write: self.fs_write.iter().filter(|g| !old.fs_write.contains(g)).cloned().collect(),
             exec: self.exec.iter().filter(|x| !old.exec.contains(x)).cloned().collect(),

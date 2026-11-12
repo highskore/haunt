@@ -41,7 +41,6 @@ Every plugin can add palette commands and modes, add entries to a tab's context 
 | `exec = ["git-status", ...]` | `exec.run(surface, command)`: fixed git and gh commands in the tab's project folder; the result calls `on-exec(job, outcome)` |
 | `sound = true` | `sound.play(name, pitch, volume)` and `sound.ambient(name, level)`: Haunt's chime, bell and rain |
 | `speech = true` | `speech.say(text)`: up to 200 characters in the system voice, once every 2 s |
-| `dock = true` | `dock.images(...)` then `dock.show(id, badge, blink)`: its own PNG per state on the Dock tile, with a count |
 | `notify_hold = true` | `hold.start(minutes)` / `hold.release()`: Haunt's and other plugins' notifications wait, then one summary shows; permission prompts never wait |
 | `pty_write = true` | `pty.answer`: Allow or Deny for the surface's pending permission request, nothing else. A verified `permission_seen` haunt can answer carries its `request-key`. |
 | `pty_type = true` | `typing.type-text`: types text, then Return if asked, into the current tab, only while handling a palette command or key the user just ran and never while that tab has a prompt up. No control or invisible characters but a tab. |

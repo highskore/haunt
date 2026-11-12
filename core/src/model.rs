@@ -158,8 +158,6 @@ pub(crate) struct State {
     /// The plugin holding notifications, until when.
     notify_hold: Option<(String, Instant)>,
     top_row: Option<TopRow>,
-    /// The plugin showing its images on the Dock tile.
-    dock_owner: Option<String>,
     /// Where `exec` jobs report; set while a plugin set is attached.
     exec_sink: Option<crate::plugin_exec::ExecSink>,
     /// Canonical chord -> who has it ("haunt" for Haunt's and macOS's, else `[keys]`' "<plugin>/<id>").
@@ -1030,28 +1028,6 @@ impl CoreHandle {
         let mine = st.notify_hold.as_ref().is_some_and(|(owner, _)| owner == plugin_id);
         if mine {
             st.notify_hold = None;
-        }
-        mine
-    }
-
-    /// `plugin_id` takes the Dock tile, unless another plugin has it.
-    pub fn claim_dock(&self, plugin_id: &str) -> Result<(), String> {
-        let mut st = lock(&self.state);
-        match &st.dock_owner {
-            Some(o) if o != plugin_id => Err(format!("{o} has the Dock tile")),
-            _ => {
-                st.dock_owner = Some(plugin_id.to_owned());
-                Ok(())
-            }
-        }
-    }
-
-    /// Whether `plugin_id` had the Dock tile.
-    pub fn release_dock(&self, plugin_id: &str) -> bool {
-        let mut st = lock(&self.state);
-        let mine = st.dock_owner.as_deref() == Some(plugin_id);
-        if mine {
-            st.dock_owner = None;
         }
         mine
     }

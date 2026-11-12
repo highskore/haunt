@@ -7,7 +7,6 @@ final class PluginBridge {
     let panels = PluginPanels()
     let hold = NotificationHold()
     let sound = PluginSound()
-    let dock = PluginDock()
     /// Brings tab `surfaceId` up, for a notification bound to it.
     var openTab: ((String) -> Void)?
     /// A plugin bound or unbound a key.
@@ -18,7 +17,6 @@ final class PluginBridge {
             panels.closeAll()
             hold.release()
             sound.stopAll()
-            dock.reset()
         }
     }
     private let core: CoreAPI
@@ -89,10 +87,6 @@ final class PluginBridge {
                 sound.say(pluginId: pluginId, text: text)
             case let .stopSpeech(pluginId):
                 sound.stopSpeech(pluginId: pluginId)
-            case let .dockImages(pluginId, images):
-                dock.setImages(pluginId: pluginId, images: images)
-            case let .dockShow(pluginId, image, badge, blink):
-                dock.show(pluginId: pluginId, image: image, badge: badge, blink: blink)
             case .ptyAnswer, .ptyType:
                 guard let w = core.gatePluginRequest(request: req), let route = PtyRoute(req, w) else { continue }
                 write(route)
