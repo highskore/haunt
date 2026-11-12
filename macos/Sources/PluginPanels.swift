@@ -23,6 +23,8 @@ final class PluginPanels {
     weak var host: PanelHost?
     /// (plugin id, panel id, generation, action); an empty action means the user closed it.
     var onAction: ((String, String, UInt64, String) -> Void)?
+    /// A button bound to a tab brings it forward before its action goes to the plugin.
+    var openTab: ((String) -> Void)?
 
     private struct Key: Hashable { let plugin: String, id: String }
     private final class Shown {
@@ -58,6 +60,7 @@ final class PluginPanels {
             guard let self, let s = self.shown[key] else { return }
             if action.isEmpty { self.close(key, byUser: true) } else { self.onAction?(pluginId, panel.id, s.generation, action) }
         }
+        frame.openTab = { [weak self] id in self?.openTab?(id) }
         frame.update(panel)
         var window: NSWindow?
         switch placement {
@@ -163,6 +166,9 @@ private final class PanelWindow: NSPanel {
 final class PanelFrame: NSView {
     static let headerHeight: CGFloat = 30
     private let send: (String) -> Void
+    var openTab: ((String) -> Void)?
+    /// Keyed canvas shapes as last drawn, for the next `update` to ease from.
+    private var previous: [String: CanvasView.Place] = [:]
     private let body = NSStackView()
     private let scroll = NSScrollView()
 
@@ -234,6 +240,8 @@ final class PanelFrame: NSView {
 
     /// Rebuilds the tree; the core already checked parents, depth and caps.
     func update(_ panel: Panel) {
+        previous = [:]
+        for c in Self.canvases(in: body) { previous.merge(c.places) { a, _ in a } }
         body.arrangedSubviews.forEach { $0.removeFromSuperview() }
         if !panel.title.isEmpty {
             let t = NSTextField(labelWithString: panel.title)
@@ -258,6 +266,10 @@ final class PanelFrame: NSView {
         }
     }
 
+    private static func canvases(in v: NSView) -> [CanvasView] {
+        v.subviews.flatMap { ($0 as? CanvasView).map { [$0] } ?? canvases(in: $0) }
+    }
+
     private func view(for kind: PanelNodeKind) -> NSView {
         switch kind {
         case .vStack, .hStack:
@@ -274,11 +286,14 @@ final class PanelFrame: NSView {
             return l
         case let .row(label, sub, right, tone):
             return PanelRow(label: label, sub: sub, right: right, color: Self.color(tone))
-        case let .button(label, action, _):
+        case let .button(label, action, _, surface):
             // No key equivalent, even for `primary`: Return never presses a plugin's button.
             let b = ActionButton(title: label, target: nil, action: nil)
             b.bezelStyle = .rounded
-            b.onPress = { [weak self] in self?.send(action) }
+            b.onPress = { [weak self] in
+                if let surface { self?.openTab?(surface) }
+                self?.send(action)
+            }
             // A plugin opens a link only from the button whose action is that link, so it is shown first.
             if action.hasPrefix("https://") { b.toolTip = action }
             return b
@@ -289,7 +304,7 @@ final class PanelFrame: NSView {
         case let .grid(rows, columns, cell, cells, marked):
             return GridView(rows: Int(rows), columns: Int(columns), cell: CGFloat(cell), cells: cells, marked: Set(marked.map(Int.init)))
         case let .canvas(width, height, shapes):
-            return CanvasView(size: NSSize(width: CGFloat(width), height: CGFloat(height)), shapes: shapes)
+            return CanvasView(size: NSSize(width: CGFloat(width), height: CGFloat(height)), shapes: shapes, from: previous)
         }
     }
 
@@ -389,17 +404,45 @@ private final class GridView: NSView {
 
 /// A fixed-size drawing; a pulsing dot breathes unless the user asked for less motion.
 private final class CanvasView: NSView {
+    /// A shape's geometry: dot (x, y, r), rect (x, y, w, h), line (x1, y1, x2, y2), label (x, y).
+    struct Place: Equatable {
+        let kind: Int
+        let v: [CGFloat]
+    }
+    private static let ease: CFTimeInterval = 0.6
+
     private let size: NSSize
     private let shapes: [PanelShape]
+    /// Shape index to where it eases from.
+    private var from: [Int: Place] = [:]
+    private var start: CFTimeInterval = 0
+    private var timer: Timer?
 
-    init(size: NSSize, shapes: [PanelShape]) {
+    init(size: NSSize, shapes: [PanelShape], from previous: [String: Place]) {
         self.size = size
         self.shapes = shapes
         super.init(frame: NSRect(origin: .zero, size: size))
         wantsLayer = true
         layer?.masksToBounds = true
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-        for case let .dot(x, y, r, shade, warn, true) in shapes {
+        for (i, s) in shapes.enumerated() {
+            let (key, place) = Self.geometry(s)
+            if let key, let old = previous[key], old.kind == place.kind, old != place { from[i] = old }
+        }
+        if !from.isEmpty {
+            start = CACurrentMediaTime()
+            let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] t in
+                guard let self else { return t.invalidate() }
+                if self.progress >= 1 {
+                    self.from = [:]
+                    t.invalidate()
+                }
+                self.needsDisplay = true
+            }
+            RunLoop.main.add(t, forMode: .common)
+            timer = t
+        }
+        for case let .dot(x, y, r, shade, warn, true, _) in shapes {
             let l = CAShapeLayer()
             let rr = CGFloat(r)
             l.path = CGPath(ellipseIn: CGRect(x: CGFloat(x) - rr * 2, y: CGFloat(y) - rr * 2, width: rr * 4, height: rr * 4), transform: nil)
@@ -412,37 +455,77 @@ private final class CanvasView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+    deinit { timer?.invalidate() }
 
     override var isFlipped: Bool { true }
     override var intrinsicContentSize: NSSize { size }
 
+    private var progress: CGFloat { CGFloat(min(1, (CACurrentMediaTime() - start) / Self.ease)) }
+
+    private static func geometry(_ s: PanelShape) -> (String?, Place) {
+        let f = { (a: [Float]) in a.map { CGFloat($0) } }
+        switch s {
+        case let .dot(x, y, r, _, _, _, key): return (key, Place(kind: 0, v: f([x, y, r])))
+        case let .rect(x, y, w, h, _, _, _, _, key): return (key, Place(kind: 1, v: f([x, y, w, h])))
+        case let .line(x1, y1, x2, y2, _, key): return (key, Place(kind: 2, v: f([x1, y1, x2, y2])))
+        case let .label(x, y, _, _, key): return (key, Place(kind: 3, v: f([x, y])))
+        }
+    }
+
+    /// Shape `i`'s geometry now: part way from where it was while easing (smoothstep), else its own.
+    private func place(_ i: Int) -> [CGFloat] {
+        let to = Self.geometry(shapes[i]).1.v
+        guard let old = from[i] else { return to }
+        let t = progress, e = t * t * (3 - 2 * t)
+        return zip(old.v, to).map { $0 + ($1 - $0) * e }
+    }
+
+    /// Every keyed shape where it is drawn now, so a newer show eases on from mid-way.
+    var places: [String: Place] {
+        var out: [String: Place] = [:]
+        for (i, s) in shapes.enumerated() {
+            let (key, p) = Self.geometry(s)
+            if let key { out[key] = Place(kind: p.kind, v: place(i)) }
+        }
+        return out
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         let fill = { (shade: Float, warn: Bool) in warn ? Tok.App.pluginWarn : PanelFrame.shade(shade) }
-        for s in shapes {
+        for (i, s) in shapes.enumerated() {
+            let v = place(i)
             switch s {
-            case let .dot(x, y, r, shade, warn, _):
+            case let .dot(_, _, _, shade, warn, _, _):
                 fill(shade, warn).setFill()
-                let rr = CGFloat(r)
-                NSBezierPath(ovalIn: NSRect(x: CGFloat(x) - rr, y: CGFloat(y) - rr, width: rr * 2, height: rr * 2)).fill()
-            case let .rect(x, y, w, h, shade, warn, label):
-                let r = NSRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(w), height: CGFloat(h))
+                NSBezierPath(ovalIn: NSRect(x: v[0] - v[2], y: v[1] - v[2], width: v[2] * 2, height: v[2] * 2)).fill()
+            case let .rect(_, _, _, _, shade, warn, label, sub, _):
+                let r = NSRect(x: v[0], y: v[1], width: v[2], height: v[3])
                 fill(shade, warn).setFill()
                 NSBezierPath(roundedRect: r, xRadius: 3, yRadius: 3).fill()
+                let dark = shade > 0.6 && !warn
+                let ctx = NSGraphicsContext.current!.cgContext
+                let top = sub == nil ? r.midY - 8 : r.midY - 15
                 if let label {
-                    let t = Draw.line(label, Draw.ui(11), shade > 0.6 && !warn ? Tok.Color.windowBg : Tok.Color.textPrimary)
+                    let t = Draw.line(label, Draw.ui(11), dark ? Tok.Color.windowBg : Tok.Color.textPrimary)
                     Draw.text(Draw.truncated(t, r.width - 8, Draw.ui(11), Tok.Color.textPrimary), font: Draw.ui(11), x: r.minX + 4,
-                              top: r.midY - 8, lineHeight: 16, in: NSGraphicsContext.current!.cgContext)
+                              top: top, lineHeight: 16, in: ctx)
                 }
-            case let .line(x1, y1, x2, y2, shade):
+                if let sub, r.height >= 30 {
+                    let color = dark ? Tok.Color.windowBg.withAlphaComponent(0.7) : PanelFrame.color(.dim)
+                    let t = Draw.line(sub, Draw.ui(10), color)
+                    Draw.text(Draw.truncated(t, r.width - 8, Draw.ui(10), color), font: Draw.ui(10), x: r.minX + 4,
+                              top: top + 15, lineHeight: 14, in: ctx)
+                }
+            case let .line(_, _, _, _, shade, _):
                 fill(shade, false).setStroke()
                 let p = NSBezierPath()
-                p.move(to: NSPoint(x: CGFloat(x1), y: CGFloat(y1)))
-                p.line(to: NSPoint(x: CGFloat(x2), y: CGFloat(y2)))
+                p.move(to: NSPoint(x: v[0], y: v[1]))
+                p.line(to: NSPoint(x: v[2], y: v[3]))
                 p.lineWidth = 1
                 p.stroke()
-            case let .label(x, y, text, tone):
+            case let .label(_, _, text, tone, _):
                 let t = Draw.line(text, Draw.ui(11), PanelFrame.color(tone))
-                Draw.text(t, font: Draw.ui(11), x: CGFloat(x), top: CGFloat(y), lineHeight: 16, in: NSGraphicsContext.current!.cgContext)
+                Draw.text(t, font: Draw.ui(11), x: v[0], top: v[1], lineHeight: 16, in: NSGraphicsContext.current!.cgContext)
             }
         }
     }

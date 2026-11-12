@@ -289,7 +289,9 @@ interface panel {
   // `text` may hold "\n": up to 40 lines, each plain and cut to 256 characters.
   record text-node { text: string, tone: tone, mono: bool, bold: bool }
   record row-node { label: string, sub: option<string>, right: option<string>, tone: tone }
-  record button-node { label: string, action: string, primary: bool }
+  // `surface`: a tab id; pressing the button brings that tab forward (selection only, nothing is
+  // typed), then calls `on-action` as usual.
+  record button-node { label: string, action: string, primary: bool, surface: option<string> }
 
   // `rows` × `columns` cells, row by row, each 0 to 1 (shaded from the background to the text
   // colour) or below 0 for an empty cell. `marked` cells get a warn outline. At most 2048 points
@@ -298,10 +300,13 @@ interface panel {
 
   // A fixed canvas of `width` × `height` points; shapes in drawing order. `shade` is 0 to 1 as in
   // the grid; `warn` draws in the warn orange instead. At most 16 dots per panel pulse.
-  record dot { x: f32, y: f32, r: f32, shade: f32, warn: bool, pulse: bool }
-  record rect { x: f32, y: f32, w: f32, h: f32, shade: f32, warn: bool, label: option<string> }
-  record line { x1: f32, y1: f32, x2: f32, y2: f32, shade: f32 }
-  record label { x: f32, y: f32, text: string, tone: tone }
+  // `key` (at most 64 characters, unique within its canvas): when the panel is shown again, a shape
+  // with the same key and kind eases from where it was over about 600 ms; with Reduce Motion it
+  // jumps. A rect's `sub` is a second, dim line under its label, cut to 80 characters.
+  record dot { x: f32, y: f32, r: f32, shade: f32, warn: bool, pulse: bool, key: option<string> }
+  record rect { x: f32, y: f32, w: f32, h: f32, shade: f32, warn: bool, label: option<string>, sub: option<string>, key: option<string> }
+  record line { x1: f32, y1: f32, x2: f32, y2: f32, shade: f32, key: option<string> }
+  record label { x: f32, y: f32, text: string, tone: tone, key: option<string> }
   variant shape { dot(dot), rect(rect), line(line), label(label) }
   record canvas-node { width: u32, height: u32, shapes: list<shape> }
 

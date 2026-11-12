@@ -39,6 +39,7 @@ final class PluginBridge {
                 try $0.panelAction(pluginId: plugin, panelId: panel, generation: generation, action: action)
             }
         }
+        panels.openTab = { [weak self] id in self?.openTab?(id) }
         hold.onRelease = NotificationHold.post
         presence.report = { [weak self] locked, idle in
             self?.run("plugins presence") { $0.presence(locked: locked, idleSecs: idle) }

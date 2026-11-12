@@ -13,6 +13,8 @@ pub const MAX_PANELS: usize = 4;
 pub const MAX_TEXT: usize = 256;
 /// Lines a text node keeps; each is plain and cut like any other string.
 pub const MAX_LINES: usize = 40;
+pub const MAX_SUB: usize = 80;
+const MAX_KEY: usize = 64;
 pub const SHOWS_PER_SEC: usize = 4;
 pub const MAX_PULSES: usize = 16;
 /// After the user closes a plugin's sheet, it can't show another for this long.
@@ -47,10 +49,10 @@ pub enum PanelTone {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 pub enum PanelShape {
-    Dot { x: f32, y: f32, r: f32, shade: f32, warn: bool, pulse: bool },
-    Rect { x: f32, y: f32, w: f32, h: f32, shade: f32, warn: bool, label: Option<String> },
-    Line { x1: f32, y1: f32, x2: f32, y2: f32, shade: f32 },
-    Label { x: f32, y: f32, text: String, tone: PanelTone },
+    Dot { x: f32, y: f32, r: f32, shade: f32, warn: bool, pulse: bool, key: Option<String> },
+    Rect { x: f32, y: f32, w: f32, h: f32, shade: f32, warn: bool, label: Option<String>, sub: Option<String>, key: Option<String> },
+    Line { x1: f32, y1: f32, x2: f32, y2: f32, shade: f32, key: Option<String> },
+    Label { x: f32, y: f32, text: String, tone: PanelTone, key: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,7 +62,8 @@ pub enum PanelNodeKind {
     HStack,
     Text { text: String, tone: PanelTone, mono: bool, bold: bool },
     Row { label: String, sub: Option<String>, right: Option<String>, tone: PanelTone },
-    Button { label: String, action: String, primary: bool },
+    /// `surface`: the tab the app brings forward on a press, before `on-action`.
+    Button { label: String, action: String, primary: bool, surface: Option<String> },
     Divider,
     /// `cells` row by row, each 0 to 1, or -1 for an empty cell.
     Grid { rows: u32, columns: u32, cell: u32, cells: Vec<f32>, marked: Vec<u32> },
@@ -176,6 +179,18 @@ fn lines(s: String) -> String {
     s.split('\n').take(MAX_LINES).map(|l| plain(l, MAX_TEXT)).collect::<Vec<_>>().join("\n")
 }
 
+fn key(s: String) -> String {
+    plain(&s, MAX_KEY)
+}
+
+impl PanelShape {
+    fn key(&self) -> Option<&str> {
+        match self {
+            Self::Dot { key, .. } | Self::Rect { key, .. } | Self::Line { key, .. } | Self::Label { key, .. } => key.as_deref(),
+        }
+    }
+}
+
 fn tone(t: wpanel::Tone) -> PanelTone {
     match t {
         wpanel::Tone::Text => PanelTone::Text,
@@ -207,6 +222,7 @@ fn shape(s: wpanel::Shape) -> Result<PanelShape, String> {
             shade: shade(d.shade)?,
             warn: d.warn,
             pulse: d.pulse,
+            key: d.key.map(key),
         },
         wpanel::Shape::Rect(r) => PanelShape::Rect {
             x: coord(r.x)?,
@@ -216,9 +232,13 @@ fn shape(s: wpanel::Shape) -> Result<PanelShape, String> {
             shade: shade(r.shade)?,
             warn: r.warn,
             label: r.label.map(text),
+            sub: r.sub.map(|s| plain(&s, MAX_SUB)),
+            key: r.key.map(key),
         },
-        wpanel::Shape::Line(l) => PanelShape::Line { x1: coord(l.x1)?, y1: coord(l.y1)?, x2: coord(l.x2)?, y2: coord(l.y2)?, shade: shade(l.shade)? },
-        wpanel::Shape::Label(l) => PanelShape::Label { x: coord(l.x)?, y: coord(l.y)?, text: text(l.text), tone: tone(l.tone) },
+        wpanel::Shape::Line(l) => {
+            PanelShape::Line { x1: coord(l.x1)?, y1: coord(l.y1)?, x2: coord(l.x2)?, y2: coord(l.y2)?, shade: shade(l.shade)?, key: l.key.map(key) }
+        }
+        wpanel::Shape::Label(l) => PanelShape::Label { x: coord(l.x)?, y: coord(l.y)?, text: text(l.text), tone: tone(l.tone), key: l.key.map(key) },
     })
 }
 
@@ -234,7 +254,7 @@ fn kind(n: wpanel::Node, shapes: &mut usize, pulses: &mut usize) -> Result<Panel
             if action.is_empty() {
                 return Err("a button needs an action".into());
             }
-            PanelNodeKind::Button { label: text(b.label), action, primary: b.primary }
+            PanelNodeKind::Button { label: text(b.label), action, primary: b.primary, surface: b.surface.map(text).filter(|s| !s.is_empty()) }
         }
         wpanel::Node::Grid(g) => {
             let n = g.rows.checked_mul(g.columns).filter(|&n| n <= MAX_GRID_CELLS).ok_or(format!("a grid has at most {MAX_GRID_CELLS} cells"))?;
@@ -266,7 +286,13 @@ fn kind(n: wpanel::Node, shapes: &mut usize, pulses: &mut usize) -> Result<Panel
             if *pulses > MAX_PULSES {
                 return Err(format!("at most {MAX_PULSES} pulsing dots in a panel"));
             }
-            PanelNodeKind::Canvas { width: c.width, height: c.height, shapes: c.shapes.into_iter().map(shape).collect::<Result<_, _>>()? }
+            let shapes: Vec<PanelShape> = c.shapes.into_iter().map(shape).collect::<Result<_, _>>()?;
+            let mut keys: Vec<&str> = shapes.iter().filter_map(PanelShape::key).collect();
+            keys.sort_unstable();
+            if keys.windows(2).any(|w| w[0] == w[1]) {
+                return Err("a shape key is used once per canvas".into());
+            }
+            PanelNodeKind::Canvas { width: c.width, height: c.height, shapes }
         }
     })
 }
@@ -324,7 +350,7 @@ mod tests {
     }
 
     fn button(action: &str) -> Node {
-        Node::Button(wpanel::ButtonNode { label: "Go".into(), action: action.into(), primary: true })
+        Node::Button(wpanel::ButtonNode { label: "Go".into(), action: action.into(), primary: true, surface: None })
     }
 
     #[test]
@@ -375,7 +401,7 @@ mod tests {
         }
         assert!(build("g".into(), Placement::Window, String::new(), vec![node(None, grid(u32::MAX, 2, vec![], vec![]))]).is_err(), "no overflow");
 
-        let dot = |x: f32, pulse| wpanel::Shape::Dot(wpanel::Dot { x, y: 1.0, r: 2.0, shade: 3.0, warn: false, pulse });
+        let dot = |x: f32, pulse| wpanel::Shape::Dot(wpanel::Dot { x, y: 1.0, r: 2.0, shade: 3.0, warn: false, pulse, key: None });
         let canvas = |shapes: Vec<wpanel::Shape>| Node::Canvas(wpanel::CanvasNode { width: 100, height: 50, shapes });
         let p = build("c".into(), Placement::Card, String::new(), vec![node(None, canvas(vec![dot(1.0, true)]))]).unwrap();
         let PanelNodeKind::Canvas { shapes, .. } = &p.nodes[0].kind else { panic!() };
@@ -386,6 +412,30 @@ mod tests {
         let pulsing = |n| node(None, canvas((0..n).map(|_| dot(0.0, true)).collect()));
         assert!(build("c".into(), Placement::Card, String::new(), vec![pulsing(MAX_PULSES)]).is_ok());
         assert!(build("c".into(), Placement::Card, String::new(), vec![pulsing(1), pulsing(MAX_PULSES)]).unwrap_err().contains("pulsing"));
+    }
+
+    #[test]
+    fn shape_keys_are_unique_per_canvas_and_a_rect_sub_is_capped() {
+        let rect = |key: Option<&str>, sub: Option<String>| {
+            wpanel::Shape::Rect(wpanel::Rect { x: 0.0, y: 0.0, w: 10.0, h: 10.0, shade: 0.5, warn: false, label: Some("src".into()), sub, key: key.map(Into::into) })
+        };
+        let label = |key: &str| wpanel::Shape::Label(wpanel::Label { x: 0.0, y: 0.0, text: "x".into(), tone: wpanel::Tone::Dim, key: Some(key.into()) });
+        let canvas = |shapes| node(None, Node::Canvas(wpanel::CanvasNode { width: 100, height: 50, shapes }));
+        let p = build("c".into(), Placement::Right, String::new(), vec![canvas(vec![rect(Some("src"), Some(format!("24\nedits{}", "x".repeat(99)))), label("lbl"), rect(None, None), rect(None, None)])]).unwrap();
+        let PanelNodeKind::Canvas { shapes, .. } = &p.nodes[0].kind else { panic!() };
+        let PanelShape::Rect { sub: Some(sub), key: Some(k), .. } = &shapes[0] else { panic!() };
+        assert!(sub.starts_with("24 edits") && sub.chars().count() == MAX_SUB && k == "src");
+        let dup = build("c".into(), Placement::Right, String::new(), vec![canvas(vec![rect(Some("a"), None), label("a")])]);
+        assert!(dup.unwrap_err().contains("once per canvas"));
+        assert!(build("c".into(), Placement::Right, String::new(), vec![canvas(vec![label("a")]), canvas(vec![label("a")])]).is_ok(), "per canvas");
+    }
+
+    #[test]
+    fn a_button_may_bring_a_tab_forward() {
+        let b = |surface: Option<&str>| node(None, Node::Button(wpanel::ButtonNode { label: "Start with api".into(), action: "go".into(), primary: false, surface: surface.map(Into::into) }));
+        let p = build("b".into(), Placement::Card, String::new(), vec![b(Some("s-1\u{202e}")), b(Some("")), b(None)]).unwrap();
+        let surfaces: Vec<_> = p.nodes.iter().map(|n| match &n.kind { PanelNodeKind::Button { surface, .. } => surface.clone(), _ => panic!() }).collect();
+        assert_eq!(surfaces, [Some("s-1".into()), None, None]);
     }
 
     #[test]

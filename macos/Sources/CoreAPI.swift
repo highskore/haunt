@@ -465,17 +465,17 @@ enum PanelTone: Equatable, Hashable {
 }
 
 enum PanelShape: Equatable, Hashable {
-    case dot(x: Float, y: Float, r: Float, shade: Float, warn: Bool, pulse: Bool)
-    case rect(x: Float, y: Float, w: Float, h: Float, shade: Float, warn: Bool, label: String?)
-    case line(x1: Float, y1: Float, x2: Float, y2: Float, shade: Float)
-    case label(x: Float, y: Float, text: String, tone: PanelTone)
+    case dot(x: Float, y: Float, r: Float, shade: Float, warn: Bool, pulse: Bool, key: String?)
+    case rect(x: Float, y: Float, w: Float, h: Float, shade: Float, warn: Bool, label: String?, sub: String?, key: String?)
+    case line(x1: Float, y1: Float, x2: Float, y2: Float, shade: Float, key: String?)
+    case label(x: Float, y: Float, text: String, tone: PanelTone, key: String?)
 }
 
 enum PanelNodeKind: Equatable, Hashable {
     case vStack, hStack
     case text(text: String, tone: PanelTone, mono: Bool, bold: Bool)
     case row(label: String, sub: String?, right: String?, tone: PanelTone)
-    case button(label: String, action: String, primary: Bool)
+    case button(label: String, action: String, primary: Bool, surface: String?)
     case divider
     case grid(rows: UInt32, columns: UInt32, cell: UInt32, cells: [Float], marked: [UInt32])
     case canvas(width: UInt32, height: UInt32, shapes: [PanelShape])
