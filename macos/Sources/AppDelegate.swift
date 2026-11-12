@@ -354,6 +354,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             [notifications]
             \(NotificationSettings.keys.keys.sorted().map { "# \($0) = true" }.joined(separator: "\n"))
 
+            # Minutes without input before plugins granted "away" hear you stepped away.
+            [presence]
+            # away_after = 10
+
             # Raw Ghostty keys, passed through, except ones that paste past Haunt's check (see the README).
             [ghostty]
 

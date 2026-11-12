@@ -809,7 +809,7 @@ pub struct PluginSet {
     themes: Vec<ThemeContribution>,
     /// The (plugin, panel) that has the right pane.
     right_pane: Option<(String, String)>,
-    /// config.toml's `away_after`, in minutes; None: the default.
+    /// config.toml's `[presence] away_after`, in minutes; None: the default.
     away_after_min: Option<u32>,
     /// When the user's last input was, while they are away.
     away_since: Option<std::time::Instant>,
@@ -1262,7 +1262,7 @@ mod tests {
         let t = std::time::Instant::now() + std::time::Duration::from_secs(3600);
         let secs = std::time::Duration::from_secs;
         assert_eq!(set.presence(false, 599, t), None, "10 minutes by default");
-        set.set_config(&PluginConfig::parse("away_after = 5\n"));
+        set.set_config(&PluginConfig::parse("[presence]\naway_after = 5\n"));
         assert_eq!(set.presence(false, 300, t), Some((true, 0)));
         assert_eq!(set.presence(true, 400, t + secs(100)), None, "already away");
         assert_eq!(set.presence(false, 1, t + secs(200)), Some((false, 500_000)));

@@ -13,7 +13,7 @@ pub struct PluginConfig {
     pub parsed: bool,
     /// `[layout] row_labels`: plugin ids or short names whose row decoration wins, first first.
     pub row_labels: Vec<String>,
-    /// Top-level `away_after`, in minutes: idle this long counts as away for plugins granted `away`.
+    /// `[presence] away_after`, in minutes: idle this long counts as away for plugins granted `away`.
     pub away_after_min: Option<u32>,
 }
 
@@ -58,11 +58,11 @@ impl PluginConfig {
                 Vec::new()
             }
         };
-        let away_after_min = match doc.get("away_after") {
+        let away_after_min = match doc.get("presence").and_then(|p| p.get("away_after")) {
             None => None,
             Some(toml::Value::Integer(m)) if (1..=i64::from(AWAY_AFTER_MAX_MIN)).contains(m) => Some(*m as u32),
             Some(_) => {
-                problems.push(format!("away_after: minutes from 1 to {AWAY_AFTER_MAX_MIN}, ignored"));
+                problems.push(format!("[presence] away_after: minutes from 1 to {AWAY_AFTER_MAX_MIN}, ignored"));
                 None
             }
         };
@@ -138,9 +138,10 @@ mod tests {
 
     #[test]
     fn away_after_is_minutes_in_range() {
-        assert_eq!(PluginConfig::parse("away_after = 5\n").away_after_min, Some(5));
+        assert_eq!(PluginConfig::parse("[presence]\naway_after = 5\n").away_after_min, Some(5));
+        assert_eq!(PluginConfig::parse("away_after = 5\n").away_after_min, None, "only in [presence]");
         for bad in ["away_after = 0", "away_after = \"5m\"", "away_after = 999"] {
-            let c = PluginConfig::parse(bad);
+            let c = PluginConfig::parse(&format!("[presence]\n{bad}"));
             assert!(c.away_after_min.is_none() && c.problems[0].contains("away_after"), "{bad}");
         }
     }
