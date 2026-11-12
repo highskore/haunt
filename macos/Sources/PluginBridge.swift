@@ -21,15 +21,15 @@ final class PluginBridge {
     /// Shows the owning plugin's title-bar line; nil clears it.
     var onTitle: ((String?) -> Void)?
     private var title: String?
-    /// `[effects]` from config.toml.
-    var effects = PluginEffects() {
+    /// `[plugin_fx]` from config.toml.
+    var pluginFx = PluginFxConfig() {
         didSet {
-            dock.enabled = effects.dock
-            glow.enabled = effects.glow
-            glow.showsLabel = effects.glowLabel
-            sound.enabled = effects.sound
-            speech.enabled = effects.sound && effects.speech
-            onTitle?(effects.title ? title : nil)
+            dock.enabled = pluginFx.dock
+            glow.enabled = pluginFx.glow
+            glow.showsLabel = pluginFx.glowLabel
+            sound.enabled = pluginFx.sound
+            speech.enabled = pluginFx.sound && pluginFx.speech
+            onTitle?(pluginFx.title ? title : nil)
         }
     }
     /// Set once the core has started, so the decision log is loaded before plugins read it.
@@ -99,7 +99,7 @@ final class PluginBridge {
 
     private func setTitle(_ text: String?) {
         title = text
-        onTitle?(effects.title ? text : nil)
+        onTitle?(pluginFx.title ? text : nil)
     }
 
     var loadErrors: [String] { plugins?.loadErrors() ?? [] }

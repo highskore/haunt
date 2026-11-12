@@ -92,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             Self.logger.error("core start failed: \(String(describing: error), privacy: .public)")
         }
         pushTakenChords()
-        c.bridge.effects = config.effects
+        c.bridge.pluginFx = config.pluginFx
         c.bridge.plugins = Self.startPlugins(fixture: fixture, core: core, dir: config.dir, configToml: config.text)
         config.pluginThemes = Dictionary((c.bridge.plugins?.themes() ?? []).map {
             ($0.id, PluginTheme(file: URL(fileURLWithPath: $0.file), fonts: $0.fonts.map { URL(fileURLWithPath: $0) }, bundled: $0.bundled))
@@ -435,7 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     private func apply(_ changes: HauntConfig.Changes) {
         var c = changes
-        if c.text { controller?.bridge.effects = config.effects }
+        if c.text { controller?.bridge.pluginFx = config.pluginFx }
         if c.text, let plugins = controller?.bridge.plugins {
             let applied = plugins.setConfig(configToml: config.text)
             Self.logSettingsProblems(applied.problems)

@@ -407,6 +407,17 @@ check(hovers.suffix(2) == ["dev.x.peek start s3", "dev.x.peek end s3"], "leaving
 tick()
 hh.owner = nil
 check(hovers.last == "dev.x.peek end s4", "the owner going away ends it")
+// [plugin_fx] switches plugin output; a theme's [effects] table is not it.
+let fxDir = FileManager.default.temporaryDirectory.appendingPathComponent("haunt-fx-test-\(getpid())")
+try? FileManager.default.createDirectory(at: fxDir, withIntermediateDirectories: true)
+let fx = HauntConfig(dir: fxDir)
+try! "[effects]\nsound = false\nspeech = false\ndock = false\n".write(to: fx.tomlURL, atomically: true, encoding: .utf8)
+fx.reload()
+check(fx.pluginFx == PluginFxConfig(), "[effects] keys leave plugin sound, speech and dock on: \(fx.pluginFx)")
+try! "[plugin_fx]\nsound = false\nglow_label = false\nvolume = 3\n".write(to: fx.tomlURL, atomically: true, encoding: .utf8)
+fx.reload()
+check(!fx.pluginFx.sound && !fx.pluginFx.glowLabel && fx.pluginFx.speech && fx.pluginFx.dock, "[plugin_fx] turns them off: \(fx.pluginFx)")
+try? FileManager.default.removeItem(at: fxDir)
 
 // KeyGuard: a held key never crosses into another terminal, and a plugin's switch never answers a prompt.
 do {

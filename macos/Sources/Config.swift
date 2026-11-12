@@ -10,8 +10,8 @@ final class HauntConfig {
     var ghosttyURL: URL { dir.appendingPathComponent("ghostty.generated.conf") }
     private(set) var keys = KeyMap.defaults
     private(set) var notifications = NotificationSettings()
-    /// `[effects]`: what plugins may show or play outside their panels.
-    private(set) var effects = PluginEffects()
+    /// `[plugin_fx]`: what plugins may show or play outside their panels.
+    private(set) var pluginFx = PluginFxConfig()
     /// The loaded plugins' commands that come with a key, as "<plugin id>/<item id>": default key; set before `reload`.
     var pluginKeyDefaults: [String: String] = [:]
     private(set) var agentsView = AgentsViewStyle.narrowList
@@ -58,7 +58,7 @@ final class HauntConfig {
     private var lastKeyProblems: [String] = []
     private var lastLayoutProblems: [String] = []
     private var lastNotificationProblems: [String] = []
-    private var lastEffectsProblems: [String] = []
+    private var lastPluginFxProblems: [String] = []
 
     /// HAUNT_CONFIG_DIR, else HAUNT_HOME, else ~/.haunt: the same order as `haunt setup`.
     init(dir: URL? = nil) {
@@ -151,11 +151,11 @@ final class HauntConfig {
         }
         let notificationsChanged = newNotifications != notifications
         notifications = newNotifications
-        var effectsProblems: [String] = []
-        effects = PluginEffects(table: toml["effects"] ?? [:]) { effectsProblems.append($0) }
-        if effectsProblems != lastEffectsProblems {
-            for p in effectsProblems { Self.logger.error("\(p, privacy: .public)") }
-            lastEffectsProblems = effectsProblems
+        var pluginFxProblems: [String] = []
+        pluginFx = PluginFxConfig(table: toml["plugin_fx"] ?? [:]) { pluginFxProblems.append($0) }
+        if pluginFxProblems != lastPluginFxProblems {
+            for p in pluginFxProblems { Self.logger.error("\(p, privacy: .public)") }
+            lastPluginFxProblems = pluginFxProblems
         }
         var layoutProblems: [String] = []
         agentsView = AgentsViewStyle.parse(toml["layout"]?["agents_view"]) { layoutProblems.append($0) }
@@ -808,8 +808,8 @@ extension NSColor {
     }
 }
 
-/// `[effects]`: what plugins may show or play outside their own panels. All on by default.
-struct PluginEffects: Equatable {
+/// `[plugin_fx]`: what plugins may show or play outside their own panels. All on by default.
+struct PluginFxConfig: Equatable {
     var dock = true
     var glow = true
     var glowLabel = true
@@ -818,18 +818,18 @@ struct PluginEffects: Equatable {
     var sound = true
     var speech = true
 
-    static let keys: [String: WritableKeyPath<PluginEffects, Bool>] = ["dock": \.dock, "glow": \.glow, "glow_label": \.glowLabel, "title": \.title, "sound": \.sound, "speech": \.speech]
+    static let keys: [String: WritableKeyPath<PluginFxConfig, Bool>] = ["dock": \.dock, "glow": \.glow, "glow_label": \.glowLabel, "title": \.title, "sound": \.sound, "speech": \.speech]
 
     init() {}
 
     init(table: [String: TOML.Value], problem: (String) -> Void) {
         for (k, v) in table.sorted(by: { $0.key < $1.key }) {
             guard let path = Self.keys[k] else {
-                problem("[effects] \(k): unknown setting")
+                problem("[plugin_fx] \(k): unknown setting")
                 continue
             }
             guard case let .scalar(s) = v, s == "true" || s == "false" else {
-                problem("[effects] \(k): expected true or false")
+                problem("[plugin_fx] \(k): expected true or false")
                 continue
             }
             self[keyPath: path] = s == "true"
