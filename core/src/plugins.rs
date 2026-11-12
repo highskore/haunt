@@ -501,6 +501,11 @@ impl HostState {
             self.push_log(format!("warn palette: {:?} refused: an empty or hidden-character id, or an empty title", visible(&id)));
             return;
         };
+        // Both are "<plugin id>/<id>" in the key map; the key was there first.
+        if !is_mode && self.keys.iter().any(|(k, _)| *k == id) {
+            self.push_log(format!("warn palette: {:?} refused: it is already one of this plugin's keys", visible(&id)));
+            return;
+        }
         self.palette.retain(|p| !(p.id == id && p.is_mode == is_mode));
         if self.palette.len() >= MAX_PALETTE {
             self.push_log(format!("warn palette: more than {MAX_PALETTE} entries, {id} dropped"));
@@ -3150,6 +3155,8 @@ mod tests {
         assert!(p.bind("deploy".into(), "cmd+shift+j".into()).unwrap_err().contains("palette command"));
         p.palette.clear();
         p.bind("talk".into(), "shift+cmd+u".into()).unwrap();
+        wpal::Host::command(&mut p, "talk".into(), "Talk".into(), None);
+        assert!(p.palette.is_empty(), "a command can't take a bound key's id either");
         assert!(p.bind("other".into(), "cmd+shift+u".into()).unwrap_err().contains("talk"));
         assert_eq!(p.keys, [("talk".to_owned(), "cmd+shift+u".to_owned())]);
         for i in 1..MAX_KEYS {
