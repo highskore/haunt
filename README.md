@@ -194,6 +194,7 @@ macos/tests/loginpath.sh # the login-shell PATH lookup
 macos/tests/bundle-plugins.sh # make-app's --plugins: none by default, exactly the names given, pinned, api checked
 macos/tests/notify.sh    # notifications: when Allow shows, answer routing, toggles, the menu bar menu
 macos/tests/answerkey.sh # answers go as keystrokes, and only the fixed Allow/Deny keys do
+macos/tests/titlebar.sh  # a plugin's title line is drawn whole or not at all
 macos/tests/palette.sh   # the palette keeps its selection on a refresh, not on new text
 macos/tests/pluginfx.sh  # plugin Dock tile and badge, the voice rendered to a buffer (never played), the synthesised sounds; HAUNT_DOCK_RENDER=<dir> writes the tile states and glow labels as PNGs
 macos/fidelity.sh        # pixel check against the mockups (HAUNT_INACTIVE=1 for the unfocused window)

@@ -505,6 +505,10 @@ impl wtitle::Host for HostState {
             }
             return Ok(());
         };
+        // The stricter theme list: a plugin is trusted less than a theme, and the line sits beside Haunt's own.
+        if super::theme_says_status(&text) {
+            return Err("the title line can't use Haunt's status or permission words".into());
+        }
         if !self.fx.title_rate.ok() {
             return Err(format!("set at most {SHOWS_PER_SEC} times a second"));
         }
@@ -881,6 +885,17 @@ mod title_tests {
         a.outbox.clear();
         wtitle::Host::set(&mut a, Some("\u{200b} \u{2066}".into())).unwrap();
         assert!(matches!(&a.outbox[..], [HostRequest::TitleSet { text: None, .. }]), "nothing visible clears it");
+    }
+
+    #[test]
+    fn the_title_never_says_what_haunt_says() {
+        let mut a = state("dev.haunt.a", &Stage::default());
+        for text in ["NEEDS YOU · api", "Allow", "approving the push", "d\u{200b}one"] {
+            assert!(wtitle::Host::set(&mut a, Some(text.into())).unwrap_err().contains("status"), "{text}");
+        }
+        assert!(a.outbox.is_empty());
+        wtitle::Host::set(&mut a, Some("Doneness of the build".into())).unwrap();
+        assert_eq!(a.outbox.len(), 1, "a word that only starts like one is fine");
     }
 
     #[test]

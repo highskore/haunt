@@ -426,13 +426,19 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
     /// Right-aligned up to `right`, cut before it reaches the centred breadcrumb or the lights.
     private func drawPluginLine(rightOf right: CGFloat, in ctx: CGContext) {
         guard let text = pluginLine, !text.isEmpty else { return }
-        let font = Draw.mono(Tok.Size.crumbFont)
         let gap = Tok.Size.titlebarIconsGap
         let left = crumbLayout().map { $0.1.maxX } ?? lightRect(2).maxX
-        let line = Draw.truncated(Draw.line(text, font, Tok.Color.textLabel), right - gap - left - gap, font, Tok.Color.textLabel)
+        guard let line = Self.pluginLine(text, room: right - gap - left - gap) else { return }
         let w = Draw.width(line), lh = Tok.Size.crumbFont * Tok.Font.baseLine
-        guard w > 0, right - gap - w > left else { return }
-        Draw.text(line, font: font, x: right - gap - w, top: rowTop + (rowH - lh) / 2, lineHeight: lh, in: ctx)
+        Draw.text(line, font: Draw.mono(Tok.Size.crumbFont), x: right - gap - w, top: rowTop + (rowH - lh) / 2, lineHeight: lh, in: ctx)
+    }
+
+    /// The plugin's line whole, or nil when it doesn't fit `room`: a cut could leave a word that reads as Haunt's
+    /// ("Doneness" to "Done…").
+    static func pluginLine(_ text: String, room: CGFloat) -> CTLine? {
+        let line = Draw.line(text, Draw.mono(Tok.Size.crumbFont), Tok.Color.textLabel)
+        let w = Draw.width(line)
+        return w > 0 && w <= room ? line : nil
     }
 
     private func drawSidebarGlyph(centeredIn r: NSRect) {
