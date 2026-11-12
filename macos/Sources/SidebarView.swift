@@ -548,7 +548,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         }
         let preview = row.pending.flatMap { $0.suspicious ? $0.preview : nil }
         let metaLine = preview == nil && decor?.suffix != nil
-            ? CTLineCreateWithAttributedString(decor!.meta(row.meta, font: Fonts.meta))
+            ? CTLineCreateWithAttributedString(decor!.meta(row.meta, font: Fonts.meta, room: metaRight - col2))
             : Draw.line(preview ?? row.meta, Fonts.meta, metaInk)
         let meta = Draw.truncated(metaLine, metaRight - col2, Fonts.meta, metaInk)
 

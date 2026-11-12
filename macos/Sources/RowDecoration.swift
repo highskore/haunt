@@ -50,6 +50,36 @@ struct RowDecor {
         return s
     }
 
+    /// `meta(_:font:)` cut to `room`: the meta gives way first, so the suffix stays whole while it fits alone; a
+    /// suffix too wide even alone keeps its end, where a ticker's newest step is.
+    func meta(_ meta: String, font: NSFont, room: CGFloat) -> NSAttributedString {
+        let whole = self.meta(meta, font: font)
+        guard let suffix, Self.tooWide(whole, room) else { return whole }
+        let head = Array(meta), tail = Array(suffix)
+        if let s = Self.longest(head.count, room, { k in
+            let h = String(head[..<k]).trimmingCharacters(in: .whitespaces)
+            return self.meta(h.isEmpty ? "" : h + "…", font: font)
+        }) { return s }
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: suffixColor]
+        return Self.longest(tail.count, room) { k in
+            NSAttributedString(string: "…" + String(tail[(tail.count - k)...]).trimmingCharacters(in: .whitespaces), attributes: attrs)
+        } ?? whole
+    }
+
+    private static func tooWide(_ s: NSAttributedString, _ room: CGFloat) -> Bool {
+        Draw.width(CTLineCreateWithAttributedString(s)) > room
+    }
+
+    /// The widest `make(k)`, k under `n`, that fits `room`; widths grow with k.
+    private static func longest(_ n: Int, _ room: CGFloat, _ make: (Int) -> NSAttributedString) -> NSAttributedString? {
+        var lo = 0, hi = n - 1, best: NSAttributedString?
+        while lo <= hi {
+            let mid = (lo + hi) / 2, s = make(mid)
+            if !tooWide(s, room) { best = s; lo = mid + 1 } else { hi = mid - 1 }
+        }
+        return best
+    }
+
     /// Draws the label or sparkline right-aligned at `right`, centred in a line box `height` tall at `top`.
     func drawRight(right: CGFloat, top: CGFloat, height: CGFloat, lineHeight: CGFloat, ctx: CGContext) {
         guard let w = rightWidth else { return }

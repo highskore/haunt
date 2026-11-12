@@ -49,6 +49,10 @@ enum Fixture: String {
     case win95 = "th-04-win95"
     /// The DMG card (haunt-themes 07).
     case dmg = "th-07-dmg"
+    /// No mockup: ui-06 with live-ticker suffixes: after a long prompt on the running row, and too long for the idle row.
+    case ticker = "ticker-long"
+    /// No mockup: the same in the sigil plugin's theme.
+    case tickerSigil = "ticker-sigil"
 
     static var current: Fixture? {
         ProcessInfo.processInfo.environment["HAUNT_FIXTURE"].flatMap(Fixture.init(rawValue:))
@@ -89,7 +93,7 @@ enum Fixture: String {
     var isSheet: Bool { [.pasteConfirm, .setupPicker, .setupChange, .settings].contains(self) }
 
     /// The palette mockup's input: the `log` chip and "push".
-    var paletteQuery: String? { self == .palette ? "log push" : self == .codexLog ? "log " : isThemeCard ? "p" : nil }
+    var paletteQuery: String? { self == .palette ? "log push" : self == .codexLog ? "log " : isThemeCard && self != .tickerSigil ? "p" : nil }
 
     /// The theme cards' palettes list four entries.
     var paletteRows: Int? { isThemeCard ? 4 : nil }
@@ -105,6 +109,7 @@ enum Fixture: String {
         case .sigil: ("dev.haunt.theme-sigil", "sigil")
         case .win95: ("dev.haunt.theme-win95", "win95")
         case .dmg: ("dev.haunt.theme-dmg", "dmg")
+        case .tickerSigil: ("dev.haunt.theme-sigil", "sigil")
         default: nil
         }
     }
@@ -184,7 +189,7 @@ enum Fixture: String {
                                    colorStyle: .dot)
         }
         let codex = self == .codex || self == .codexLog
-        let rows = zip(tabs, ids).map { t, id in
+        var rows = zip(tabs, ids).map { t, id in
             let kind = codex && t.name == "warp upstream" ? RowKind.codex : t.kind
             let pending = self == .suspicious && t.needs
                 ? PendingRequest(key: 1, tool: "Bash", preview: "ls #⏎rm -rf ~/x", suspicious: true) : nil
@@ -193,6 +198,14 @@ enum Fixture: String {
                        color: nil)
         }
         guard rows.count == tabs.count else { return SidebarSnapshot(groups: [], colorStyle: .dot) }
+        if self == .ticker || self == .tickerSigil {
+            rows[0].meta = "main · TODO.md has three boxes; tick them off one by one and run the tests"
+            rows[0].decoration = Decoration(label: nil, labelTone: .dim, suffix: "Edit session.ts → Bash npm test →", suffixTone: .dim,
+                                            scroll: false, barPermille: nil, spark: nil)
+            // A ticker wider than the line: the meta goes and the oldest steps are cut.
+            rows[3].decoration = Decoration(label: nil, labelTone: .dim, suffix: "Read session.ts → Edit session.ts → Bash npm test → Read refresh.ts →",
+                                            suffixTone: .dim, scroll: false, barPermille: nil, spark: nil)
+        }
         switch self {
         case .iconOnly, .zen, .pasteConfirm, .pasteRisky, .narrowList, .setupPicker, .setupChange, .settings, .reviewSend, .reviewInbox:
             return SidebarSnapshot(groups: [SidebarGroup(id: "tabs", label: "", rows: rows)], colorStyle: .dot)
@@ -203,7 +216,7 @@ enum Fixture: String {
                 SidebarGroup(id: "running", label: "RUNNING", rows: [rows[2]]),
                 SidebarGroup(id: "idle", label: "IDLE", rows: [rows[3]]),
             ], colorStyle: .dot)
-        case .groupedFlat, .palette, .suspicious, .codex, .codexLog, .statusMenu, .glass, .aero, .sigil, .win95, .dmg:
+        case .groupedFlat, .palette, .suspicious, .codex, .codexLog, .statusMenu, .glass, .aero, .sigil, .win95, .dmg, .ticker, .tickerSigil:
             return SidebarSnapshot(groups: [
                 SidebarGroup(id: "needs-you", label: "NEEDS YOU", rows: [rows[1]]),
                 SidebarGroup(id: "running", label: "RUNNING", rows: [rows[0]]),

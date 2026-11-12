@@ -57,6 +57,25 @@ check(needs?.rightWidth == nil && needs?.label == nil && needs?.spark == nil, "a
 check(needs?.suffix == nil && needs?.bar == 0.5, "only the bar stays")
 check(RowDecor.color(.warn) != Tok.Color.needs, "warn is not the needs colour")
 
+// A long prompt gives way to a plugin's suffix.
+let ticker = RowDecor(Decoration(label: nil, labelTone: .dim, suffix: "▲ 3 tests", suffixTone: .text, scroll: false, barPermille: nil,
+                                 spark: nil), statusWins: false)!
+let metaFont = Draw.ui(Tok.Size.rowMeta)
+let prompt = "main · TODO.md has three boxes; tick them off one by one and run the tests"
+let fit = { (room: CGFloat) in ticker.meta(prompt, font: metaFont, room: room) }
+let suffixW = Draw.width(CTLineCreateWithAttributedString(ticker.meta("", font: metaFont)))
+for room in [suffixW, suffixW + 30, 160, 240] {
+    let s = fit(room)
+    check(s.string.hasSuffix("▲ 3 tests"), "the suffix stays whole in \(room) pt: \(s.string)")
+    check(Draw.width(CTLineCreateWithAttributedString(s)) <= room, "and the line fits \(room) pt")
+}
+check(fit(160).string.hasPrefix("main · TODO") && fit(160).string.contains("… · ▲"), "the prompt is cut, then the suffix")
+check(fit(2000).string == prompt + " · ▲ 3 tests", "room for all: nothing cut")
+let narrow = fit(suffixW - 1)
+check(narrow.string.hasPrefix("…") && narrow.string.hasSuffix("tests") && !narrow.string.contains("main"),
+      "too narrow for the suffix: the prompt goes and the suffix keeps its end: \(narrow.string)")
+check(Draw.width(CTLineCreateWithAttributedString(narrow)) <= suffixW - 1, "and fits")
+
 // A theme's words are drawn whole and checked as drawn, or Haunt's own are.
 Theme.statusCheck = { $0 == "Done" }
 Theme.current.app.strings = ["sidebar.foot": "Doneness {agents}", "row.sub.prefix": "D"]
