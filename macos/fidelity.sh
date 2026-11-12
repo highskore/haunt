@@ -1,8 +1,18 @@
 #!/bin/bash
 # Launches build/haunt-fixtures.app on a mockup fixture, captures its window and runs design/check.
 # Usage: macos/fidelity.sh [screen...]   (default: ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox nt-07-menu th-01-glass)
-# HAUNT_INACTIVE=1 captures the window unfocused; captures then get an -inactive suffix.
+# The app opens in the background (open -g -n, HAUNT_INACTIVE=1) on a throwaway home and config, so nothing takes
+# focus or touches ~/.haunt; captures get an -inactive suffix. Each instance is killed after its capture, or on exit.
 set -uo pipefail
+export HAUNT_INACTIVE=1
+SCRATCH="$(mktemp -d)"
+pid=""
+cleanup() {
+  [ -n "$pid" ] && kill "$pid" 2>/dev/null
+  [ -d "$SCRATCH" ] && rm -rf "$SCRATCH"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
 OUT="$ROOT/design/out"
@@ -37,12 +47,15 @@ for screen in "${@:-ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette a
     # Glass shows the card's wallpaper, blurred, instead of the desktop.
     backdrop=""
     [ -f "$ROOT/design/reference/$s-backdrop.png" ] && backdrop="$ROOT/design/reference/$s-backdrop.png"
-    HAUNT_FIXTURE="$s" HAUNT_BACKDROP="$backdrop" "$APP/Contents/MacOS/haunt" >"$OUT/$tag-app.log" 2>&1 &
-    pid=$!
+    mkdir -p "$SCRATCH/$s/home" "$SCRATCH/$s/config"
+    open -g -n --env HAUNT_INACTIVE=1 --env HAUNT_HOME="$SCRATCH/$s/home" --env HAUNT_CONFIG_DIR="$SCRATCH/$s/config" \
+      --env HAUNT_FIXTURE="$s" --env HAUNT_BACKDROP="$backdrop" --stdout "$OUT/$tag-app.log" --stderr "$OUT/$tag-app.log" "$APP"
+    pid=""
     win=""
     for _ in $(seq 1 40); do
       sleep 0.25
-      win=$(tools/winid-pid "$pid" $width 2>/dev/null) && break
+      [ -n "$pid" ] || pid=$(pgrep -n -f "^$APP/Contents/MacOS/haunt" || true)
+      [ -n "$pid" ] && win=$(tools/winid-pid "$pid" $width 2>/dev/null) && break
     done
     # Let the surfaces print the fixture and the renderer settle.
     sleep "${HAUNT_SETTLE:-2}"
@@ -68,8 +81,11 @@ im.crop((x + n, y + n, x + pw * 2 - n, y + ph * 2 - n)).save(p, icc_profile=im.i
       fi
       "$ROOT/design/check" "$OUT/$tag-capture.png" "$s" --out "$OUT${HAUNT_INACTIVE:+/inactive}" || status=1
     fi
-    kill "$pid" 2>/dev/null
-    wait "$pid" 2>/dev/null
+    if [ -n "$pid" ]; then
+      kill "$pid" 2>/dev/null
+      for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    fi
+    pid=""
   done
 done
 exit $status
