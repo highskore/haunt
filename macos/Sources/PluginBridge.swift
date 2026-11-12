@@ -150,8 +150,10 @@ final class PluginBridge {
                 NSWorkspace.shared.open(u)
             case let .focusTab(_, surface):
                 openTab?(surface)
-            case let .dockShow(_, image, badge, blink):
-                dock.show(image: image, badge: badge, blink: blink)
+            case let .dockImages(pluginId, images):
+                dock.register(pluginId: pluginId, images: images)
+            case let .dockShow(pluginId, image, badge, blink):
+                dock.show(pluginId: pluginId, image: image, badge: badge, blink: blink)
             case let .glowShow(_, count):
                 glow.show(count: count)
             case .glowHide:

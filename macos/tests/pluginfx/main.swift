@@ -94,20 +94,22 @@ let haunt = tile()
 let (sleepy, open, needs, blink) = (dockImage("sleepy", fill: .darkGray), dockImage("open", fill: .gray),
                                     dockImage("needs", fill: .lightGray), dockImage("blink", fill: .white))
 let dock = PluginDock()
+let p = "dev.haunt.dock-ghost"
+dock.register(pluginId: p, images: [sleepy, open, needs, blink])
 
-dock.show(image: sleepy, badge: nil, blink: nil)
+dock.show(pluginId: p, image: "sleepy", badge: nil, blink: nil)
 let idle = tile()
 check(idle != haunt, "idle sets the plugin's picture")
 check(NSApp.dockTile.badgeLabel == nil, "no badge: \(NSApp.dockTile.badgeLabel ?? "nil")")
 if let render { renderTile(to: "\(render)/host-b-dock-idle.png") }
 
-dock.show(image: needs, badge: 1, blink: nil)
+dock.show(pluginId: p, image: "needs", badge: 1, blink: nil)
 check(NSApp.dockTile.badgeLabel == "1", "needs-you badge: \(NSApp.dockTile.badgeLabel ?? "nil")")
 if let render { renderTile(to: "\(render)/host-b-dock-needs.png") }
-dock.show(image: needs, badge: 4_000_000_000, blink: nil)
+dock.show(pluginId: p, image: "needs", badge: 4_000_000_000, blink: nil)
 check(NSApp.dockTile.badgeLabel == "4000000000", "the badge is the number only: \(NSApp.dockTile.badgeLabel ?? "nil")")
 
-dock.show(image: open, badge: nil, blink: blink)
+dock.show(pluginId: p, image: "open", badge: nil, blink: "blink")
 let working = tile()
 check(NSApp.dockTile.badgeLabel == nil, "working drops the badge")
 if let render { renderTile(to: "\(render)/host-b-dock-working.png") }
@@ -124,16 +126,30 @@ check(NSApp.dockTile.badgeLabel == nil && tile() == haunt, "[plugin_fx] dock = f
 dock.enabled = true
 check(tile() == working, "and turning it on again shows the plugin's")
 
-dock.show(image: DockImage(id: "short", width: 64, height: 64, rgba: Data(count: 64 * 64 * 4 - 1)), badge: 2, blink: nil)
+dock.register(pluginId: p, images: [sleepy, needs, blink, DockImage(id: "open", width: needs.width, height: needs.height, rgba: needs.rgba)])
+check(tile() != working, "new pixels under the shown id show at once")
+dock.register(pluginId: p, images: [sleepy, needs, blink, open])
+
+let other = "dev.haunt.other"
+dock.register(pluginId: other, images: [DockImage(id: "short", width: 64, height: 64, rgba: Data(count: 64 * 64 * 4 - 1)),
+                                        DockImage(id: "wide", width: 1025, height: 1, rgba: Data(count: 1025 * 4)),
+                                        DockImage(id: "empty", width: 0, height: 1, rgba: Data())])
+check(tile() == working, "another plugin's images leave the shown tile alone")
+dock.show(pluginId: other, image: "short", badge: 2, blink: nil)
 check(NSApp.dockTile.badgeLabel == "2" && tile() == haunt, "pixels that don't fill the size show Haunt's own icon")
-for (w, h) in [(0, 1), (1025, 1)] {
-    dock.show(image: DockImage(id: "big", width: UInt32(w), height: UInt32(h), rgba: Data(count: w * h * 4)), badge: nil, blink: nil)
-    check(tile() == haunt, "\(w)×\(h) is refused")
+for id in ["wide", "empty", "sleepy"] {
+    dock.show(pluginId: other, image: id, badge: nil, blink: nil)
+    check(tile() == haunt, "\(id) is not \(other)'s to show")
 }
 
-dock.show(image: needs, badge: 3, blink: nil)
+dock.show(pluginId: p, image: "needs", badge: 3, blink: nil)
+dock.register(pluginId: p, images: [])
+check(tile() == haunt && NSApp.dockTile.badgeLabel == "3", "dropped images go, the badge stays")
+dock.register(pluginId: p, images: [needs])
 dock.reset()
-check(NSApp.dockTile.badgeLabel == nil, "reset drops the badge")
+check(NSApp.dockTile.badgeLabel == nil && tile() == haunt, "reset drops the badge")
+dock.show(pluginId: p, image: "needs", badge: nil, blink: nil)
+check(tile() == haunt, "and the images")
 
 // MARK: Speech, rendered to buffers and never played
 

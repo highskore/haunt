@@ -1,8 +1,9 @@
 import AppKit
 import AVFoundation
 
-/// The Dock tile the owning plugin asked for (`HostRequest.dockShow`); the core lets one plugin at a time
-/// send these. `blink` is flashed every few seconds, never under Reduce Motion.
+/// The Dock tile the owning plugin asked for (`HostRequest.dockShow`), from the images each plugin registered
+/// (`dockImages`); the core lets one plugin at a time show. `blink` is flashed every few seconds, never under
+/// Reduce Motion.
 final class PluginDock {
     private static let blinkEvery: TimeInterval = 4
     private static let blinkFor: TimeInterval = 0.4
@@ -11,18 +12,29 @@ final class PluginDock {
     var enabled = true {
         didSet { if enabled != oldValue { apply() } }
     }
-    private struct Shown { let image: NSImage?, badge: UInt32?, blink: NSImage? }
+    private struct Shown { let plugin: String, image: String?, badge: UInt32?, blink: String? }
     private var shown: Shown?
     private var timer: Timer?
+    /// Each plugin's images by id, at most 8 a plugin.
+    private var images: [String: [String: NSImage]] = [:]
 
-    func show(image: DockImage?, badge: UInt32?, blink: DockImage?) {
-        shown = image == nil && badge == nil ? nil : Shown(image: image.flatMap(Self.image), badge: badge, blink: blink.flatMap(Self.image))
+    /// Replaces `pluginId`'s images; none drops them.
+    func register(pluginId: String, images list: [DockImage]) {
+        var byId: [String: NSImage] = [:]
+        for d in list { byId[d.id] = Self.image(d) }
+        images[pluginId] = byId.isEmpty ? nil : byId
+        if shown?.plugin == pluginId { apply() }
+    }
+
+    func show(pluginId: String, image: String?, badge: UInt32?, blink: String?) {
+        shown = image == nil && badge == nil ? nil : Shown(plugin: pluginId, image: image, badge: badge, blink: blink)
         apply()
     }
 
-    /// Haunt's own icon and no badge, as when the owner lets go or the plugins reload.
+    /// Haunt's own icon and no badge, and no plugin's images, as when the plugins reload.
     func reset() {
         shown = nil
+        images = [:]
         apply()
     }
 
@@ -30,10 +42,12 @@ final class PluginDock {
         timer?.invalidate()
         timer = nil
         let s = enabled ? shown : nil
+        let byId = s.flatMap { images[$0.plugin] }
+        let image = s?.image.flatMap { byId?[$0] }
         // nil puts the bundle's icon back.
-        NSApp.applicationIconImage = s?.image
+        NSApp.applicationIconImage = image
         NSApp.dockTile.badgeLabel = s?.badge.map(String.init)
-        guard let image = s?.image, let blink = s?.blink else { return }
+        guard let image, let blink = s?.blink.flatMap({ byId?[$0] }) else { return }
         timer = Timer.scheduledTimer(withTimeInterval: Self.blinkEvery, repeats: true) { [weak self] t in
             guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
             NSApp.applicationIconImage = blink

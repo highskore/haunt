@@ -89,7 +89,8 @@ const SHOWS_PER_SEC: usize = 4;
 /// One plugin's per-instance state for these imports.
 #[derive(Debug)]
 pub(crate) struct Fx {
-    dock_images: Vec<DockImage>,
+    /// The ids of the images the app holds for this plugin; the pixels went to it once, with `DockImages`.
+    dock_images: Vec<String>,
     dock_images_rate: Rate,
     dock_rate: Rate,
     glow_rate: Rate,
@@ -215,6 +216,9 @@ impl HostState {
         if self.stage.release(Slot::Dock, &self.id) {
             self.outbox.push(HostRequest::DockShow { plugin_id: self.id.clone(), image: None, badge: None, blink: None });
         }
+        if !std::mem::take(&mut self.fx.dock_images).is_empty() {
+            self.outbox.push(HostRequest::DockImages { plugin_id: self.id.clone(), images: Vec::new() });
+        }
         if self.stage.release(Slot::Glow, &self.id) {
             self.outbox.push(HostRequest::GlowHide { plugin_id: self.id.clone() });
         }
@@ -229,8 +233,8 @@ impl HostState {
         }
     }
 
-    fn dock_image(&self, id: &str) -> Result<DockImage, String> {
-        self.fx.dock_images.iter().find(|i| i.id == id).cloned().ok_or_else(|| format!("no image {id:?}; register it with images first"))
+    fn dock_image(&self, id: String) -> Result<String, String> {
+        if self.fx.dock_images.contains(&id) { Ok(id) } else { Err(format!("no image {id:?}; register it with images first")) }
     }
 }
 
@@ -256,7 +260,9 @@ impl wdock::Host for HostState {
             let (width, height, rgba) = decode_png(&png).map_err(|e| format!("image {id:?}: {e}"))?;
             decoded.push(DockImage { id, width, height, rgba });
         }
-        self.fx.dock_images = decoded;
+        let ids = decoded.iter().map(|i| i.id.clone()).collect();
+        self.request(HostRequest::DockImages { plugin_id: self.id.clone(), images: decoded })?;
+        self.fx.dock_images = ids;
         Ok(())
     }
 
@@ -271,8 +277,8 @@ impl wdock::Host for HostState {
             }
             return Ok(());
         }
-        let image = id.as_deref().map(|i| self.dock_image(i)).transpose()?;
-        let blink = blink.as_deref().map(|i| self.dock_image(i)).transpose()?;
+        let image = id.map(|i| self.dock_image(i)).transpose()?;
+        let blink = blink.map(|i| self.dock_image(i)).transpose()?;
         if blink.is_some() && image.is_none() {
             return Err("blink needs an image to go back to".into());
         }
@@ -540,9 +546,12 @@ pub(super) mod tests {
         assert!(wdock::Host::images(&mut st, vec![("a".into(), b"no".to_vec())]).unwrap_err().contains("not a PNG"));
         assert!(wdock::Host::images(&mut st, vec![("a".into(), header_only(8, 8))]).unwrap_err().contains("doesn't decode"));
         st.fx.dock_images_rate = Rate::new(1, Duration::from_secs(1));
+        assert!(st.outbox.is_empty());
         wdock::Host::images(&mut st, vec![img("idle"), img("busy")]).unwrap();
         assert!(wdock::Host::images(&mut st, vec![img("idle")]).unwrap_err().contains("once a second"));
-        assert!(st.outbox.is_empty(), "images alone change nothing on screen");
+        let [HostRequest::DockImages { images, .. }] = &st.outbox[..] else { panic!("{:?}", st.outbox) };
+        assert_eq!(images.iter().map(|i| (i.id.as_str(), i.rgba.len())).collect::<Vec<_>>(), [("idle", 64 * 64 * 4), ("busy", 64 * 64 * 4)]);
+        assert_eq!(stage.owner(Slot::Dock), None, "images alone take nothing on screen");
     }
 
     #[test]
@@ -551,6 +560,7 @@ pub(super) mod tests {
         let (mut a, mut b) = (state("dev.haunt.a", &stage), state("dev.haunt.b", &stage));
         for st in [&mut a, &mut b] {
             wdock::Host::images(st, vec![("idle".into(), png(64, 64, &[])), ("blink".into(), png(64, 64, &[]))]).unwrap();
+            st.outbox.clear();
         }
         assert!(wdock::Host::show(&mut a, Some("nope".into()), None, None).unwrap_err().contains("no image"));
         assert!(wdock::Host::show(&mut a, None, Some(3), Some("blink".into())).unwrap_err().contains("blink needs"));
@@ -558,7 +568,7 @@ pub(super) mod tests {
 
         wdock::Host::show(&mut a, Some("idle".into()), Some(3), Some("blink".into())).unwrap();
         let [HostRequest::DockShow { image: Some(i), badge: Some(3), blink: Some(k), .. }] = &a.outbox[..] else { panic!("{:?}", a.outbox) };
-        assert_eq!((i.id.as_str(), k.id.as_str(), i.width, i.rgba.len()), ("idle", "blink", 64, 64 * 64 * 4));
+        assert_eq!((i.as_str(), k.as_str()), ("idle", "blink"), "by id: the pixels went once, with images");
         assert!(wdock::Host::show(&mut b, Some("idle".into()), None, None).unwrap_err().contains("dev.haunt.a has it"));
         wdock::Host::show(&mut b, None, None, None).unwrap();
         assert!(b.outbox.is_empty(), "a non-owner clearing changes nothing");
@@ -578,7 +588,11 @@ pub(super) mod tests {
         wdock::Host::show(&mut a, Some("idle".into()), None, None).unwrap();
         a.outbox.clear();
         a.release_fx();
-        assert!(matches!(&a.outbox[..], [HostRequest::DockShow { image: None, badge: None, blink: None, .. }]));
+        assert!(
+            matches!(&a.outbox[..], [HostRequest::DockShow { image: None, badge: None, blink: None, .. }, HostRequest::DockImages { images, .. }] if images.is_empty()),
+            "{:?}",
+            a.outbox
+        );
         assert_eq!(stage.owner(Slot::Dock), None);
         drop(a);
         let mut b = state("dev.haunt.b", &stage);

@@ -69,7 +69,8 @@ impl Core {
             | HostRequest::SoundPlay { .. }
             | HostRequest::SoundAmbient { .. }
             | HostRequest::Say { .. }
-            | HostRequest::SayStop { .. } => None,
+            | HostRequest::SayStop { .. }
+            | HostRequest::DockImages { .. } => None,
         }
     }
 }

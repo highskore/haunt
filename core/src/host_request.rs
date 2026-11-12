@@ -35,10 +35,10 @@ pub enum HostRequest {
     OpenUrl { plugin_id: String, url: String },
     /// Select an open tab, from a button, key or command the user just used (`sidebar.focus`).
     FocusTab { plugin_id: String, surface: String },
-    /// The Dock tile: `image` (none: haunt's icon) with `badge` as its count, `blink` flashed now and then. Only
-    /// the plugin that owns the tile sends one; all none gives haunt's own back.
+    /// The Dock tile: image `image` (none: haunt's icon) with `badge` as its count, `blink` flashed now and then.
+    /// Only the plugin that owns the tile sends one; all none gives haunt's own back.
     #[cfg(feature = "plugins")]
-    DockShow { plugin_id: String, image: Option<crate::plugins::DockImage>, badge: Option<u32>, blink: Option<crate::plugins::DockImage> },
+    DockShow { plugin_id: String, image: Option<String>, badge: Option<u32>, blink: Option<String> },
     /// The warn-orange glow along the top of the screen; the app labels it "`count` need(s) you" (0: no label).
     /// Only from its owner.
     #[cfg(feature = "plugins")]
@@ -60,4 +60,8 @@ pub enum HostRequest {
     /// Stop this plugin's utterance, if it is the one being spoken.
     #[cfg(feature = "plugins")]
     SayStop { plugin_id: String },
+    /// The plugin's Dock images, decoded, replacing the ones it sent before; none drops them. Sent once, so a show
+    /// names them by id.
+    #[cfg(feature = "plugins")]
+    DockImages { plugin_id: String, images: Vec<crate::plugins::DockImage> },
 }
