@@ -311,10 +311,11 @@ impl State {
         if !self.decorations.is_empty() {
             for r in snap.groups.iter_mut().flat_map(|g| g.rows.iter_mut()) {
                 let mut d = self.decorations.iter().filter(|(_, s, _)| *s == r.surface_id).min_by_key(|(t, _, _)| *t).map(|(_, _, d)| d.clone());
-                // Haunt's own status always shows on a row that needs you: a label can't hide it.
+                // Haunt's own status owns a row that needs you: no plugin text can hide or imitate it.
                 if let Some(d) = d.as_mut().filter(|_| r.needs_you || r.pending.is_some()) {
                     d.label = None;
                     d.spark = None;
+                    d.suffix = None;
                 }
                 r.decoration = d;
             }

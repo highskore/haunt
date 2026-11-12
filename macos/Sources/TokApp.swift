@@ -122,6 +122,8 @@ extension Tok {
         static let dragSlop: CGFloat = 4
         /// NSTextField's cell insets its text this far, so the rename field sits that much left of the name.
         static let fieldInset: CGFloat = 2
+        /// A plugin's `warn` tone (red CI and the like): orange, never the needs-you colour, which plugins can't use.
+        static let pluginWarn = NSColor(srgbRed: 217.0 / 255, green: 119.0 / 255, blue: 87.0 / 255, alpha: 1)
         /// The OpenAI mark's size if its image failed to load.
         static let openAIMarkFallback: CGFloat = 18
 

@@ -2,16 +2,17 @@
 
 pub const LABEL_MAX: usize = 24;
 pub const SUFFIX_MAX: usize = 64;
+/// A scrolling suffix, a ticker, may be longer.
+pub const TICKER_MAX: usize = 160;
 pub const SPARK_MAX: usize = 32;
 
-/// dim: secondary text; text: primary; needs: the accent; kbd: a key cap.
+/// dim: secondary text; text: primary; warn: orange for a failure. Never haunt's needs-you colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 pub enum Tone {
     Dim,
     Text,
-    Needs,
-    Kbd,
+    Warn,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]

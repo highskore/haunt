@@ -265,7 +265,7 @@ struct Row: Equatable, Hashable {
 }
 
 enum Tone: Equatable, Hashable {
-    case dim, text, needs, kbd
+    case dim, text, warn
 }
 
 struct Spark: Equatable, Hashable {

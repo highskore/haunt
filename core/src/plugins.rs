@@ -536,8 +536,7 @@ fn tone(t: wrows::Tone) -> Tone {
     match t {
         wrows::Tone::Dim => Tone::Dim,
         wrows::Tone::Text => Tone::Text,
-        wrows::Tone::Needs => Tone::Needs,
-        wrows::Tone::Kbd => Tone::Kbd,
+        wrows::Tone::Warn => Tone::Warn,
     }
 }
 
@@ -557,7 +556,7 @@ fn decoration(d: wrows::Decoration) -> Result<Decoration, String> {
     Ok(Decoration {
         label: plain_opt(d.label, decorate::LABEL_MAX),
         label_tone: tone(d.label_tone),
-        suffix: plain_opt(d.suffix, decorate::SUFFIX_MAX),
+        suffix: plain_opt(d.suffix, if d.scroll { decorate::TICKER_MAX } else { decorate::SUFFIX_MAX }),
         suffix_tone: tone(d.suffix_tone),
         scroll: d.scroll,
         bar_permille: d.bar.map(decorate::permille).transpose()?,
@@ -1393,7 +1392,7 @@ mod tests {
     fn deco(label: &str) -> wrows::Decoration {
         wrows::Decoration {
             label: Some(label.into()),
-            label_tone: wrows::Tone::Needs,
+            label_tone: wrows::Tone::Warn,
             suffix: None,
             suffix_tone: wrows::Tone::Dim,
             scroll: false,
@@ -1417,7 +1416,7 @@ mod tests {
         let core = crate::Core::new(&*tempdir("rows-needs"));
         let a = core.register_surface("/a").unwrap();
         let mut st = HostState::new("dev.x.p", &Capabilities { decorate: true, ..Default::default() }, None, None, Some(core.handle()));
-        let spark = wrows::Spark { points: vec![1, 2], tone: wrows::Tone::Needs };
+        let spark = wrows::Spark { points: vec![1, 2], tone: wrows::Tone::Warn };
         st.decorate(a.surface_id.clone(), Some(wrows::Decoration { suffix: Some("CI 9/9".into()), bar: Some(0.5), spark: Some(spark), ..deco("CI 9/9") })).unwrap();
         let row = |core: &crate::Core| core.snapshot().groups.iter().flat_map(|g| g.rows.clone()).find(|r| r.surface_id == a.surface_id).unwrap();
         assert_eq!(row(&core).decoration.unwrap().label.as_deref(), Some("CI 9/9"));
@@ -1426,8 +1425,16 @@ mod tests {
         let r = row(&core);
         assert!(r.needs_you && r.pending.is_some());
         let d = r.decoration.unwrap();
-        assert_eq!((d.label, d.spark), (None, None), "Haunt's status shows");
-        assert_eq!((d.suffix.as_deref(), d.bar_permille), (Some("CI 9/9"), Some(500)), "the suffix and bar may stay");
+        assert_eq!((d.label, d.spark, d.suffix), (None, None, None), "Haunt's status owns the row");
+        assert_eq!(d.bar_permille, Some(500), "the bar may stay");
+    }
+
+    #[test]
+    fn a_scrolling_suffix_may_be_a_longer_ticker() {
+        let long = || Some("x".repeat(300));
+        let still = decoration(wrows::Decoration { suffix: long(), ..deco("a") }).unwrap();
+        let ticker = decoration(wrows::Decoration { suffix: long(), scroll: true, ..deco("a") }).unwrap();
+        assert_eq!((still.suffix.unwrap().len(), ticker.suffix.unwrap().len()), (decorate::SUFFIX_MAX, decorate::TICKER_MAX));
     }
 
     #[test]
@@ -1453,7 +1460,7 @@ mod tests {
         let d = decoration_of(&core).unwrap();
         assert_eq!(d.label.as_deref(), Some("abcdefghijklmnopqrstuvwx"), "first loaded wins, hidden characters go, cut to 24");
         assert_eq!(d.suffix.unwrap(), format!("ab {}", "c".repeat(61)));
-        assert_eq!((d.bar_permille, d.label_tone), (Some(1000), Tone::Needs));
+        assert_eq!((d.bar_permille, d.label_tone), (Some(1000), Tone::Warn));
 
         assert!(first.decorate(a.surface_id.clone(), Some(wrows::Decoration { bar: Some(f32::NAN), ..deco("x") })).is_err());
         let spark = wrows::Spark { points: vec![1; 33], tone: wrows::Tone::Dim };

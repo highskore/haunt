@@ -18,7 +18,7 @@ fn decoration(event: &AgentEvent) -> Option<Decoration> {
     }
     let (label, tone) = match event.kind.as_str() {
         "task_created" => ("new task".to_owned(), Tone::Dim),
-        "tool_ran" => (event.tool.clone()?, Tone::Kbd),
+        "tool_ran" => (event.tool.clone()?, Tone::Text),
         _ => return None,
     };
     Some(Decoration { label: Some(label), label_tone: tone, suffix: None, suffix_tone: Tone::Dim, scroll: false, bar: None, spark: None })

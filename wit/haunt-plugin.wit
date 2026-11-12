@@ -215,11 +215,12 @@ interface sidebar {
 
 // Capability `decorate`. One decoration per row and plugin, set and replaced at any time; the row
 // shows the first installed plugin's. All text is plain: hidden characters are removed, labels cut
-// to 24 characters and suffixes to 64. On a row that needs you, haunt's status keeps the right-hand
-// slot: the label and spark are dropped there, the suffix and bar stay.
+// to 24 characters and suffixes to 64 (160 when `scroll`). On a row that needs you or has a request
+// up, haunt's status owns the row: the label, spark and suffix are dropped there; the bar stays.
 interface rows {
-  // dim: secondary text; text: primary; needs: the accent (orange); kbd: a key cap.
-  enum tone { dim, text, needs, kbd }
+  // dim: secondary text; text: primary; warn: orange, for a failure such as red CI. Haunt's own
+  // needs-you colour is not available.
+  enum tone { dim, text, warn }
 
   record spark {
     // At most 32 points, oldest first, scaled to the row: 0 is the bottom, 255 the top.
@@ -234,7 +235,7 @@ interface rows {
     // After the meta line, separated by " · ".
     suffix: option<string>,
     suffix-tone: tone,
-    // The suffix scrolls slowly when it doesn't fit, like a ticker.
+    // The suffix scrolls slowly when it doesn't fit, like a ticker; it may then be 160 characters.
     scroll: bool,
     // A thin bar under the row, 0 to 1.
     bar: option<f32>,

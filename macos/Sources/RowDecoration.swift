@@ -7,7 +7,6 @@ struct RowDecor {
     private static let sparkStroke: CGFloat = 1.5
 
     let label: CTLine?
-    let kbd: Bool
     let spark: Spark?
     let suffix: String?
     let suffixColor: NSColor
@@ -15,33 +14,30 @@ struct RowDecor {
 
     static var labelFont: NSFont { Draw.mono(Tok.Size.rowRight) }
 
-    /// `statusWins`: the row needs you or has a request, so Haunt's status keeps the slot (the core drops
-    /// the label and spark there too).
+    /// `statusWins`: the row needs you or has a request, so haunt's status owns it and only the bar
+    /// is kept (the core drops the rest there too).
     init?(_ d: Decoration?, statusWins: Bool) {
         guard let d else { return nil }
-        let spark = statusWins ? nil : d.spark
-        kbd = d.labelTone == .kbd && spark == nil
-        label = spark == nil && !statusWins ? d.label.map { Draw.line($0, Self.labelFont, Self.color(d.labelTone, kbd: Tok.Color.textPrimary)) } : nil
-        self.spark = spark
-        suffix = d.suffix
-        suffixColor = Self.color(d.suffixTone, kbd: Tok.Color.textPrimary)
+        spark = statusWins ? nil : d.spark
+        label = spark == nil && !statusWins ? d.label.map { Draw.line($0, Self.labelFont, Self.color(d.labelTone)) } : nil
+        suffix = statusWins ? nil : d.suffix
+        suffixColor = Self.color(d.suffixTone)
         bar = d.barPermille.map { CGFloat(min($0, 1000)) / 1000 }
     }
 
-    static func color(_ t: Tone, kbd: NSColor) -> NSColor {
+    /// Never haunt's needs-you colour: `warn` is its own orange.
+    static func color(_ t: Tone) -> NSColor {
         switch t {
         case .dim: return Tok.Color.textMeta
         case .text: return Tok.Color.textPrimary
-        case .needs: return Tok.Color.needs
-        case .kbd: return kbd
+        case .warn: return Tok.App.pluginWarn
         }
     }
 
     /// Width of the status slot, or nil when the decoration leaves the status text there.
     var rightWidth: CGFloat? {
         if spark != nil { return Self.sparkSize.width }
-        guard let label else { return nil }
-        return Draw.width(label) + (kbd ? 2 * Tok.Size.paletteKbdPad[1] : 0)
+        return label.map(Draw.width)
     }
 
     /// `meta` and the suffix as one line, " · " between them.
@@ -61,18 +57,9 @@ struct RowDecor {
         if let spark {
             drawSpark(spark, in: NSRect(x: x, y: top + (height - Self.sparkSize.height) / 2,
                                         width: Self.sparkSize.width, height: Self.sparkSize.height))
-            return
+        } else if let label {
+            Draw.text(label, font: Self.labelFont, x: x, top: top + (height - lineHeight) / 2, lineHeight: lineHeight, in: ctx)
         }
-        guard let label else { return }
-        let lt = top + (height - lineHeight) / 2
-        if kbd {
-            let box = NSRect(x: x, y: lt, width: w, height: lineHeight).insetBy(dx: 0.5, dy: 0.5)
-            let p = NSBezierPath(roundedRect: box, xRadius: Tok.Size.paletteKbdRadius, yRadius: Tok.Size.paletteKbdRadius)
-            p.lineWidth = 1
-            Tok.Color.kbdBorder.setStroke()
-            p.stroke()
-        }
-        Draw.text(label, font: Self.labelFont, x: x + (kbd ? Tok.Size.paletteKbdPad[1] : 0), top: lt, lineHeight: lineHeight, in: ctx)
     }
 
     /// A polyline over the points, oldest at the left; 0 is the bottom (the view is flipped).
@@ -96,7 +83,7 @@ struct RowDecor {
         path.lineWidth = Self.sparkStroke
         path.lineJoinStyle = .round
         path.lineCapStyle = .round
-        Self.color(s.tone, kbd: Tok.Color.textPrimary).setStroke()
+        Self.color(s.tone).setStroke()
         path.stroke()
     }
 }

@@ -48,13 +48,14 @@ check(AgentsView.restoredFrame(gone.insetBy(dx: -200, dy: -200), screens: [], cu
       == NSRect(x: 0, y: 0, width: 800, height: 600), "and capped to it")
 
 // A decoration's label or spark never takes the status slot from a row that needs you.
-let deco = Decoration(label: "CI 9/9", labelTone: .needs, suffix: "ok", suffixTone: .dim, scroll: false, barPermille: 500,
+let deco = Decoration(label: "CI 9/9", labelTone: .warn, suffix: "ok", suffixTone: .dim, scroll: false, barPermille: 500,
                       spark: Spark(points: [1, 2], tone: .text))
 let calm = RowDecor(deco, statusWins: false)
 check(calm?.rightWidth == RowDecor.sparkSize.width, "a calm row shows the spark")
 let needs = RowDecor(deco, statusWins: true)
 check(needs?.rightWidth == nil && needs?.label == nil && needs?.spark == nil, "a needs-you row keeps Haunt's status")
-check(needs?.suffix == "ok" && needs?.bar == 0.5, "the suffix and bar may stay")
+check(needs?.suffix == nil && needs?.bar == 0.5, "only the bar stays")
+check(RowDecor.color(.warn) != Tok.Color.needs, "warn is not the needs colour")
 
 print(failures == 0 ? "sidebar: all passed" : "sidebar: \(failures) failed")
 exit(failures == 0 ? 0 : 1)
