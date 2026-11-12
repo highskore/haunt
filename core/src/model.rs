@@ -759,7 +759,12 @@ impl CoreHandle {
     }
 
     pub fn decisions(&self, query: &str, limit: u32) -> Vec<Decision> {
-        let hits = lock(&self.state).decisions.query(query, None, limit as usize);
+        self.decisions_where(query, limit, |_| true)
+    }
+
+    /// `decisions` of the ones `keep` takes, filtered before the limit.
+    pub fn decisions_where(&self, query: &str, limit: u32, keep: impl Fn(&Decision) -> bool) -> Vec<Decision> {
+        let hits = lock(&self.state).decisions.query_where(query, None, limit as usize, keep);
         hits.iter().map(|d| Decision::clone(d)).collect()
     }
 

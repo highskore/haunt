@@ -184,6 +184,11 @@ impl DecisionLog {
     /// limit). `query` is a case-insensitive substring of tool, preview, cwd, outcome, plugin,
     /// surface or agent. Shared, so the caller copies them out after the lock.
     pub fn query(&self, query: &str, surface: Option<&str>, limit: usize) -> Vec<Arc<Decision>> {
+        self.query_where(query, surface, limit, |_| true)
+    }
+
+    /// `query` of the decisions `keep` takes, filtered before the limit.
+    pub fn query_where(&self, query: &str, surface: Option<&str>, limit: usize, keep: impl Fn(&Decision) -> bool) -> Vec<Arc<Decision>> {
         let needle = query.trim().to_lowercase();
         if needle.contains('\0') {
             return Vec::new();
@@ -191,7 +196,7 @@ impl DecisionLog {
         self.entries
             .iter()
             .rev()
-            .filter(|e| surface.is_none_or(|s| e.d.surface_id == s) && (needle.is_empty() || e.hay.contains(needle.as_str())))
+            .filter(|e| surface.is_none_or(|s| e.d.surface_id == s) && (needle.is_empty() || e.hay.contains(needle.as_str())) && keep(&e.d))
             .take(limit)
             .map(|e| e.d.clone())
             .collect()
@@ -278,6 +283,16 @@ mod tests {
         assert_eq!(serde_json::from_str::<Decision>(&line).unwrap(), codex);
         let other = r#"{"at_ms":1,"surface_id":"s","tool":"Bash","preview":"ls","cwd":"/p","outcome":"superseded","agent":"aider"}"#;
         assert_eq!(serde_json::from_str::<Decision>(other).unwrap().agent, Agent::Other { id: "aider".into() });
+    }
+
+    #[test]
+    fn query_where_filters_before_the_limit() {
+        let mut log = DecisionLog::default();
+        log.record(decision("git push", Outcome::AllowedInHaunt));
+        log.record(decision("git push", Outcome::Superseded));
+        let kept = log.query_where("", None, 1, |d| d.outcome != Outcome::Superseded);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].outcome, Outcome::AllowedInHaunt);
     }
 
     #[test]

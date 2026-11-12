@@ -415,25 +415,28 @@ impl wtyping::Host for HostState {
 impl wdec::Host for HostState {
     fn query(&mut self, text: String, limit: u32) -> Vec<wdec::Decision> {
         let Some(core) = &self.core else { return Vec::new() };
-        core.decisions(&text, limit.min(MAX_DECISIONS))
+        // The 0.4 `outcome` variant has no case for a refused plugin answer; those rows stay out.
+        core.decisions_where(&text, limit.min(MAX_DECISIONS), |d| !matches!(d.outcome, Outcome::RefusedPlugin { .. }))
             .into_iter()
-            // The 0.4 `outcome` variant has no case for a refused plugin answer; those rows stay out.
-            .filter(|d| !matches!(d.outcome, Outcome::RefusedPlugin { .. }))
-            .map(|d| wdec::Decision {
-                at_ms: d.at_ms,
-                surface_id: d.surface_id,
-                tool: d.tool,
-                preview: d.preview,
-                cwd: d.cwd,
-                outcome: match d.outcome {
+            .filter_map(|d| {
+                let outcome = match d.outcome {
                     Outcome::AllowedInHaunt => wdec::Outcome::AllowedInHaunt,
                     Outcome::DeniedInHaunt => wdec::Outcome::DeniedInHaunt,
                     Outcome::AllowedByPlugin { plugin_id } => wdec::Outcome::AllowedByPlugin(plugin_id),
                     Outcome::DeniedByPlugin { plugin_id } => wdec::Outcome::DeniedByPlugin(plugin_id),
                     Outcome::AnsweredInTerminal => wdec::Outcome::AnsweredInTerminal,
-                    Outcome::Superseded | Outcome::RefusedPlugin { .. } => wdec::Outcome::Superseded,
-                },
-                agent: d.agent.id().to_owned(),
+                    Outcome::Superseded => wdec::Outcome::Superseded,
+                    Outcome::RefusedPlugin { .. } => return None,
+                };
+                Some(wdec::Decision {
+                    at_ms: d.at_ms,
+                    surface_id: d.surface_id,
+                    tool: d.tool,
+                    preview: d.preview,
+                    cwd: d.cwd,
+                    outcome,
+                    agent: d.agent.id().to_owned(),
+                })
             })
             .collect()
     }
