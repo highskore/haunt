@@ -536,8 +536,8 @@ final class PaletteView: NSView {
     private var inputRules: Bool { !plainMode && Theme.current.effects.paletteInputRules }
     /// `palette.input.rules`: the rules stand this far from the header and the list.
     private static let ruleMargin: CGFloat = 6
-    /// The theme's own hints line, in place of the controller's.
-    private var footText: String? { plainMode ? nil : Theme.current.string("palette.foot") }
+    /// The theme's own hints line, in place of the default hints only: a mode's hints are always Haunt's.
+    private var footText: String? { plainMode || chip != nil || foot.isEmpty ? nil : Theme.current.string("palette.foot") }
     /// An entry's content height: its text, or its icon when that is taller, as in the mockup's grid.
     private var textLines: CGFloat {
         let text = singleLine ? max(Tok.Size.paletteFont, Tok.Size.paletteSmallFont) * lh : Tok.Size.paletteFont * lh + Tok.Size.paletteSmallFont * lh

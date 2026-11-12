@@ -51,6 +51,8 @@ extension Theme {
     /// `{agents}` and `{agents.roman}` fill in when drawn.
     static let stringKeys: Set<String> = ["row.sub.prefix", "titlebar.right", "palette.header", "palette.foot", "palette.input.glyph", "palette.message", "sidebar.foot"]
     static let maxStringScalars = 64
+    /// Haunt's own status words: a theme's text may not pass for an agent's state or a decision.
+    static let statusWords = #"(?i)\b(needs you|allow|deny|approved|permission|request|waiting|done)"#
     /// More marks than this on one character stack it above and below its line ("zalgo").
     static let maxCombiningMarks = 2
 
@@ -63,6 +65,8 @@ extension Theme {
                 <= Self.maxCombiningMarks
         }) else { return "more than \(Self.maxCombiningMarks) combining marks on a character" }
         guard s.unicodeScalars.allSatisfy({ !TitleFormat.hidden($0) }) else { return "not one plain line" }
+        if s.range(of: Self.statusWords, options: .regularExpression) != nil { return "uses one of Haunt's status words" }
+        if name == "sidebar.foot", !s.contains("{agents}"), !s.contains("{agents.roman}") { return "must show {agents} or {agents.roman}" }
         app.strings[name] = s
         return nil
     }
