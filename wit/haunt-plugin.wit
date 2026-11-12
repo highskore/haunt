@@ -477,6 +477,14 @@ interface clipboard {
   write: func(text: string) -> result<_, string>;
 }
 
+// Capability `open_url = ["github.com", ...]`, its domains listed in the consent line. Opens `url` in
+// the browser, only while handling a click on one of this plugin's panel buttons whose action is that
+// very url (the button's tooltip shows it), once per click. https only, the host exactly one of the
+// listed domains, no user or password, no port, printable ASCII with no spaces or backslashes.
+interface link {
+  open-url: func(url: string) -> result<_, string>;
+}
+
 world plugin {
   use types.{agent-event, palette-item, menu-item};
   use exec.{output};
@@ -506,6 +514,7 @@ world plugin {
   import title;
   import terminal;
   import clipboard;
+  import link;
 
   export init: func(settings: string);
   export on-settings-changed: func(settings: string);

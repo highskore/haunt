@@ -52,6 +52,7 @@ Every plugin can add palette commands and modes, add entries to a tab's context 
 | `timer = true` | `timer.every(seconds)`: `on-tick(now-ms)` every 15 seconds or more, until `timer.stop()`. Every plugin can read its time zone with `clock.local-offset-min()`. |
 | `panel = true` | `panel.show(id, placement, title, nodes)`: a sheet, a right-hand pane, a floating card or a window the app draws from text, rows, buttons, dividers, a heat grid and a canvas. At most 512 nodes, 8 levels, 4 panels and 4 updates a second. Buttons and the user closing it arrive at `on-action(action, "panel:<id>")` (an empty action for a close). |
 | `clipboard = "write"` | `clipboard.write(text)`: once per palette command, key or panel button the user used; one line, at most 16 KB. Any other value fails install: the clipboard is never read. |
+| `open_url = ["github.com"]` | `link.open-url(url)`: from a click on a panel button whose action is that https url (shown as its tooltip), once per click; the host must be exactly a listed domain. |
 | `sidebar = true` | `sidebar.rows` (tab names, kinds and state groups, no task text) and `sidebar.arrange`: pins, named sections, manual order and colours over Haunt's grouping. Rows needing you always stay first. Drags arrive at `on-row-moved`. |
 
 Every fs glob starts with `${cwd}/` (the agent's folder, from verified events only, never `$HOME` or the haunt dir). It may use `*` within a path segment, but not `**`, `.` or `..`. Nothing inside the haunt dir is ever reachable.

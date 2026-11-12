@@ -107,6 +107,10 @@ final class PluginBridge {
             case let .clipboardWrite(_, text):
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
+            case let .openUrl(_, url):
+                // The core checked it (`link_ok`); https is checked again before it leaves the app.
+                guard let u = URL(string: url), u.scheme == "https" else { continue }
+                NSWorkspace.shared.open(u)
             case .ptyAnswer, .ptyType:
                 guard let w = core.gatePluginRequest(request: req), let route = PtyRoute(req, w) else { continue }
                 write(route)

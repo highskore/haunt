@@ -71,6 +71,8 @@ pub struct Capabilities {
     pub clipboard: Option<String>,
     /// Data only: contributes a theme in `[contributes.theme]`.
     pub theme: bool,
+    /// Domains `link.open` may open, each exactly (no subdomains).
+    pub open_url: Vec<String>,
 }
 
 const AGENT_EVENTS: &[&str] = &[
@@ -152,6 +154,12 @@ impl Capabilities {
         }
         if let Some(c) = self.clipboard.as_deref().filter(|c| !["none", "write"].contains(c)) {
             return err(format!("clipboard = {c:?} is refused: only \"write\" exists, a plugin never reads the clipboard"));
+        }
+        if self.open_url.len() > MAX_LINK_DOMAINS {
+            return err(format!("open_url lists at most {MAX_LINK_DOMAINS} domains"));
+        }
+        if let Some(d) = self.open_url.iter().find(|d| !valid_domain(d)) {
+            return err(format!("open_url domain {:?} must be a lowercase name like \"github.com\": no scheme, port, path or wildcard", escape_hidden(d)));
         }
         if let Some(x) = self.exec.iter().find(|x| !crate::plugin_exec::NAMES.contains(&x.as_str())) {
             return err(format!("unknown exec command {x:?}; known: {}", crate::plugin_exec::NAMES.join(", ")));
@@ -235,6 +243,9 @@ impl Capabilities {
         if self.clipboard_write() {
             out.push(("can copy text to your clipboard when you use one of its buttons, keys or commands (never read it)".into(), true));
         }
+        if !self.open_url.is_empty() {
+            out.push((format!("can open links to {} in your browser when you click one of its buttons", self.open_url.join(", ")), false));
+        }
         if self.pty_type {
             out.push(("can type text into the current tab when you run one of its commands".into(), true));
         }
@@ -255,7 +266,7 @@ impl Capabilities {
         // No `..`: a new capability doesn't build until it is handled here, so an update can't gain it unasked.
         let Capabilities {
             events, event_details, pty_write, pty_type, notifications, decisions_read, allowlist_suggest, sidebar, theme, decorate, timer,
-            panel, notify_hold, sidebar_top, keys, away, fs_read, fs_write, net, hid, exec, terminal_read, clipboard,
+            panel, notify_hold, sidebar_top, keys, away, fs_read, fs_write, net, hid, exec, terminal_read, clipboard, open_url,
         } = self;
         let new = |v: &[String], o: &[String]| v.iter().filter(|x| !o.contains(x)).cloned().collect::<Vec<_>>();
         let grown = Capabilities {
@@ -282,6 +293,7 @@ impl Capabilities {
             exec: new(exec, &old.exec),
             terminal_read: *terminal_read && !old.terminal_read,
             clipboard: clipboard.clone().filter(|c| old.clipboard.as_ref() != Some(c)),
+            open_url: new(open_url, &old.open_url),
         };
         grown.describe()
     }
@@ -295,6 +307,21 @@ pub const ALWAYS: &str = "can add commands and modes to the palette and entries 
 
 fn plain_glob(g: &str) -> String {
     g.replace("${cwd}", "<the agent's project folder>")
+}
+
+const MAX_LINK_DOMAINS: usize = 16;
+
+/// A plain DNS name: lowercase letters, digits and inner hyphens, at least two labels.
+pub fn valid_domain(d: &str) -> bool {
+    let labels: Vec<&str> = d.split('.').collect();
+    labels.len() >= 2
+        && d.len() <= 253
+        && labels.iter().all(|l| {
+            (1..=63).contains(&l.len())
+                && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+        })
 }
 
 pub fn valid_id(id: &str) -> bool {
@@ -530,6 +557,18 @@ mod tests {
     }
 
     #[test]
+    fn open_url_lists_plain_domains_in_its_consent_line() {
+        let caps = Manifest::parse(&manifest("open_url = [\"github.com\", \"docs.rs\"]")).unwrap().capabilities;
+        let line = ("can open links to github.com, docs.rs in your browser when you click one of its buttons".to_string(), false);
+        assert!(caps.describe().contains(&line));
+        let more = Capabilities { open_url: vec!["github.com".into(), "docs.rs".into(), "linear.app".into()], ..Default::default() };
+        assert_eq!(more.added_since(&caps), [("can open links to linear.app in your browser when you click one of its buttons".into(), false)]);
+        for bad in ["https://github.com", "github.com:443", "*.github.com", "GitHub.com", "localhost", "github.com/x", "-a.com", "gïthub.com", "a..com"] {
+            assert!(Manifest::parse(&manifest(&format!("open_url = [{bad:?}]"))).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn unsupported_and_unknown_capabilities_are_rejected() {
         assert!(Manifest::parse(&manifest("net = [\"api.example.com\"]")).is_err());
         assert!(Manifest::parse(&manifest("clipboard = \"read\"")).is_err());
@@ -590,7 +629,7 @@ mod tests {
             decisions_read: true, allowlist_suggest: true, sidebar: true, decorate: true, timer: true, panel: true,
             notify_hold: true, sidebar_top: true, keys: true, away: true, fs_read: vec!["${cwd}/a".into()],
             fs_write: vec!["${cwd}/a".into()], net: vec!["a.example".into()], hid: vec![1.into()], exec: vec!["git-status".into()],
-            terminal_read: true, clipboard: Some("read".into()), theme: true,
+            terminal_read: true, clipboard: Some("read".into()), theme: true, open_url: vec!["github.com".into()],
         };
         macro_rules! alone {
             ($($f:ident),*) => {{
@@ -599,7 +638,8 @@ mod tests {
             }};
         }
         let each = alone!(events, event_details, pty_write, pty_type, notifications, decisions_read, allowlist_suggest, sidebar, decorate,
-            timer, panel, notify_hold, sidebar_top, keys, away, fs_read, fs_write, net, hid, exec, terminal_read, clipboard, theme);
+            timer, panel, notify_hold, sidebar_top, keys, away, fs_read, fs_write, net, hid, exec, terminal_read, clipboard, theme,
+            open_url);
         for (name, caps) in each {
             // Refused at parse, so never shown.
             if ["net", "hid", "clipboard"].contains(&name) {

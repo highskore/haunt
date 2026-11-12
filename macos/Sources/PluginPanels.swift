@@ -279,6 +279,8 @@ final class PanelFrame: NSView {
             let b = ActionButton(title: label, target: nil, action: nil)
             b.bezelStyle = .rounded
             b.onPress = { [weak self] in self?.send(action) }
+            // A plugin opens a link only from the button whose action is that link, so it is shown first.
+            if action.hasPrefix("https://") { b.toolTip = action }
             return b
         case .divider:
             let b = NSBox()

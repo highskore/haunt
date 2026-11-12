@@ -27,7 +27,7 @@ mod bindings {
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
-    allowlist as wallow, clipboard as wclip, clock as wclock, exec as wexec, hold as whold, keys as wkeys, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
+    allowlist as wallow, clipboard as wclip, clock as wclock, link as wlink, exec as wexec, hold as whold, keys as wkeys, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
     sidebar as wside, terminal as wterm, theme as wtheme, timer as wtimer, typing as wtyping, types as wit,
 };
 pub(crate) use bindings::haunt::plugin::panel as wpanel;
@@ -169,6 +169,8 @@ pub enum HostRequest {
     KeysChanged { plugin_id: String },
     /// Plain text for the clipboard, from a button, key or command the user just used.
     ClipboardWrite { plugin_id: String, text: String },
+    /// An https link the user clicked a panel button for, checked by `plugins::link_ok`.
+    OpenUrl { plugin_id: String, url: String },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -295,6 +297,10 @@ pub struct HostState {
     user_call: bool,
     /// Set while a button, key or command the user just used runs; a clipboard write spends it.
     copy_ok: bool,
+    /// The panel button action the user clicked, while that call runs; `link.open-url` spends it.
+    clicked: Option<String>,
+    /// The manifest's `open_url` domains.
+    links: Vec<String>,
     /// (id, canonical chord) from `keys.bind`.
     keys: Vec<(String, String)>,
     /// `terminal.read` calls left in the command, key or hover-hold the user just used; 0 outside one.
@@ -364,6 +370,8 @@ impl HostState {
             typing_into: None,
             user_call: false,
             copy_ok: false,
+            clicked: None,
+            links: caps.open_url.clone(),
             keys: Vec::new(),
             hold_actions: Vec::new(),
             hover_hold: false,
@@ -1128,9 +1136,9 @@ impl HostState {
         }
     }
 
-    /// A call that trapped doesn't get to change the clipboard.
-    fn drop_clipboard(&mut self) {
-        self.outbox.retain(|r| !matches!(r, HostRequest::ClipboardWrite { .. }));
+    /// A call that trapped doesn't get to change the clipboard or open a link.
+    fn drop_user_effects(&mut self) {
+        self.outbox.retain(|r| !matches!(r, HostRequest::ClipboardWrite { .. } | HostRequest::OpenUrl { .. }));
     }
 
     /// A disabled plugin's hold ends, so it can't keep notifications away.
@@ -1324,6 +1332,34 @@ impl wclip::Host for HostState {
         text.truncate(end);
         self.request(HostRequest::ClipboardWrite { plugin_id: self.id.clone(), text })
     }
+}
+
+impl wlink::Host for HostState {
+    fn open_url(&mut self, url: String) -> Result<(), String> {
+        let clicked = self.clicked.take().ok_or("only once per click on one of its panel buttons")?;
+        if url != clicked {
+            return Err("the url must be the clicked button's action, which its tooltip shows".into());
+        }
+        link_ok(&url, &self.links)?;
+        self.request(HostRequest::OpenUrl { plugin_id: self.id.clone(), url })
+    }
+}
+
+/// Whether `url` may be opened: `https://`, then exactly one of `domains` (so no user, password or
+/// port), then a path, query or fragment of printable ASCII with no space or backslash.
+pub fn link_ok(url: &str, domains: &[String]) -> Result<(), String> {
+    let rest = url.strip_prefix("https://").ok_or("only https links open")?;
+    let (host, tail) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
+    if host.contains('@') {
+        return Err("a link can't carry a user or password".into());
+    }
+    if !domains.iter().any(|d| d == host) {
+        return Err(format!("{:?} is not one of the manifest's open_url domains", visible(host).chars().take(64).collect::<String>()));
+    }
+    if tail.bytes().any(|b| !(0x21..0x7f).contains(&b) || b == b'\\') {
+        return Err("a link is printable ASCII, with no space or backslash".into());
+    }
+    Ok(())
 }
 
 impl wtimer::Host for HostState {
@@ -1554,7 +1590,7 @@ impl LoadedPlugin {
             data.release_hold();
             data.clear_top_row();
             data.drop_keys();
-            data.drop_clipboard();
+            data.drop_user_effects();
             PluginError(why)
         })
     }
@@ -1633,9 +1669,10 @@ impl LoadedPlugin {
         if action.is_empty() {
             data.release_sheet(id);
         }
-        data.copy_ok = !action.is_empty();
+        (data.copy_ok, data.clicked) = (!action.is_empty(), Some(action.to_owned()).filter(|a| !a.is_empty()));
         let res = self.user_call(|p| p.on_action(action, &format!("panel:{id}")));
-        self.store.data_mut().copy_ok = false;
+        let data = self.store.data_mut();
+        (data.copy_ok, data.clicked) = (false, None);
         res
     }
 
@@ -1890,6 +1927,9 @@ impl PluginHost {
         if caps.clipboard_write() {
             wclip::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
+        if !caps.open_url.is_empty() {
+            wlink::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
         if caps.panel {
             wpanel::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
@@ -2140,8 +2180,63 @@ mod tests {
         st.write("é".repeat(CLIPBOARD_MAX)).unwrap();
         let Some(HostRequest::ClipboardWrite { text, .. }) = st.outbox.last() else { panic!() };
         assert_eq!(text.len(), CLIPBOARD_MAX);
-        st.drop_clipboard();
+        st.drop_user_effects();
         assert!(st.outbox.is_empty(), "a trapped call's writes are dropped");
+    }
+
+    #[test]
+    fn only_https_links_to_listed_domains_open() {
+        let d = ["github.com".to_string(), "docs.rs".to_string()];
+        for ok in ["https://github.com", "https://github.com/o/r/pull/3?x=1#c", "https://docs.rs/serde"] {
+            link_ok(ok, &d).unwrap();
+        }
+        for bad in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "haunt://open",
+            "vscode://file/x",
+            "http://github.com/o/r",
+            "HTTPS://github.com",
+            "https://user:pw@github.com/",
+            "https://github.com@evil.com/",
+            "https://github.com:8443/",
+            "https://evil.com/github.com",
+            "https://api.github.com/",
+            "https://github.com.evil.com/",
+            "https://GitHub.com/",
+            "https://github.com/a b",
+            "https://github.com\\@evil.com",
+            "https://github.com/\u{202e}x",
+            "https://github.com/ä",
+            " https://github.com",
+        ] {
+            assert!(link_ok(bad, &d).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn open_url_needs_its_capability_and_the_clicked_buttons_own_url() {
+        use wlink::Host as _;
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/link@0.5.0" (instance
+            (export "open-url" (func (param "url" string) (result (result (error string))))))))"#).unwrap();
+        assert!(host.check_links(&c, &Capabilities { panel: true, ..Default::default() }).unwrap_err().0.contains("haunt:plugin/link"));
+        let caps = Capabilities { panel: true, open_url: vec!["github.com".into()], ..Default::default() };
+        host.check_links(&c, &caps).unwrap();
+
+        let mut st = HostState::new("dev.x.links", &caps, None, None, None);
+        let pr = "https://github.com/o/r/pull/3";
+        assert!(st.open_url(pr.into()).unwrap_err().contains("only once per click"), "no click, no link");
+        st.clicked = Some(pr.into());
+        assert!(st.open_url("https://github.com/o/r/pull/4".into()).unwrap_err().contains("tooltip"));
+        st.clicked = Some("http://github.com/o".into());
+        assert!(st.open_url("http://github.com/o".into()).is_err());
+        st.clicked = Some(pr.into());
+        st.open_url(pr.into()).unwrap();
+        assert!(st.open_url(pr.into()).is_err(), "once per click");
+        assert_eq!(st.outbox, [HostRequest::OpenUrl { plugin_id: "dev.x.links".into(), url: pr.into() }]);
+        st.drop_user_effects();
+        assert!(st.outbox.is_empty(), "a trapped call opens nothing");
     }
 
     #[test]
