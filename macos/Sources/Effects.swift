@@ -130,7 +130,7 @@ struct Effects: Equatable {
         "palette.modes": .choice(\.paletteModes, ["styled", "plain"]),
         "window.square": .bool(\.windowSquare),
         "window.border": .bool(\.windowBorder),
-        "lights.shape": .choice(\.lightsShape, ["circle", "boxes", "squares"]),
+        "lights.shape": .choice(\.lightsShape, ["circle", "diamond", "boxes", "squares"]),
         "label.rule": .choice(\.labelRule, ["none", "groupbox", "block"]),
         "row.select": .choice(\.rowSelect, ["fill", "name", "cursor", "none"]),
         "progress.style": .choice(\.progressStyle, ["bar", "segments", "none"]),

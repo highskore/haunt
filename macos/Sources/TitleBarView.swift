@@ -120,6 +120,19 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
             if let ctx = NSGraphicsContext.current?.cgContext {
                 Layers.draw("lights", r, within: bounds, exclude: r, state: Layers.state(self, hover: lightsHover), index: i, in: ctx)
             }
+            if Theme.current.effects.lightsShape == "diamond" && !lightsHover {
+                // An outlined diamond; the close light's carries an ×. Drawn by Haunt: layers never paint inside a light.
+                Tok.App.ornament.setStroke()
+                Draw.diamond(center: NSPoint(x: r.midX, y: r.midY), size: r.width * 0.61, stroke: 1)
+                if i == 0 {
+                    let k = r.width / 6, p = NSBezierPath()
+                    p.move(to: NSPoint(x: r.midX - k, y: r.midY - k)); p.line(to: NSPoint(x: r.midX + k, y: r.midY + k))
+                    p.move(to: NSPoint(x: r.midX + k, y: r.midY - k)); p.line(to: NSPoint(x: r.midX - k, y: r.midY + k))
+                    p.lineWidth = 1
+                    p.stroke()
+                }
+                continue
+            }
             if Theme.current.effects.lightsShape == "squares" && !lightsHover {
                 // Squares in the window's colour edged in the lights'; the close light's filled with it.
                 let hl = Tok.App.hairline, sq = NSBezierPath(rect: r.insetBy(dx: hl / 2, dy: hl / 2))
