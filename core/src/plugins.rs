@@ -31,7 +31,7 @@ use bindings::haunt::plugin::{
     sidebar as wside, theme as wtheme, timer as wtimer, typing as wtyping, types as wit,
 };
 pub(crate) use bindings::haunt::plugin::panel as wpanel;
-use crate::plugin_panel::{Panel, Panels};
+use crate::plugin_panel::{Panel, PanelPlacement, Panels};
 use crate::decorate::{self, Decoration, Spark, Tone, TopRow};
 use crate::model::RowsToken;
 
@@ -250,6 +250,9 @@ pub struct HostState {
     theme: Arc<Theme>,
     /// The tab focused when the user ran one of this plugin's commands, while that call runs.
     typing_into: Option<String>,
+    /// Set while the plugin handles something the user just did (a command, a key, a panel button) or
+    /// the user coming back: only then may a panel be a sheet, which takes the keyboard.
+    user_call: bool,
     /// (id, canonical chord) from `keys.bind`.
     keys: Vec<(String, String)>,
     /// The manifest's `exec` names.
@@ -263,6 +266,7 @@ impl Drop for HostState {
         self.release_sidebar();
         self.release_rows();
         if let Some(c) = &self.core {
+            c.release_sheet(&self.id, None);
             c.release_notifications(&self.id);
             let _ = c.set_top_row(&self.id, None);
         }
@@ -299,6 +303,7 @@ impl HostState {
             core,
             theme: Theme::default_shared(),
             typing_into: None,
+            user_call: false,
             keys: Vec::new(),
             exec: caps.exec.clone(),
             exec_jobs: Vec::new(),
@@ -672,12 +677,29 @@ impl wpanel::Host for HostState {
         if self.outbox.len() >= MAX_OUTBOX {
             return Err("too many pending requests".into());
         }
-        self.panels.show(&mut panel)?;
+        // Unasked, a sheet would take the keys the user is typing; it comes up as a card instead.
+        if panel.placement == PanelPlacement::Sheet && !self.user_call {
+            panel.placement = PanelPlacement::Card;
+        }
+        let was_sheet = self.panels.placement(&panel.id) == Some(PanelPlacement::Sheet);
+        if let Some(c) = self.core.as_ref().filter(|_| panel.placement == PanelPlacement::Sheet) {
+            c.claim_sheet(&self.id, &panel.id)?;
+        }
+        if let Err(e) = self.panels.show(&mut panel) {
+            if panel.placement == PanelPlacement::Sheet && !was_sheet {
+                self.release_sheet(&panel.id);
+            }
+            return Err(e);
+        }
+        if was_sheet && panel.placement != PanelPlacement::Sheet {
+            self.release_sheet(&panel.id);
+        }
         let plugin_name = self.name.clone();
         self.request(HostRequest::ShowPanel { plugin_id: self.id.clone(), plugin_name, panel })
     }
 
     fn close(&mut self, id: String) {
+        self.release_sheet(&id);
         if self.panels.close(&id) {
             let _ = self.request(HostRequest::ClosePanel { plugin_id: self.id.clone(), id });
         }
@@ -685,8 +707,17 @@ impl wpanel::Host for HostState {
 }
 
 impl HostState {
+    fn release_sheet(&self, id: &str) {
+        if let Some(c) = &self.core {
+            c.release_sheet(&self.id, Some(id));
+        }
+    }
+
     /// A disabled plugin's panels close, since nothing can answer their buttons.
     fn close_panels(&mut self) {
+        if let Some(c) = &self.core {
+            c.release_sheet(&self.id, None);
+        }
         for id in std::mem::take(&mut self.panels).ids() {
             self.outbox.push(HostRequest::ClosePanel { plugin_id: self.id.clone(), id });
         }
@@ -1100,15 +1131,29 @@ impl LoadedPlugin {
     /// The user pressed a button on show `generation` of panel `id`, or closed it (`action` empty):
     /// `on-action(action, "panel:<id>")`. Anything but that show's own button is refused.
     pub fn panel_action(&mut self, id: &str, generation: u64, action: &str) -> Result<(), PluginError> {
-        if !self.store.data_mut().panels.user_action(id, generation, action) {
+        let data = self.store.data_mut();
+        if !data.panels.user_action(id, generation, action) {
             return Err(PluginError(format!("panel {id} (show {generation}) has no action {action:?}")));
         }
-        self.on_action(action, &format!("panel:{id}"))
+        if action.is_empty() {
+            data.release_sheet(id);
+        }
+        self.user_call(|p| p.on_action(action, &format!("panel:{id}")))
+    }
+
+    /// Runs `f` as the plugin's answer to something the user just did, when a sheet is allowed.
+    fn user_call<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.store.data_mut().user_call = true;
+        let r = f(self);
+        self.store.data_mut().user_call = false;
+        r
     }
 
     /// Another plugin's right pane took this one's place: it is closed, without an `on-action`.
     pub(crate) fn panel_displaced(&mut self, id: &str) {
-        self.store.data_mut().panels.close(id);
+        let data = self.store.data_mut();
+        data.release_sheet(id);
+        data.panels.close(id);
     }
 
     /// Commands and modes the plugin registered through `palette`.
@@ -1189,7 +1234,7 @@ impl LoadedPlugin {
     fn run_user_action(&mut self, action_id: &str, payload: &str, terminal_shown: bool) -> Result<(), PluginError> {
         let data = self.store.data_mut();
         data.typing_into = data.core.as_ref().and_then(CoreHandle::selected_surface).filter(|_| terminal_shown);
-        let res = self.on_action(action_id, payload);
+        let res = self.user_call(|p| p.on_action(action_id, payload));
         self.store.data_mut().typing_into = None;
         res
     }
@@ -1975,6 +2020,31 @@ mod tests {
             HostRequest::ShowPanel { plugin_id, plugin_name, panel },
             HostRequest::ClosePanel { id, .. },
         ] if plugin_id == "dev.x.p" && plugin_name == "dev.x.p" && panel.title == "Welcome back" && panel.generation == 1 && id == "w"));
+    }
+
+    #[test]
+    fn a_sheet_needs_a_user_action_and_one_plugins_sheet_is_up_at_a_time() {
+        use wpanel::Host as _;
+        let core = crate::Core::new(&*tempdir("sheets"));
+        let caps = Capabilities { panel: true, ..Default::default() };
+        let mut a = HostState::new("dev.x.a", &caps, None, None, Some(core.handle()));
+        let mut b = HostState::new("dev.x.b", &caps, None, None, Some(core.handle()));
+        let placement = |st: &HostState| match st.outbox.last() { Some(HostRequest::ShowPanel { panel, .. }) => panel.placement, _ => panic!() };
+        a.show("w".into(), wpanel::Placement::Sheet, "Hi".into(), vec![]).unwrap();
+        assert_eq!(placement(&a), PanelPlacement::Card, "unasked, a sheet comes up as a card");
+        a.user_call = true;
+        a.show("w".into(), wpanel::Placement::Sheet, "Hi".into(), vec![]).unwrap();
+        assert_eq!(placement(&a), PanelPlacement::Sheet);
+        b.user_call = true;
+        assert!(b.show("s".into(), wpanel::Placement::Sheet, "Me".into(), vec![]).unwrap_err().contains("dev.x.a's sheet is up"));
+        b.show("c".into(), wpanel::Placement::Card, "Me".into(), vec![]).unwrap();
+        a.show("w".into(), wpanel::Placement::Card, "Hi".into(), vec![]).unwrap();
+        b.show("s".into(), wpanel::Placement::Sheet, "Me".into(), vec![]).unwrap();
+        assert!(a.show("w".into(), wpanel::Placement::Sheet, "Hi".into(), vec![]).is_err(), "b has the slot now");
+        b.close("s".into());
+        a.show("w".into(), wpanel::Placement::Sheet, "Hi".into(), vec![]).unwrap();
+        drop(a);
+        b.show("s".into(), wpanel::Placement::Sheet, "Me".into(), vec![]).unwrap();
     }
 
     #[test]

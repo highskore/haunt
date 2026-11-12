@@ -51,14 +51,16 @@ final class PluginPanels {
             return
         }
         close(key, byUser: false)
-        if panel.placement == .right, let old = rightOwner { close(old, byUser: false) }
-        let frame = PanelFrame(from: pluginName, card: panel.placement == .card) { [weak self] action in
+        // One sheet at a time, Haunt's own included: a second comes up as a card, which never takes the keys.
+        let placement: PanelPlacement = panel.placement == .sheet && host?.window?.attachedSheet != nil ? .card : panel.placement
+        if placement == .right, let old = rightOwner { close(old, byUser: false) }
+        let frame = PanelFrame(from: pluginName, card: placement == .card) { [weak self] action in
             guard let self, let s = self.shown[key] else { return }
             if action.isEmpty { self.close(key, byUser: true) } else { self.onAction?(pluginId, panel.id, s.generation, action) }
         }
         frame.update(panel)
         var window: NSWindow?
-        switch panel.placement {
+        switch placement {
         case .right:
             rightOwner = key
             let pane = RightPane(frame, width: host?.rightPaneWidth(plugin: pluginId) ?? Self.rightWidth)
@@ -110,7 +112,7 @@ final class PluginPanels {
             w.orderFront(nil)
             window = w
         }
-        shown[key] = Shown(placement: panel.placement, window: window, frame: frame, generation: panel.generation)
+        shown[key] = Shown(placement: placement, window: window, frame: frame, generation: panel.generation)
     }
 
     func close(pluginId: String, id: String) {

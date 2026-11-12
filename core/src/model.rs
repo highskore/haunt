@@ -162,6 +162,8 @@ pub(crate) struct State {
     exec_sink: Option<crate::plugin_exec::ExecSink>,
     /// Canonical chord -> who has it ("haunt" for Haunt's and macOS's, else `[keys]`' "<plugin>/<id>").
     taken_chords: HashMap<String, String>,
+    /// The one plugin sheet up, across all plugins: (plugin id, panel id).
+    sheet: Option<(String, String)>,
 }
 
 impl State {
@@ -1052,6 +1054,24 @@ impl CoreHandle {
 
     pub fn chord_owner(&self, canonical: &str) -> Option<String> {
         lock(&self.state).taken_chords.get(canonical).cloned()
+    }
+
+    /// Takes the one sheet slot for `plugin_id`'s panel `id`, unless another plugin's sheet has it.
+    pub fn claim_sheet(&self, plugin_id: &str, id: &str) -> Result<(), String> {
+        let mut st = lock(&self.state);
+        if let Some((p, _)) = st.sheet.as_ref().filter(|(p, _)| p != plugin_id) {
+            return Err(format!("{p}'s sheet is up; one sheet at a time"));
+        }
+        st.sheet = Some((plugin_id.to_owned(), id.to_owned()));
+        Ok(())
+    }
+
+    /// Frees the sheet slot if `plugin_id`'s panel `id` (any of its panels, with none) has it.
+    pub fn release_sheet(&self, plugin_id: &str, id: Option<&str>) {
+        let mut st = lock(&self.state);
+        if st.sheet.as_ref().is_some_and(|(p, i)| p == plugin_id && id.is_none_or(|id| id == i)) {
+            st.sheet = None;
+        }
     }
 
     /// config.toml's `[layout] row_labels` changed.

@@ -256,7 +256,8 @@ interface rows {
   clear-all: func();
 }
 
-// Capability `timer`. `on-tick` every `seconds`, at least 15; one interval per plugin.
+// Capability `timer`. `on-tick` every `seconds`, at least 15; one interval per plugin. A tick comes up to a
+// few seconds late while another plugin call is running.
 interface timer {
   every: func(seconds: u32) -> result<_, string>;
   stop: func();
@@ -272,8 +273,10 @@ interface clock {
 // draws itself. Buttons call `on-action(action, "panel:<id>")`; the user closing the panel calls
 // `on-action("", "panel:<id>")`.
 interface panel {
-  // sheet: over the window; right: a pane beside the terminal; card: a small floating card;
-  // window: its own window, which the user can move to another display.
+  // sheet: over the window, only while handling a command, key or panel button the user just used
+  // (otherwise it comes up as a card), one across all plugins, and none for the session after the user
+  // closes two of the plugin's within a minute; right: a pane beside the terminal; card: a small
+  // floating card; window: its own window, which the user can move to another display.
   enum placement { sheet, right, card, window }
   // warn is orange, for failures; haunt's needs-you colour isn't available to panels.
   enum tone { text, dim, faint, warn }

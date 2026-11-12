@@ -15,6 +15,8 @@ pub const SHOWS_PER_SEC: usize = 4;
 pub const MAX_PULSES: usize = 16;
 /// After the user closes a plugin's sheet, it can't show another for this long.
 pub const SHEET_COOLDOWN: Duration = Duration::from_secs(10);
+/// A second close of this plugin's sheets within this long ends its sheets for the session.
+pub const SHEET_STRIKES: Duration = Duration::from_secs(60);
 const GRID_GAP: u32 = 2;
 const MAX_ID: usize = 64;
 const MAX_GRID_CELLS: u32 = 4096;
@@ -97,6 +99,8 @@ pub struct Panels {
     generation: u64,
     /// When the user last closed one of this plugin's sheets.
     sheet_closed: Option<Instant>,
+    /// Set by a second close within `SHEET_STRIKES`: no more sheets this session.
+    sheets_off: bool,
 }
 
 impl Panels {
@@ -107,6 +111,9 @@ impl Panels {
             return Err(format!("at most {MAX_PANELS} panels open"));
         }
         if p.placement == PanelPlacement::Sheet {
+            if self.sheets_off {
+                return Err("the user closed this plugin's sheets twice in a minute; no more this session".into());
+            }
             if self.open.iter().any(|(id, o)| o.placement == PanelPlacement::Sheet && *id != p.id) {
                 return Err("one sheet at a time".into());
             }
@@ -134,6 +141,10 @@ impl Panels {
         self.open.remove(id).is_some()
     }
 
+    pub fn placement(&self, id: &str) -> Option<PanelPlacement> {
+        self.open.get(id).map(|o| o.placement)
+    }
+
     pub fn ids(&self) -> Vec<String> {
         self.open.keys().cloned().collect()
     }
@@ -146,7 +157,9 @@ impl Panels {
             return o.actions.iter().any(|a| a == action);
         }
         if o.placement == PanelPlacement::Sheet {
-            self.sheet_closed = Some(Instant::now());
+            let now = Instant::now();
+            self.sheets_off |= self.sheet_closed.is_some_and(|t| now.duration_since(t) < SHEET_STRIKES);
+            self.sheet_closed = Some(now);
         }
         self.open.remove(id);
         true
@@ -404,5 +417,10 @@ mod tests {
         panels.show(&mut panel("c", Placement::Card)).unwrap();
         panels.sheet_closed = Some(Instant::now() - SHEET_COOLDOWN);
         panels.show(&mut panel("s", Placement::Sheet)).unwrap();
+        assert!(panels.user_action("s", 4, ""), "a second close within a minute");
+        panels.sheet_closed = Some(Instant::now() - SHEET_STRIKES);
+        panels.shows.clear();
+        assert!(panels.show(&mut panel("s", Placement::Sheet)).unwrap_err().contains("no more this session"));
+        panels.show(&mut panel("c", Placement::Card)).unwrap();
     }
 }

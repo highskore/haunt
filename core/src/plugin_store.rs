@@ -1091,16 +1091,29 @@ pub fn attach(core: &crate::Core, set: &Arc<Mutex<PluginSet>>) {
 /// `on-action` for it, and only the owner's close clears it. Returns the requests and who lost the pane.
 fn own_right_pane(owner: &mut Option<(String, String)>, requests: Vec<HostRequest>) -> (Vec<HostRequest>, Vec<(String, String)>) {
     let (mut out, mut displaced) = (Vec::with_capacity(requests.len()), Vec::new());
+    // A drain lists requests plugin by plugin, not in call order: when the owner shows there again in the
+    // same drain, it keeps the pane, and another plugin's show there is dropped.
+    let incumbent = owner.as_ref().map(|(p, _)| p.clone()).filter(|p| {
+        requests.iter().any(|r| matches!(r, HostRequest::ShowPanel { plugin_id, panel, .. } if plugin_id == p && panel.placement == PanelPlacement::Right))
+    });
     for r in requests {
         match &r {
             HostRequest::ShowPanel { plugin_id, panel, .. } if panel.placement == PanelPlacement::Right => {
                 let me = (plugin_id.clone(), panel.id.clone());
+                if incumbent.as_ref().is_some_and(|p| p != plugin_id) {
+                    displaced.push(me);
+                    continue;
+                }
                 if let Some(old) = owner.replace(me.clone()).filter(|old| *old != me) {
                     out.push(HostRequest::ClosePanel { plugin_id: old.0.clone(), id: old.1.clone() });
                     displaced.push(old);
                 }
             }
             HostRequest::ClosePanel { plugin_id, id } if owner.as_ref().is_some_and(|(p, i)| p == plugin_id && i == id) => {
+                *owner = None;
+            }
+            // The owner moved that panel elsewhere: the pane is free.
+            HostRequest::ShowPanel { plugin_id, panel, .. } if owner.as_ref().is_some_and(|(p, i)| p == plugin_id && *i == panel.id) => {
                 *owner = None;
             }
             _ => {}
@@ -1159,6 +1172,38 @@ mod tests {
         assert!(owner.is_some());
         own_right_pane(&mut owner, vec![close("b", "map")]);
         assert!(owner.is_none());
+    }
+
+    #[test]
+    fn the_owner_moving_its_panel_frees_the_pane() {
+        let show = |plugin: &str, id: &str, placement| HostRequest::ShowPanel {
+            plugin_id: plugin.into(),
+            plugin_name: plugin.into(),
+            panel: crate::plugin_panel::Panel { id: id.into(), generation: 1, placement, title: String::new(), nodes: vec![] },
+        };
+        let mut owner = None;
+        own_right_pane(&mut owner, vec![show("a", "map", PanelPlacement::Right)]);
+        own_right_pane(&mut owner, vec![show("a", "map", PanelPlacement::Card)]);
+        assert!(owner.is_none());
+        let (out, lost) = own_right_pane(&mut owner, vec![show("b", "x", PanelPlacement::Right)]);
+        assert!(lost.is_empty() && out.len() == 1, "nothing of a's to close: {out:?}");
+    }
+
+    #[test]
+    fn the_owner_keeps_the_pane_when_another_plugin_shows_in_the_same_drain() {
+        let show = |plugin: &str, id: &str| HostRequest::ShowPanel {
+            plugin_id: plugin.into(),
+            plugin_name: plugin.into(),
+            panel: crate::plugin_panel::Panel { id: id.into(), generation: 1, placement: PanelPlacement::Right, title: String::new(), nodes: vec![] },
+        };
+        let mut owner = None;
+        own_right_pane(&mut owner, vec![show("b", "map")]);
+        let (out, lost) = own_right_pane(&mut owner, vec![show("a", "x"), show("b", "map")]);
+        assert_eq!(lost, [("a".to_string(), "x".to_string())]);
+        assert!(out.len() == 1 && matches!(&out[0], HostRequest::ShowPanel { plugin_id, .. } if plugin_id == "b"));
+        assert_eq!(owner, Some(("b".into(), "map".into())));
+        let (_, lost) = own_right_pane(&mut owner, vec![show("a", "x")]);
+        assert_eq!((lost.len(), owner), (1, Some(("a".into(), "x".into()))), "in a later drain the newcomer takes it");
     }
 
     #[test]
