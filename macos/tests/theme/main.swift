@@ -488,6 +488,10 @@ write(user, "chromebad", "[app]\ntext.chrome = [\"#ffffff\", \"nope\"]\n")
 check(load("chromeok").theme.chromeStops.count == 3, "readable stops are kept: \(load("chromeok").problems)")
 check(load("chromedim").theme.app.textChrome.isEmpty && load("chromedim").problems.contains { $0.contains("app.text.chrome") }, "a dim stop drops the gradient")
 check(load("chromebad").theme.app.textChrome.isEmpty, "so does a stop that isn't a colour")
+// Between two stops that each read on the window, a mid-grey that doesn't.
+write(user, "chromemid", "[color]\nwindow.bg = \"#777777\"\nsidebar.bg = \"#777777\"\npalette.bg = \"#777777\"\n[app]\npalette.pill.ink = \"#777777\"\ntext.chrome = [\"#000000\", \"#ffffff\"]\n")
+check(load("chromemid").theme.app.textChrome.isEmpty, "a blend between stops must read too")
+check(LoadedTheme.chromeSamples([NSColor.black, NSColor.white]).count == 17, "sixteen samples a segment")
 
 // A light window's dark terminal: its text is checked against the terminal's background, not the window's.
 write(user, "dosbox", "appearance = \"light\"\n[color]\nwindow.bg = \"#c0c0c0\"\ntext.terminal = \"#c0c0c0\"\n[ghostty]\nbackground = \"#000000\"\n")

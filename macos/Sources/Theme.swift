@@ -443,14 +443,32 @@ struct LoadedTheme {
 
     /// Chrome text must read at every stop on each background it is drawn over, and a pill's text on every stop;
     /// otherwise the text is drawn flat.
+    /// The stops and `chromeSampling` points between each pair, mixed in sRGB as `Draw.chrome`'s gradient mixes them.
+    static func chromeSamples(_ stops: [NSColor]) -> [NSColor] {
+        let rgb = stops.compactMap { $0.usingColorSpace(.sRGB) }
+        guard let last = rgb.last else { return [] }
+        var out: [NSColor] = []
+        for (a, b) in zip(rgb, rgb.dropFirst()) {
+            for i in 0..<chromeSampling {
+                let t = CGFloat(i) / CGFloat(chromeSampling)
+                out.append(NSColor(srgbRed: a.redComponent + (b.redComponent - a.redComponent) * t,
+                                   green: a.greenComponent + (b.greenComponent - a.greenComponent) * t,
+                                   blue: a.blueComponent + (b.blueComponent - a.blueComponent) * t, alpha: 1))
+            }
+        }
+        return out + [last]
+    }
+
+    static let chromeSampling = 16
+
     private mutating func checkChrome(over base: NSColor) -> [String] {
         guard !theme.app.textChrome.isEmpty else { return [] }
         let stops = theme.chromeStops
         let c = theme.color
         let grounds = [c.windowBg, c.sidebarBg.over(c.windowBg), c.paletteBg].map { $0.over(base) }
         let pill = theme.app.palettePillInk
-        let ok = !stops.isEmpty && stops.allSatisfy { s in
-            s.alphaComponent == 1 && grounds.allSatisfy { s.contrast($0) >= Self.minContrast } && pill.over(s).contrast(s) >= Self.minContrast
+        let ok = !stops.isEmpty && stops.allSatisfy { $0.alphaComponent == 1 } && Self.chromeSamples(stops).allSatisfy { s in
+            grounds.allSatisfy { s.contrast($0) >= Self.minContrast } && pill.over(s).contrast(s) >= Self.minContrast
         }
         guard !ok else { return [] }
         theme.app.textChrome = []
