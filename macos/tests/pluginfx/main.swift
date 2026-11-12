@@ -186,26 +186,31 @@ check(PluginGlow.label(head: String(repeating: "x", count: 40), waited: 1).count
 
 // MARK: Speech, rendered to buffers and never played
 
-var frames = 0
-var peak: Float = 0
-var done = false
-let writer = AVSpeechSynthesizer()
-writer.write(PluginSpeech.utterance("Tests passed on main.")) { buffer in
-    guard let pcm = buffer as? AVAudioPCMBuffer, pcm.frameLength > 0 else {
-        done = true
-        return
+if AVSpeechSynthesisVoice.speechVoices().isEmpty {
+    print("pluginfx: skipping the voice check, no system voices are installed")
+} else {
+    var frames = 0
+    var peak: Float = 0
+    var done = false
+    let writer = AVSpeechSynthesizer()
+    writer.write(PluginSpeech.utterance("Tests passed on main.")) { buffer in
+        guard let pcm = buffer as? AVAudioPCMBuffer, pcm.frameLength > 0 else {
+            done = true
+            return
+        }
+        frames += Int(pcm.frameLength)
+        if let f = pcm.floatChannelData {
+            for i in 0..<Int(pcm.frameLength) { peak = max(peak, abs(f[0][i])) }
+        } else if let s = pcm.int16ChannelData {
+            for i in 0..<Int(pcm.frameLength) { peak = max(peak, abs(Float(s[0][i]) / 32768)) }
+        }
     }
-    frames += Int(pcm.frameLength)
-    if let f = pcm.floatChannelData {
-        for i in 0..<Int(pcm.frameLength) { peak = max(peak, abs(f[0][i])) }
-    } else if let s = pcm.int16ChannelData {
-        for i in 0..<Int(pcm.frameLength) { peak = max(peak, abs(Float(s[0][i]) / 32768)) }
-    }
+    // Real speech is enough: the empty buffer that ends it doesn't always come.
+    let spoke = { frames > 8000 && peak > 0.01 }
+    let deadline = Date().addingTimeInterval(20)
+    while !done && !spoke() && Date() < deadline { run(0.05) }
+    check(spoke(), "the system voice renders real speech: \(frames) frames, peak \(peak)")
 }
-let deadline = Date().addingTimeInterval(20)
-while !done && Date() < deadline { run(0.05) }
-check(done, "the voice finished rendering")
-check(frames > 8000 && peak > 0.01, "the system voice renders real speech: \(frames) frames, peak \(peak)")
 
 // MARK: Sounds
 
