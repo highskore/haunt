@@ -44,4 +44,7 @@ pub enum HostRequest {
     GlowShow { plugin_id: String, label: Option<String> },
     #[cfg(feature = "plugins")]
     GlowHide { plugin_id: String },
+    /// One line of dim mono text in the title bar, next to its buttons; none clears it. Only from its owner.
+    #[cfg(feature = "plugins")]
+    TitleSet { plugin_id: String, text: Option<String> },
 }

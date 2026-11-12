@@ -813,8 +813,9 @@ struct PluginEffects: Equatable {
     var dock = true
     var glow = true
     var glowLabel = true
+    var title = true
 
-    static let keys: [String: WritableKeyPath<PluginEffects, Bool>] = ["dock": \.dock, "glow": \.glow, "glow_label": \.glowLabel]
+    static let keys: [String: WritableKeyPath<PluginEffects, Bool>] = ["dock": \.dock, "glow": \.glow, "glow_label": \.glowLabel, "title": \.title]
 
     init() {}
 

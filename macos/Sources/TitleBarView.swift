@@ -38,6 +38,8 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
     var tab: (name: String, meta: String)? { didSet { if tab?.name != oldValue?.name || tab?.meta != oldValue?.meta { needsDisplay = true } } }
     /// The selected agent's progress for the zen line; nil leaves the line out.
     var progress: CGFloat? { didSet { if progress != oldValue { needsDisplay = true } } }
+    /// A plugin's line (`HostRequest.titleSet`), dim mono to the left of the icons; plain text from the core.
+    var pluginLine: String? { didSet { if pluginLine != oldValue { needsDisplay = true } } }
 
     /// The zen layout adds the progress line above the title bar.
     static func height(zen: Bool) -> CGFloat { Tok.Size.titlebarH + (zen ? Tok.Size.zenBar : menuH) }
@@ -329,6 +331,7 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
                     drawSidebarGlyph(centeredIn: r)
                 }
             }
+            drawPluginLine(rightOf: iconLayout().first?.2.minX ?? bounds.width - Tok.Size.titlebarPadx, in: ctx)
         case .kbd:
             drawKbd(kbdLabel, in: ctx)
         case .empty:
@@ -418,6 +421,18 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
         let line = CTLineCreateWithAttributedString(s)
         let w = Draw.width(line), lh = Tok.Size.crumbFont * Tok.Font.baseLine
         return (line, NSRect(x: (bounds.width - w) / 2, y: rowTop + (rowH - lh) / 2, width: w, height: lh))
+    }
+
+    /// Right-aligned up to `right`, cut before it reaches the centred breadcrumb or the lights.
+    private func drawPluginLine(rightOf right: CGFloat, in ctx: CGContext) {
+        guard let text = pluginLine, !text.isEmpty else { return }
+        let font = Draw.mono(Tok.Size.crumbFont)
+        let gap = Tok.Size.titlebarIconsGap
+        let left = crumbLayout().map { $0.1.maxX } ?? lightRect(2).maxX
+        let line = Draw.truncated(Draw.line(text, font, Tok.Color.textLabel), right - gap - left - gap, font, Tok.Color.textLabel)
+        let w = Draw.width(line), lh = Tok.Size.crumbFont * Tok.Font.baseLine
+        guard w > 0, right - gap - w > left else { return }
+        Draw.text(line, font: font, x: right - gap - w, top: rowTop + (rowH - lh) / 2, lineHeight: lh, in: ctx)
     }
 
     private func drawSidebarGlyph(centeredIn r: NSRect) {

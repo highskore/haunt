@@ -1,4 +1,4 @@
-//! The `dock` and `glow` imports: checks, rate limits and the one-owner rule. A child of `plugins`, so it implements
+//! The `dock`, `glow` and `title` imports: checks, rate limits and the one-owner rule. A child of `plugins`, so it implements
 //! the WIT host traits on `HostState`.
 
 use std::collections::VecDeque;
@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 pub(super) use super::bindings::haunt::plugin::dock as wdock;
 pub(super) use super::bindings::haunt::plugin::glow as wglow;
+pub(super) use super::bindings::haunt::plugin::title as wtitle;
 use super::{HostRequest, HostState};
 
 /// The app-wide spots one plugin at a time may own: the first to set one keeps it until it clears it,
@@ -15,6 +16,7 @@ use super::{HostRequest, HostState};
 pub(crate) enum Slot {
     Dock,
     Glow,
+    Title,
 }
 
 /// Who owns each `Slot`, shared by every plugin of one set.
@@ -89,6 +91,7 @@ pub(crate) struct Fx {
     dock_images_rate: Rate,
     dock_rate: Rate,
     glow_rate: Rate,
+    title_rate: Rate,
 }
 
 impl Default for Fx {
@@ -98,6 +101,7 @@ impl Default for Fx {
             dock_images_rate: Rate::new(1, Duration::from_secs(1)),
             dock_rate: Rate::new(SHOWS_PER_SEC, Duration::from_secs(1)),
             glow_rate: Rate::new(SHOWS_PER_SEC, Duration::from_secs(1)),
+            title_rate: Rate::new(SHOWS_PER_SEC, Duration::from_secs(1)),
         }
     }
 }
@@ -164,6 +168,9 @@ impl HostState {
         }
         if self.stage.release(Slot::Glow, &self.id) {
             self.outbox.push(HostRequest::GlowHide { plugin_id: self.id.clone() });
+        }
+        if self.stage.release(Slot::Title, &self.id) {
+            self.outbox.push(HostRequest::TitleSet { plugin_id: self.id.clone(), text: None });
         }
     }
 
@@ -249,6 +256,28 @@ impl wglow::Host for HostState {
         if self.stage.release(Slot::Glow, &self.id) {
             self.outbox.push(HostRequest::GlowHide { plugin_id: self.id.clone() });
         }
+    }
+}
+
+pub const TITLE_MAX: usize = 48;
+
+impl wtitle::Host for HostState {
+    fn set(&mut self, text: Option<String>) -> Result<(), String> {
+        let plugin_id = self.id.clone();
+        let Some(text) = super::plain_opt(text, TITLE_MAX) else {
+            if self.stage.release(Slot::Title, &plugin_id) {
+                self.outbox.push(HostRequest::TitleSet { plugin_id, text: None });
+            }
+            return Ok(());
+        };
+        if !self.fx.title_rate.ok() {
+            return Err(format!("set at most {SHOWS_PER_SEC} times a second"));
+        }
+        if self.outbox.len() >= super::MAX_OUTBOX {
+            return Err("too many pending requests".into());
+        }
+        self.stage.claim(Slot::Title, &plugin_id).map_err(|who| format!("the title-bar slot is taken: {who}"))?;
+        self.request(HostRequest::TitleSet { plugin_id, text: Some(text) })
     }
 }
 
@@ -429,5 +458,59 @@ mod glow_tests {
             wglow::Host::show(&mut a, Tone::Warn, None).unwrap();
         }
         assert!(wglow::Host::show(&mut a, Tone::Warn, None).unwrap_err().contains("times a second"));
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::super::{Capabilities, PluginHost};
+    use super::tests::state;
+    use super::*;
+    use wasmtime::component::Component;
+
+    #[test]
+    fn the_title_import_needs_its_capability() {
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/title@0.5.0" (instance
+            (export "set" (func (param "text" (option string)) (result (result (error string))))))))"#).unwrap();
+        let e = host.check_links(&c, &Capabilities { dock: true, glow: true, decorate: true, ..Default::default() }).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/title"), "{e}");
+        host.check_links(&c, &Capabilities { title: true, ..Default::default() }).unwrap();
+    }
+
+    #[test]
+    fn the_title_is_one_plain_line_of_48() {
+        let mut a = state("dev.haunt.a", &Stage::default());
+        wtitle::Host::set(&mut a, Some(format!("main\u{202e}\u{1b}[31m ↑2\n{}", "y".repeat(60)))).unwrap();
+        let [HostRequest::TitleSet { text: Some(t), .. }] = &a.outbox[..] else { panic!("{:?}", a.outbox) };
+        assert_eq!(t.chars().count(), TITLE_MAX);
+        assert!(t.starts_with("main[31m ↑2 y"), "{t}");
+        a.outbox.clear();
+        wtitle::Host::set(&mut a, Some("\u{200b} \u{2066}".into())).unwrap();
+        assert!(matches!(&a.outbox[..], [HostRequest::TitleSet { text: None, .. }]), "nothing visible clears it");
+    }
+
+    #[test]
+    fn the_first_plugin_to_set_owns_the_title_slot() {
+        let stage = Stage::default();
+        let (mut a, mut b) = (state("dev.haunt.a", &stage), state("dev.haunt.b", &stage));
+        wtitle::Host::set(&mut a, Some("3 agents".into())).unwrap();
+        assert!(wtitle::Host::set(&mut b, Some("mine".into())).unwrap_err().contains("dev.haunt.a has it"));
+        wtitle::Host::set(&mut b, None).unwrap();
+        assert!(b.outbox.is_empty(), "a non-owner's clear does nothing");
+        a.outbox.clear();
+        a.release_fx();
+        assert!(matches!(&a.outbox[..], [HostRequest::TitleSet { text: None, .. }]));
+        wtitle::Host::set(&mut b, Some("mine".into())).unwrap();
+        assert_eq!(stage.owner(Slot::Title).as_deref(), Some("dev.haunt.b"));
+    }
+
+    #[test]
+    fn title_sets_are_rate_limited() {
+        let mut a = state("dev.haunt.a", &Stage::default());
+        for i in 0..SHOWS_PER_SEC {
+            wtitle::Host::set(&mut a, Some(format!("{i}"))).unwrap();
+        }
+        assert!(wtitle::Host::set(&mut a, Some("x".into())).unwrap_err().contains("times a second"));
     }
 }

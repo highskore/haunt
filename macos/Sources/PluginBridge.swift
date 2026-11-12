@@ -16,12 +16,16 @@ final class PluginBridge {
     var onKeysChanged: (() -> Void)?
     let dock = PluginDock()
     let glow = PluginGlow()
+    /// Shows the owning plugin's title-bar line; nil clears it.
+    var onTitle: ((String?) -> Void)?
+    private var title: String?
     /// `[effects]` from config.toml.
     var effects = PluginEffects() {
         didSet {
             dock.enabled = effects.dock
             glow.enabled = effects.glow
             glow.showsLabel = effects.glowLabel
+            onTitle?(effects.title ? title : nil)
         }
     }
     /// Set once the core has started, so the decision log is loaded before plugins read it.
@@ -35,6 +39,7 @@ final class PluginBridge {
             if plugins == nil { presence.stop() } else { presence.start() }
             dock.reset()
             glow.hide()
+            setTitle(nil)
         }
     }
     private let core: CoreAPI
@@ -84,6 +89,11 @@ final class PluginBridge {
         run("plugin \(pluginId) notification action \(action)") {
             try $0.notifyAction(pluginId: pluginId, actionId: action, binding: binding)
         }
+    }
+
+    private func setTitle(_ text: String?) {
+        title = text
+        onTitle?(effects.title ? text : nil)
     }
 
     var loadErrors: [String] { plugins?.loadErrors() ?? [] }
@@ -140,6 +150,8 @@ final class PluginBridge {
                 glow.show(label: label)
             case .glowHide:
                 glow.hide()
+            case let .titleSet(_, text):
+                setTitle(text)
             case .ptyAnswer, .ptyType:
                 guard let w = core.gatePluginRequest(request: req), let route = PtyRoute(req, w) else { continue }
                 write(route)

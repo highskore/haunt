@@ -64,6 +64,7 @@ pub struct Capabilities {
     pub away: bool,
     pub dock: bool,
     pub glow: bool,
+    pub title: bool,
     pub fs_read: Vec<String>,
     pub fs_write: Vec<String>,
     pub net: Vec<String>,
@@ -236,6 +237,9 @@ impl Capabilities {
         if self.glow {
             out.push(("can show a thin orange glow and a short label along the top of your screen, over other apps".into(), false));
         }
+        if self.title {
+            out.push(("can show one short line of text in Haunt's title bar".into(), false));
+        }
         if self.pty_write {
             out.push(("can answer permission prompts in your terminal (Allow or Deny, nothing else)".into(), true));
         }
@@ -278,7 +282,7 @@ impl Capabilities {
         // No `..`: a new capability doesn't build until it is handled here, so an update can't gain it unasked.
         let Capabilities {
             events, event_details, pty_write, pty_type, notifications, decisions_read, allowlist_suggest, sidebar, theme, decorate, timer,
-            panel, notify_hold, sidebar_top, keys, away, dock, glow, fs_read, fs_write, net, hid, exec, terminal_read, clipboard, open_url, fs_list,
+            panel, notify_hold, sidebar_top, keys, away, dock, glow, title, fs_read, fs_write, net, hid, exec, terminal_read, clipboard, open_url, fs_list,
         } = self;
         let new = |v: &[String], o: &[String]| v.iter().filter(|x| !o.contains(x)).cloned().collect::<Vec<_>>();
         let grown = Capabilities {
@@ -300,6 +304,7 @@ impl Capabilities {
             away: *away && !old.away,
             dock: *dock && !old.dock,
             glow: *glow && !old.glow,
+            title: *title && !old.title,
             fs_read: new(fs_read, &old.fs_read),
             fs_write: new(fs_write, &old.fs_write),
             net: new(net, &old.net),
@@ -621,7 +626,7 @@ mod tests {
 
     #[test]
     fn the_host_output_capabilities_each_have_a_consent_line_and_prompt_again() {
-        for (caps, want) in [("dock = true", "Dock icon"), ("glow = true", "top of your screen")] {
+        for (caps, want) in [("dock = true", "Dock icon"), ("glow = true", "top of your screen"), ("title = true", "title bar")] {
             let m = Manifest::parse(&manifest(caps)).unwrap();
             let lines = m.capabilities.describe();
             assert!(matches!(&lines[..], [(l, _)] if l.contains(want)), "{caps}: {lines:?}");
@@ -649,7 +654,7 @@ mod tests {
             "decisions_read = true", "allowlist_suggest = true", "sidebar = true", "decorate = true", "timer = true", "panel = true",
             "notify_hold = true", "sidebar_top = true", "keys = true", "away = true", "fs_read = [\"${cwd}/a\"]",
             "fs_write = [\"${cwd}/a\"]", "exec = [\"git-status\"]", "terminal_read = true", "clipboard = \"write\"",
-            "open_url = [\"github.com\"]", "fs_list = true", "dock = true", "glow = true",
+            "open_url = [\"github.com\"]", "fs_list = true", "dock = true", "glow = true", "title = true",
         ] {
             let c = Manifest::parse(&manifest(line)).unwrap_or_else(|e| panic!("{line}: {e}")).capabilities;
             assert!(!c.describe().is_empty(), "{line} has no consent line");
@@ -676,7 +681,7 @@ mod tests {
             notify_hold: true, sidebar_top: true, keys: true, away: true, fs_read: vec!["${cwd}/a".into()],
             fs_write: vec!["${cwd}/a".into()], net: vec!["a.example".into()], hid: vec![1.into()], exec: vec!["git-status".into()],
             terminal_read: true, clipboard: Some("read".into()), theme: true, open_url: vec!["github.com".into()],
-            fs_list: true, dock: true, glow: true,
+            fs_list: true, dock: true, glow: true, title: true,
         };
         macro_rules! alone {
             ($($f:ident),*) => {{
@@ -685,7 +690,7 @@ mod tests {
             }};
         }
         let each = alone!(events, event_details, pty_write, pty_type, notifications, decisions_read, allowlist_suggest, sidebar, decorate,
-            timer, panel, notify_hold, sidebar_top, keys, away, dock, glow, fs_read, fs_write, net, hid, exec, terminal_read, clipboard, theme,
+            timer, panel, notify_hold, sidebar_top, keys, away, dock, glow, title, fs_read, fs_write, net, hid, exec, terminal_read, clipboard, theme,
             open_url, fs_list);
         for (name, caps) in each {
             // Refused at parse, so never shown.

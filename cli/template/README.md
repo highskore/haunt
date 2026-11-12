@@ -57,6 +57,7 @@ Every plugin can add palette commands and modes, add entries to a tab's context 
 | `sidebar = true` | `sidebar.rows` (tab names, kinds and state groups, no task text) and `sidebar.arrange`: pins, named sections, manual order and colours over Haunt's grouping. `sidebar.focus(surface)` switches to an open tab, once per button, key or command the user uses. Rows needing you always stay first. Drags arrive at `on-row-moved`. |
 | `dock = true` | `dock.images` (up to 8 still PNGs, 1 MB and 1024 pixels each way at most) and `dock.show(id, badge, blink)`: your picture as the Dock icon, a number badge, and an image flashed every few seconds (not under Reduce Motion). The first plugin to show owns the tile until it shows `none` with no badge. |
 | `glow = true` | `glow.show(tone, label)`: a thin orange line along the top of the screen Haunt is on, breathing (steady under Reduce Motion), with a label of at most 32 plain characters at the top right; `tone` must be `warn`. The first plugin to show owns it until `glow.hide()`. |
+| `title = true` | `title.set(text)`: one line of at most 48 plain characters, dim mono, right-aligned next to the title-bar buttons; `none` clears it. The first plugin to set it owns it. |
 
 Every fs glob starts with `${cwd}/` (the agent's folder, from verified events only, never `$HOME` or the haunt dir). It may use `*` within a path segment, but not `**`, `.` or `..`. Nothing inside the haunt dir is ever reachable.
 

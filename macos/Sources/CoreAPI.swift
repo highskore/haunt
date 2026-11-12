@@ -441,6 +441,7 @@ enum HostRequest: Equatable, Hashable {
     case dockShow(pluginId: String, image: DockImage?, badge: UInt32?, blink: DockImage?)
     case glowShow(pluginId: String, label: String?)
     case glowHide(pluginId: String)
+    case titleSet(pluginId: String, text: String?)
 }
 
 struct PluginKey: Equatable, Hashable {
