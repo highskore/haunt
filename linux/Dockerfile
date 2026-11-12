@@ -7,6 +7,9 @@ FROM rust:1.98.0-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 RUN git config --global user.email ci@localhost && git config --global user.name ci
 
+# No debug info or incremental cache: a smaller image and a faster build.
+ENV CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0
+
 WORKDIR /haunt
 COPY . .
 # Installs the pinned toolchain and targets, then every crate the workspace and the plugin template use.
