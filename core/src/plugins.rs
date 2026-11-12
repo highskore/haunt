@@ -594,6 +594,19 @@ fn plain_opt(s: Option<String>, max: usize) -> Option<String> {
     s.map(|s| plain(&s, max)).filter(|s| !s.trim().is_empty())
 }
 
+/// Haunt's own row status words: a label saying one could pass for it.
+const STATUS_WORDS: [&str; 8] = ["needs you", "waiting", "approve", "allow", "deny", "running", "idle", "done"];
+
+/// Whether `label`'s letters and digits spell a status word, ignoring case, spacing and punctuation; any
+/// non-ASCII letter counts as a match, so a lookalike from another script can't slip by.
+fn says_status(label: &str) -> bool {
+    let key: Vec<char> = label.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect();
+    STATUS_WORDS.iter().any(|w| {
+        let w: Vec<char> = w.chars().filter(char::is_ascii_alphanumeric).collect();
+        key.len() == w.len() && key.iter().zip(&w).all(|(k, w)| k == w || !k.is_ascii())
+    })
+}
+
 fn decoration(d: wrows::Decoration) -> Result<Decoration, String> {
     let spark = match d.spark {
         Some(s) => {
@@ -602,8 +615,18 @@ fn decoration(d: wrows::Decoration) -> Result<Decoration, String> {
         }
         None => None,
     };
+    let label = plain_opt(d.label, decorate::LABEL_MAX);
+    if let Some(l) = &label {
+        // Text is close enough to the needs-you white to pass for it.
+        if d.label_tone == wrows::Tone::Text {
+            return Err("a row label is dim or warn, never text".into());
+        }
+        if says_status(l) {
+            return Err(format!("{l:?} reads as Haunt's own status"));
+        }
+    }
     Ok(Decoration {
-        label: plain_opt(d.label, decorate::LABEL_MAX),
+        label,
         label_tone: tone(d.label_tone),
         suffix: plain_opt(d.suffix, if d.scroll { decorate::TICKER_MAX } else { decorate::SUFFIX_MAX }),
         suffix_tone: tone(d.suffix_tone),
@@ -1673,7 +1696,7 @@ mod tests {
         let a = core.register_surface("/a").unwrap();
         let mut st = HostState::new("dev.x.p", &Capabilities { decorate: true, ..Default::default() }, None, None, Some(core.handle()));
         let mut other = HostState::new("dev.x.q", &Capabilities { decorate: true, ..Default::default() }, None, None, Some(core.handle()));
-        other.decorate(a.surface_id.clone(), Some(deco("Allow"))).unwrap();
+        other.decorate(a.surface_id.clone(), Some(deco("QA ok"))).unwrap();
         let spark = wrows::Spark { points: vec![1, 2], tone: wrows::Tone::Warn };
         st.decorate(a.surface_id.clone(), Some(wrows::Decoration { suffix: Some("CI 9/9".into()), bar: Some(0.5), spark: Some(spark), ..deco("CI 9/9") })).unwrap();
         let row = |core: &crate::Core| core.snapshot().groups.iter().flat_map(|g| g.rows.clone()).find(|r| r.surface_id == a.surface_id).unwrap();
@@ -1764,6 +1787,22 @@ mod tests {
         assert!(p.run(tab, wexec::Command::GitStatus).unwrap_err().contains("not a project folder"), "/tmp is outside home");
         p.exec_jobs = vec![1, 2];
         assert!(p.run("nope".into(), wexec::Command::GitStatus).unwrap_err().contains("at most 2"));
+    }
+
+    #[test]
+    fn row_labels_cant_pass_for_haunts_status() {
+        let d = |label: &str, t: wrows::Tone| wrows::Decoration {
+            label: Some(label.into()), label_tone: t, suffix: None, suffix_tone: wrows::Tone::Dim, scroll: false, bar: None,
+            spark: Some(wrows::Spark { points: vec![1, 2], tone: wrows::Tone::Text }),
+        };
+        assert!(decoration(d("CI 7/9", wrows::Tone::Text)).unwrap_err().contains("never text"));
+        for bad in ["Needs You", "needs  you", "NEEDS\u{200b}YOU", "N-E-E-D-S you!", "n\u{0435}eds you", "\u{FF24}one", "Waiting", "approve", "Allow.", "deny", "RUNNING", "idle", "done"] {
+            assert!(decoration(d(bad, wrows::Tone::Dim)).is_err(), "{bad:?}");
+        }
+        for ok in ["CI 7/9", "needs you later", "done 3/4", "idler", "✓"] {
+            let dec = decoration(d(ok, wrows::Tone::Warn)).unwrap();
+            assert_eq!(dec.spark.unwrap().tone, Tone::Text, "the sparkline may keep text");
+        }
     }
 
     #[test]
