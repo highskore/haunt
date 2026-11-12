@@ -279,6 +279,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // Checked with responds(to:) like the one above: nothing in AppKit answers toggleReviewScreen:.
     @objc func toggleReviewScreen(_ sender: Any?) { controller?.toggleReview() }
 
+    /// With Haunt's icon: the standard panel would show a plugin's Dock picture.
+    @objc func showAbout(_ sender: Any?) {
+        NSApp.orderFrontStandardAboutPanel(options: [.applicationIcon: HauntIcon.image])
+    }
+
     @objc func openSettings(_ sender: Any?) {
         let s = settings ?? SettingsWindowController(sheets: setup, configPath: config.tomlURL.path,
                                                      notifications: { [config] in config.notifications },
@@ -513,7 +518,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
 
         submenu("Haunt", [
-            item("About Haunt", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
+            item("About Haunt", #selector(showAbout(_:))),
             .separator(),
             item("Settings…", #selector(openSettings(_:)), .settings),
             .separator(),
