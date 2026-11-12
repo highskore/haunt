@@ -21,6 +21,7 @@ final class PluginBridge {
     /// Shows the owning plugin's title-bar line; nil clears it.
     var onTitle: ((String?) -> Void)?
     private var title: String?
+    private var slots = PluginSlots()
     /// `[plugin_fx]` from config.toml.
     var pluginFx = PluginFxConfig() {
         didSet {
@@ -41,6 +42,7 @@ final class PluginBridge {
             hold.release()
             hover.owner = nil
             if plugins == nil { presence.stop() } else { presence.start() }
+            slots = PluginSlots()
             dock.reset()
             glow.hide()
             setTitle(nil)
@@ -152,14 +154,16 @@ final class PluginBridge {
                 openTab?(surface)
             case let .dockImages(pluginId, images):
                 dock.register(pluginId: pluginId, images: images)
-            case let .dockShow(pluginId, image, badge, blink):
-                dock.show(pluginId: pluginId, image: image, badge: badge, blink: blink)
-            case let .glowShow(_, count):
-                glow.show(count: count)
-            case .glowHide:
-                glow.hide()
-            case let .titleSet(_, text):
-                setTitle(text)
+            case let .dockShow(pluginId, image, badge, blink, seq):
+                if slots.admit(.dock, pluginId, seq: seq, letGo: image == nil && badge == nil) {
+                    dock.show(pluginId: pluginId, image: image, badge: badge, blink: blink)
+                }
+            case let .glowShow(pluginId, count, seq):
+                if slots.admit(.glow, pluginId, seq: seq, letGo: false) { glow.show(count: count) }
+            case let .glowHide(pluginId, seq):
+                if slots.admit(.glow, pluginId, seq: seq, letGo: true) { glow.hide() }
+            case let .titleSet(pluginId, text, seq):
+                if slots.admit(.title, pluginId, seq: seq, letGo: text == nil) { setTitle(text) }
             case let .soundPlay(_, name, pitch, volume):
                 sound.play(name, pitch: pitch, volume: volume)
             case let .soundAmbient(pluginId, name, level):

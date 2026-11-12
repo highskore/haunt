@@ -37,17 +37,19 @@ pub enum HostRequest {
     FocusTab { plugin_id: String, surface: String },
     /// The Dock tile: image `image` (none: haunt's icon) with `badge` as its count, `blink` flashed now and then.
     /// Only the plugin that owns the tile sends one; all none gives haunt's own back.
+    /// `seq`, here and on the glow and title requests, orders them across plugins: the app ignores one older
+    /// than the last it carried out for that spot.
     #[cfg(feature = "plugins")]
-    DockShow { plugin_id: String, image: Option<String>, badge: Option<u32>, blink: Option<String> },
+    DockShow { plugin_id: String, image: Option<String>, badge: Option<u32>, blink: Option<String>, seq: u64 },
     /// The warn-orange glow along the top of the screen; the app labels it "`count` need(s) you" (0: no label).
     /// Only from its owner.
     #[cfg(feature = "plugins")]
-    GlowShow { plugin_id: String, count: u8 },
+    GlowShow { plugin_id: String, count: u8, seq: u64 },
     #[cfg(feature = "plugins")]
-    GlowHide { plugin_id: String },
+    GlowHide { plugin_id: String, seq: u64 },
     /// One line of dim mono text in the title bar, next to its buttons; none clears it. Only from its owner.
     #[cfg(feature = "plugins")]
-    TitleSet { plugin_id: String, text: Option<String> },
+    TitleSet { plugin_id: String, text: Option<String>, seq: u64 },
     /// One of haunt's sounds, `pitch` semitones off, at `volume` 0 to 1.
     #[cfg(feature = "plugins")]
     SoundPlay { plugin_id: String, sound: crate::plugins::SoundName, pitch: i32, volume: f32 },

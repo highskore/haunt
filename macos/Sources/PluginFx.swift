@@ -1,6 +1,28 @@
 import AppKit
 import AVFoundation
 
+/// Who holds the Dock tile, the glow and the title-bar line. The core lets one plugin at a time hold each, but
+/// the bridge drains plugins in turn, so an older plugin's let-go can arrive after a newer one's claim: carry out
+/// nothing older (`seq`) than what is on screen, and a let-go only from the holder.
+struct PluginSlots {
+    enum Slot { case dock, glow, title }
+    private var owner: [Slot: String] = [:]
+    private var last: [Slot: UInt64] = [:]
+
+    /// Whether to carry out `plugin`'s claim of `slot`, or its let-go.
+    mutating func admit(_ slot: Slot, _ plugin: String, seq: UInt64, letGo: Bool) -> Bool {
+        guard seq > last[slot, default: 0] else { return false }
+        if letGo {
+            guard owner[slot] == plugin else { return false }
+            owner[slot] = nil
+        } else {
+            owner[slot] = plugin
+        }
+        last[slot] = seq
+        return true
+    }
+}
+
 /// The Dock tile the owning plugin asked for (`HostRequest.dockShow`), from the images each plugin registered
 /// (`dockImages`); the core lets one plugin at a time show. `blink` is flashed every few seconds, never under
 /// Reduce Motion.

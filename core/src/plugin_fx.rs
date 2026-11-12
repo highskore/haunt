@@ -2,6 +2,7 @@
 //! the WIT host traits on `HostState`.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -51,6 +52,14 @@ impl Stage {
     pub(crate) fn owner(&self, slot: Slot) -> Option<String> {
         crate::sync::lock(&self.0).iter().find(|(s, _)| *s == slot).map(|(_, p)| p.clone())
     }
+}
+
+/// Orders every claim and let-go of a `Slot` across plugins: the app drains each plugin's requests in turn,
+/// so an older plugin's let-go can come after a newer one's claim. Process-wide, so it never restarts on a reload.
+static SEQ: AtomicU64 = AtomicU64::new(1);
+
+fn next_seq() -> u64 {
+    SEQ.fetch_add(1, Ordering::Relaxed)
 }
 
 /// At most `n` calls in any `window`.
@@ -214,16 +223,16 @@ impl HostState {
     /// A disabled plugin gives back what it owns, and the app puts haunt's own back.
     pub(crate) fn release_fx(&mut self) {
         if self.stage.release(Slot::Dock, &self.id) {
-            self.outbox.push(HostRequest::DockShow { plugin_id: self.id.clone(), image: None, badge: None, blink: None });
+            self.outbox.push(HostRequest::DockShow { plugin_id: self.id.clone(), image: None, badge: None, blink: None, seq: next_seq() });
         }
         if !std::mem::take(&mut self.fx.dock_images).is_empty() {
             self.outbox.push(HostRequest::DockImages { plugin_id: self.id.clone(), images: Vec::new() });
         }
         if self.stage.release(Slot::Glow, &self.id) {
-            self.outbox.push(HostRequest::GlowHide { plugin_id: self.id.clone() });
+            self.outbox.push(HostRequest::GlowHide { plugin_id: self.id.clone(), seq: next_seq() });
         }
         if self.stage.release(Slot::Title, &self.id) {
-            self.outbox.push(HostRequest::TitleSet { plugin_id: self.id.clone(), text: None });
+            self.outbox.push(HostRequest::TitleSet { plugin_id: self.id.clone(), text: None, seq: next_seq() });
         }
         if std::mem::take(&mut self.fx.ambient_on) {
             self.outbox.push(HostRequest::SoundAmbient { plugin_id: self.id.clone(), sound: SoundName::Rain, level: 0.0 });
@@ -273,7 +282,7 @@ impl wdock::Host for HostState {
                 return Err("blink needs an image to go back to".into());
             }
             if self.stage.release(Slot::Dock, &plugin_id) {
-                self.outbox.push(HostRequest::DockShow { plugin_id, image: None, badge: None, blink: None });
+                self.outbox.push(HostRequest::DockShow { plugin_id, image: None, badge: None, blink: None, seq: next_seq() });
             }
             return Ok(());
         }
@@ -289,7 +298,7 @@ impl wdock::Host for HostState {
             return Err("too many pending requests".into());
         }
         self.stage.claim(Slot::Dock, &plugin_id).map_err(|who| format!("the Dock tile is taken: {who}"))?;
-        self.request(HostRequest::DockShow { plugin_id, image, badge, blink })
+        self.request(HostRequest::DockShow { plugin_id, image, badge, blink, seq: next_seq() })
     }
 }
 
@@ -313,12 +322,12 @@ impl wglow::Host for HostState {
         }
         let plugin_id = self.id.clone();
         self.stage.claim(Slot::Glow, &plugin_id).map_err(|who| format!("the glow is taken: {who}"))?;
-        self.request(HostRequest::GlowShow { plugin_id, count })
+        self.request(HostRequest::GlowShow { plugin_id, count, seq: next_seq() })
     }
 
     fn hide(&mut self) {
         if self.stage.release(Slot::Glow, &self.id) {
-            self.outbox.push(HostRequest::GlowHide { plugin_id: self.id.clone() });
+            self.outbox.push(HostRequest::GlowHide { plugin_id: self.id.clone(), seq: next_seq() });
         }
     }
 }
@@ -403,7 +412,7 @@ impl wtitle::Host for HostState {
         let plugin_id = self.id.clone();
         let Some(text) = super::plain_opt(text, TITLE_MAX) else {
             if self.stage.release(Slot::Title, &plugin_id) {
-                self.outbox.push(HostRequest::TitleSet { plugin_id, text: None });
+                self.outbox.push(HostRequest::TitleSet { plugin_id, text: None, seq: next_seq() });
             }
             return Ok(());
         };
@@ -414,7 +423,7 @@ impl wtitle::Host for HostState {
             return Err("too many pending requests".into());
         }
         self.stage.claim(Slot::Title, &plugin_id).map_err(|who| format!("the title-bar slot is taken: {who}"))?;
-        self.request(HostRequest::TitleSet { plugin_id, text: Some(text) })
+        self.request(HostRequest::TitleSet { plugin_id, text: Some(text), seq: next_seq() })
     }
 }
 
@@ -578,6 +587,8 @@ pub(super) mod tests {
         assert!(matches!(&a.outbox[..], [HostRequest::DockShow { image: None, badge: None, blink: None, .. }]));
         wdock::Host::show(&mut b, None, Some(1), None).unwrap();
         assert_eq!(stage.owner(Slot::Dock).as_deref(), Some("dev.haunt.b"));
+        let ([HostRequest::DockShow { seq: release, .. }], [HostRequest::DockShow { seq: claim, .. }]) = (&a.outbox[..], &b.outbox[..]) else { panic!() };
+        assert!(claim > release, "b's claim is stamped after a's let-go, whichever outbox the app drains first");
     }
 
     #[test]

@@ -151,6 +151,23 @@ check(NSApp.dockTile.badgeLabel == nil && tile() == haunt, "reset drops the badg
 dock.show(pluginId: p, image: "needs", badge: nil, blink: nil)
 check(tile() == haunt, "and the images")
 
+// MARK: Who holds a spot, as the bridge drains plugins in turn
+
+do {
+    var slots = PluginSlots()
+    let (old, new) = ("dev.haunt.old", "dev.haunt.new")
+    check(slots.admit(.dock, new, seq: 1, letGo: false), "new claims the tile")
+    // One drain: new let go (2), then old claimed (3); the bridge reads old's outbox first.
+    check(slots.admit(.dock, old, seq: 3, letGo: false), "old's claim is carried out")
+    check(!slots.admit(.dock, new, seq: 2, letGo: true), "new's earlier let-go doesn't reset old's tile")
+    check(!slots.admit(.dock, new, seq: 9, letGo: true), "nor does a let-go from anyone but the holder")
+    // Old shows, lets go and new claims, all in one drain, new's outbox read first.
+    check(slots.admit(.glow, new, seq: 12, letGo: false), "new claims the glow")
+    check(!slots.admit(.glow, old, seq: 10, letGo: false) && !slots.admit(.glow, old, seq: 11, letGo: true), "old's stale show and hide go")
+    check(slots.admit(.glow, new, seq: 13, letGo: true) && slots.admit(.glow, old, seq: 14, letGo: false), "the holder lets go, then another claims")
+    check(slots.admit(.title, old, seq: 15, letGo: false) && slots.admit(.title, old, seq: 16, letGo: false), "spots are counted apart")
+}
+
 // MARK: Speech, rendered to buffers and never played
 
 var frames = 0
