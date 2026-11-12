@@ -224,6 +224,8 @@ enum Layers {
             frame.open = true
             DispatchQueue.main.async { endFrame() }
         }
+        // A redraw already past the cut draws no more layers, so a hitch stays near `stopMs`.
+        if frame.ms > stopMs { return false }
         // The check is timed with the drawing: a theme that is slow to check is slow to draw.
         let start = DispatchTime.now().uptimeNanoseconds
         defer { frame.ms += Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6 }
@@ -232,13 +234,13 @@ enum Layers {
         // Never under 2x: a hairline that 1x would blend away is a solid line on a Retina screen.
         let scale = max(2, abs(ctx.userSpaceToDeviceSpaceTransform.a).rounded(.up))
         if !runs.isEmpty, let why = verdict(shown, slot: slot, bounds: bounds, clip: clip, exclude: exclude, run: run, runs: runs, base: base,
-                                            state: state, index: index, scale: scale, ctm: ctx.ctm, names: names, context: ObjectIdentifier(ctx)) {
+                                            state: state, index: index, scale: scale, ctm: ctx.ctm, names: names, context: ctx) {
             let said = "layers on \(slot) skipped: \(why)"
             if skipped.insert(said).inserted { report(said) }
             return false
         }
         let d = Drawn(shown: shown, names: names, bounds: bounds, clip: clip, exclude: exclude, run: run, state: state, index: index,
-                      ctm: ctx.ctm, context: ObjectIdentifier(ctx))
+                      ctm: ctx.ctm, context: ctx)
         drawn[slot] = d
         paint(d, slot: slot, in: ctx)
         return true
@@ -254,8 +256,9 @@ enum Layers {
         var state: Set<String> = []
         var index: Int? = nil
         var ctm: CGAffineTransform
-        /// The context it was drawn into: another window's slots are never under this one's text.
-        var context: ObjectIdentifier? = nil
+        /// The context it was drawn into: another window's slots are never under this one's text. Held until the
+        /// redraw ends, so its address can't be reused by another context meanwhile.
+        var context: CGContext? = nil
     }
     private static var drawn: [String: Drawn] = [:]
 
@@ -281,14 +284,14 @@ enum Layers {
     /// run it can't measure is unreadable.
     static func verdict(_ shown: [ResolvedLayer], slot: String, bounds: NSRect, clip: NSRect, exclude: NSRect? = nil, run: NSRect, runs: [Run],
                         base: [NSColor], state: Set<String>, index: Int?, scale: CGFloat = 2, ctm: CGAffineTransform = .identity,
-                        names: [String]? = nil, context: ObjectIdentifier? = nil) -> String? {
+                        names: [String]? = nil, context: CGContext? = nil) -> String? {
         let inside = runs.map { $0.rect.intersection(clip) }.filter { !$0.isEmpty }
         guard !inside.isEmpty else { return nil }
         let area = inside.dropFirst().reduce(inside[0]) { $0.union($1) }.integral
         func rel(_ r: NSRect) -> String { String(format: "%.1f,%.1f,%.1f,%.1f", r.minX - clip.minX, r.minY - clip.minY, r.width, r.height) }
         // The lower slots, mapped from where they were drawn into this slot's space.
         let lower: [(String, Drawn, CGAffineTransform)] = (below[slot] ?? []).compactMap { s in
-            guard let d = drawn[s], d.context == context else { return nil }
+            guard let d = drawn[s], d.context === context else { return nil }
             let to = d.ctm.concatenating(ctm.inverted())
             return d.clip.applying(to).intersects(area) ? (s, d, to) : nil
         }

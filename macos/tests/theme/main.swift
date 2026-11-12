@@ -704,6 +704,16 @@ do {
         Layers.draw("status.needs", box, text: run, in: a.ctx)
         check(Layers.skipped.contains { $0.hasPrefix("layers on status.needs ") }, "while the same window's row is")
         Layers.endFrame()
+        // The record holds its context until the redraw ends, so a new context can't take its address meanwhile.
+        weak var held: CGContext?
+        autoreleasepool {
+            let c = canvas()
+            held = c.ctx
+            Layers.draw("row", box, text: run, state: ["selected"], in: c.ctx)
+        }
+        check(held != nil, "a drawn row holds its context until the redraw ends")
+        autoreleasepool { Layers.endFrame() }
+        check(held == nil, "and lets it go after")
     }
     // A lower slot drawn in another translation is mapped into the upper one's: the palette's veil sits only
     // where the field's text lands after the palette view's translate.
@@ -871,6 +881,8 @@ do {
     drawWindow()
     let first = Date().timeIntervalSince(started) * 1000
     Layers.endFrame()
+    // Past the cut a redraw draws no more layers: the hitch stays near 200 ms, not the whole window's cost.
+    check(Layers.lastFrameMs < 2 * Layers.stopMs, "one redraw of the costliest theme stops near the cut: \(Int(Layers.lastFrameMs)) ms")
     if first <= Layers.stopMs {
         drawWindow()
         Layers.endFrame()
