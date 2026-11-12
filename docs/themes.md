@@ -108,7 +108,7 @@ Some looks need more than colours and sizes. The `[effects]` table switches on e
 | `icon.ring`, `icon.shell` | bool; `"tile"`, `"diamond"` | rings around the agent icons, and the shell glyph on a tile or in a diamond |
 | `progress.style` | `"bar"`, `"dotted"` | the progress bar solid, or a dotted track with a fading fill and a diamond knob (`app.bar.knob`) |
 | `needs.glow` | bool | a glow behind the needs-you status |
-| `ornament` | `"none"`, `"sigil"` | artwork drawn in code: a sigil in the pane at `app.ornament.alpha` and at the sidebar's foot, and marks in the window's corners |
+| `ornament` | `"none"`, `"sigil"` | artwork drawn in code: a sigil at the sidebar's foot (left out when the rows need its room), marks in the window's corners, and a sigil behind the terminal at `app.ornament.alpha` (0–0.12) when the window and Ghostty's background are both see-through |
 | `palette.inset` | 0–80, default 22 | how far the bottom-right palette stands in from the window's edges |
 | `palette.header`, `palette.input.rules` | bool | `[strings] palette.header` above the input, and rules above and below the input |
 

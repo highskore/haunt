@@ -17,6 +17,8 @@ extension Theme {
     static let tables = ["color", "size", "font", "app"]
     /// Sizes outside this are refused: a typo shouldn't push the window off the screen.
     static let sizeRange: ClosedRange<CGFloat> = 0...400
+    /// Numbers with a range of their own instead of `sizeRange`.
+    static let numberRanges: [String: ClosedRange<CGFloat>] = ["app.ornament.alpha": 0...0.12]
     /// Kept in every theme: Claude's mark is always its own orange.
     static let locked: Set<String> = ["color.claude"]
 
@@ -102,7 +104,8 @@ extension Theme {
             self[keyPath: path] = c
         case let .number(path):
             guard case .scalar = value, let n = Double(s[0]) else { return "not a number" }
-            guard Self.sizeRange.contains(CGFloat(n)) else { return "outside \(Int(Self.sizeRange.lowerBound))–\(Int(Self.sizeRange.upperBound))" }
+            let range = Self.numberRanges[name] ?? Self.sizeRange
+            guard range.contains(CGFloat(n)) else { return "outside \(String(format: "%g", range.lowerBound))–\(String(format: "%g", range.upperBound))" }
             self[keyPath: path] = CGFloat(n)
         case let .numbers(path):
             let want = self[keyPath: path].count
@@ -383,6 +386,8 @@ struct LoadedTheme {
             out.ghostty.merge(ghostty) { _, child in child }
         }
         out.problems += out.enforceContrast()
+        let opacity = out.ghostty["background-opacity"]?.strings.first.flatMap(Double.init) ?? 1
+        out.theme.app.terminalSeeThrough = opacity < 1 && out.theme.color.windowBg.alphaComponent < 1
         return out
     }
 

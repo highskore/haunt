@@ -94,6 +94,9 @@ struct AppTokens: Equatable {
     var ornamentDim = NSColor(white: 1, alpha: 0.3)
     /// `[effects] ornament`'s artwork opacity in the pane.
     var ornamentAlpha: CGFloat = 0.07
+    /// Not a token: whether what is behind the terminal shows through it, its window colour and Ghostty's
+    /// background both fading. Set when the theme loads.
+    var terminalSeeThrough = false
     /// `[strings]`: a theme's words for named places, checked like a title (see `Theme.stringKeys`).
     var strings: [String: String] = [:]
     /// macOS's look for menus, sheets and alerts: "dark" or "light".

@@ -489,5 +489,14 @@ check(load("dosdim").problems.contains { $0.contains("terminal") } && load("dosd
       "grey on a grey terminal is fixed")
 check(Theme.stringKeys.contains("palette.message"), "the dialog's message is a theme string")
 
+// Ornaments stay faint, and the watermark shows only through a see-through terminal.
+write(user, "faint", "[app]\nornament.alpha = 0.12\n")
+write(user, "loud", "[app]\nornament.alpha = 0.5\n")
+check(load("faint").theme.app.ornamentAlpha == 0.12, "ornament.alpha up to 0.12")
+check(load("loud").theme.app.ornamentAlpha == AppTokens().ornamentAlpha && load("loud").problems.contains { $0.contains("outside 0–0.12") },
+      "and no more: \(load("loud").problems)")
+write(user, "clear", "[color]\nwindow.bg = \"#0e101680\"\n[ghostty]\nbackground-opacity = 0.55\n")
+check(load("clear").theme.app.terminalSeeThrough && !load("faint").theme.app.terminalSeeThrough, "a terminal is see-through only when its window and Ghostty both fade")
+
 print(failures == 0 ? "theme: all passed" : "theme: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

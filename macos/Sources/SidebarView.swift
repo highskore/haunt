@@ -321,7 +321,9 @@ final class SidebarView: NSView, NSTextFieldDelegate {
                 drawRow(row, top: top, height: height, ctx: ctx)
             }
         }
-        if Theme.current.effects.ornament == "sigil", !panel { drawSigilFooter(ctx) } else if Theme.current.effects.sidebarFooter, !panel { drawFooter(ctx) }
+        if let top = footerTop, rowsBottom <= top {
+            if Theme.current.effects.ornament == "sigil" { drawSigilFooter(ctx) } else { drawFooter(ctx) }
+        }
         if let d = drop {
             Draw.fill(NSRect(x: rowPadX, y: d.y - Tok.App.dropLine / 2,
                              width: contentWidth - 2 * rowPadX, height: Tok.App.dropLine), Tok.Color.textPrimary)
@@ -331,6 +333,23 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     static func agentCount(_ s: SidebarSnapshot) -> Int {
         s.groups.reduce(0) { $0 + $1.rows.filter { $0.kind != .shell }.count }
     }
+
+    /// Where the footer starts, nil without one; it is drawn only when the rows end above it.
+    private var footerTop: CGFloat? {
+        guard !panel else { return nil }
+        let pad = Tok.App.sidebarFootPad, textTop = bounds.height - pad[2] - Tok.App.sidebarFootFont * lh
+        if Theme.current.effects.ornament == "sigil" { return textTop - Tok.App.sidebarFootGap - Self.footSigil }
+        return Theme.current.effects.sidebarFooter ? textTop - pad[0] : nil
+    }
+
+    private var rowsBottom: CGFloat {
+        items.reduce(0) { bottom, item in
+            if case let .row(_, top, h, _) = item { return max(bottom, top + h) }
+            return bottom
+        }
+    }
+
+    private static let footSigil: CGFloat = 56
 
     /// `[effects] sidebar.footer`: the live agent count, bottom left.
     private func drawFooter(_ ctx: CGContext) {
@@ -349,7 +368,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let line = Draw.truncated(Draw.line(text, f, Tok.App.sidebarFootFg, kern: size * 0.35), contentWidth - 2 * pad[1], f, Tok.App.sidebarFootFg)
         let textTop = bounds.height - pad[2] - lineH
         Draw.text(line, font: f, x: ((contentWidth - Draw.width(line)) / 2).rounded(), top: textTop, lineHeight: lineH, in: ctx)
-        let d: CGFloat = 56
+        let d = Self.footSigil
         Tok.App.ornamentDim.setStroke()
         Draw.sigil(at: NSPoint(x: ((contentWidth - d) / 2).rounded(), y: textTop - Tok.App.sidebarFootGap - d), size: d, stroke: 1)
     }
