@@ -10,6 +10,9 @@ const MAX_TASKS: usize = 200;
 const MAX_SUBAGENTS: usize = 12;
 const MAX_SPAWNS: usize = 16;
 const MAX_TODO_OWNERS: usize = 32;
+/// A running subagent that sends nothing for this long no longer keeps its row working: its stop
+/// may never come (the agent was killed, or a hook failed).
+pub const SUBAGENT_SILENCE: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskState {
@@ -36,11 +39,18 @@ pub struct Subagent {
     pub started: Instant,
     pub duration: Option<Duration>,
     pub tools: u64,
+    /// Its latest event: its start or a tool call.
+    pub last_seen: Instant,
 }
 
 impl Subagent {
     pub fn elapsed(&self, now: Instant) -> Duration {
         self.duration.unwrap_or_else(|| now.saturating_duration_since(self.started))
+    }
+
+    /// Running, and heard from within `SUBAGENT_SILENCE`.
+    pub fn working(&self, now: Instant) -> bool {
+        self.running && now.saturating_duration_since(self.last_seen) < SUBAGENT_SILENCE
     }
 }
 
@@ -124,7 +134,7 @@ impl Progress {
                 }
                 let kind = e.agent_type.clone().unwrap_or_else(|| "agent".to_owned());
                 let description = self.take_spawn(&kind);
-                self.subagents.push(Subagent { id, kind, description, running: true, started: now, duration: None, tools: 0 });
+                self.subagents.push(Subagent { id, kind, description, running: true, started: now, duration: None, tools: 0, last_seen: now });
                 self.trim();
                 true
             }
@@ -155,10 +165,31 @@ impl Progress {
             EventKind::SubagentTool { .. } => {
                 let Some(s) = owner.and_then(|id| self.subagent(&id)) else { return false };
                 s.tools += 1;
+                s.last_seen = now;
                 true
+            }
+            // A new session in the tab: the old one's subagents went with it.
+            EventKind::SessionStart { .. } => {
+                let mut changed = false;
+                for s in self.subagents.iter_mut().filter(|s| s.running) {
+                    s.running = false;
+                    s.duration = Some(now.saturating_duration_since(s.started));
+                    changed = true;
+                }
+                changed
             }
             _ => false,
         }
+    }
+
+    /// A subagent is still working, so the agent is too, whatever its own turn says.
+    pub fn working(&self, now: Instant) -> bool {
+        self.subagents.iter().any(|s| s.working(now))
+    }
+
+    /// When the last stopped subagent stopped.
+    pub fn last_stop(&self) -> Option<Instant> {
+        self.subagents.iter().filter_map(|s| s.duration.map(|d| s.started + d)).max()
     }
 
     /// `(done, total)` for the main agent (`None`) or a subagent: tasks first, else the latest todo list.

@@ -135,7 +135,7 @@ Groups, in order: `NEEDS YOU`, `RUNNING`, `IDLE`. Done, failed and shell rows go
 The agent cwd is the latest verified hook event's `cwd`, falling back to the surface cwd from `setSurfaceInfo`. A Claude launched as the surface's command never changes the shell's `PWD`, so the hook is the only place its cwd shows up. The core reads every branch itself, from `.git/HEAD` above the cwd: the surface cwd's on each `set_surface_info`, and the agent cwd's on every verified event, so a checkout inside the session shows up. The lookups run outside the state lock and are cached per surface by cwd and HEAD (inode, size, mtime), so an unchanged HEAD costs one `lstat`. `title` and `git_branch` are ignored; they stay in the signature so the app's call needs no change.
 | `status_text` | empty | `needs you`, `3/5` (running with progress), empty (running without progress), `done`, `failed`, empty (idle) |
 | `progress` | none | `done/total` of the main agent's tasks, else of its latest TodoWrite |
-| `subagents` | none | while running or needing you: `label` = `Explore · trace hooks`, `meta` = `2/4 · 1m12s` or `14 tools · 48s` |
+| `subagents` | none | while running or needing you (a turn that stopped with background subagents still running counts as running, grouped under RUNNING, until the last one stops): `label` = `Explore · trace hooks`, `meta` = `2/4 · 1m12s` or `14 tools · 48s` |
 
 The task part of `meta`:
 

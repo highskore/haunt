@@ -458,6 +458,14 @@ impl Session {
         self.set(status, now);
     }
 
+    /// The status to show: a finished turn whose background subagents are still working is still running.
+    pub fn shown_status(&self, now: Instant) -> Status {
+        match self.status {
+            Status::Done if self.progress.working(now) => Status::Running,
+            s => s,
+        }
+    }
+
     /// Leaving NeedsYou always drops the request; entering it starts a new generation.
     fn set(&mut self, status: Status, now: Instant) {
         if self.status == status {

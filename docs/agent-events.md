@@ -72,7 +72,7 @@ An adapter sends the events its agent can observe and leaves the others out. Wit
 | `subagent_stop` | `agent_id`, `agent_type` | subrow off |
 | `subagent_tool` | `agent_id`, `tool_name` (required) | subrow tool count |
 | `subagent_result` | `agent_id`, `agent_type`, `description`, `tool_count`, `duration_ms` | final subrow counts |
-| `stop` | none | done |
+| `stop` | none | done, once no subagent it started is still running (one silent for 10 minutes, or ended by a new `session_start`, no longer counts) |
 | `stop_failure` | none | failed |
 
 A request resolves when a verified `tool_ran`, `tool_done` or `tool_failed` matches it: on `tool_use_id` when both have one, else on `tool_name` plus the exact `command` or `file_path`. A `truncated` event never matches.

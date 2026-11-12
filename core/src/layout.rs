@@ -112,7 +112,7 @@ pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, shell: Option<&str
     // Stable, so equal times keep tab order.
     order.sort_by_key(|s| std::cmp::Reverse(s.session.status_changed));
     for s in order {
-        let g = match (s.session.is_agent, s.session.status) {
+        let g = match (s.session.is_agent, s.session.shown_status(now)) {
             (true, Status::NeedsYou) => 0,
             (true, Status::Running) => 1,
             _ => 2,
@@ -133,7 +133,7 @@ pub fn snapshot(surfaces: &[SurfaceView], home: Option<&str>, shell: Option<&str
 fn next_tick(surfaces: &[SurfaceView], now: Instant) -> Option<u64> {
     surfaces
         .iter()
-        .filter(|s| s.session.is_agent && matches!(s.session.status, Status::Running | Status::NeedsYou))
+        .filter(|s| s.session.is_agent && matches!(s.session.shown_status(now), Status::Running | Status::NeedsYou))
         .flat_map(|s| &s.session.progress.subagents)
         .filter(|a| a.duration.is_none())
         .map(|a| {
@@ -171,27 +171,29 @@ fn row(s: &SurfaceView, home: Option<&str>, shell: Option<&str>, now: Instant) -
 
     let place = s.branch.filter(|b| !b.is_empty()).map_or(cwd, str::to_owned);
     let progress = session.progress.counts(None).map(|(done, total)| Progress { done, total });
-    let task = match session.status {
+    let status = session.shown_status(now);
+    let task = match status {
         Status::NeedsYou => Some(match session.live_permission() {
             Some(p) => format!("Approve: {}?", p.preview()),
             None => "Waiting for you".to_owned(),
         }),
         Status::Running => session.progress.current_task().map(str::to_owned).or_else(|| session.prompt.clone()),
+        // Done once its background subagents are too.
         Status::Done => Some(match session.turn_started.zip(session.turn_finished) {
-            Some((a, b)) => format!("Done in {}", coarse(b.saturating_duration_since(a))),
+            Some((a, b)) => format!("Done in {}", coarse(session.progress.last_stop().map_or(b, |c| b.max(c)).saturating_duration_since(a))),
             None => "Done".to_owned(),
         }),
         Status::Failed => Some("Failed".to_owned()),
         Status::Idle => None,
     };
-    let status_text = match (session.status, progress) {
+    let status_text = match (status, progress) {
         (Status::NeedsYou, _) => "needs you".to_owned(),
         (Status::Running, Some(p)) => format!("{}/{}", p.done, p.total),
         (Status::Done, _) => "done".to_owned(),
         (Status::Failed, _) => "failed".to_owned(),
         _ => String::new(),
     };
-    let active = matches!(session.status, Status::Running | Status::NeedsYou);
+    let active = matches!(status, Status::Running | Status::NeedsYou);
     let subagents = if active { session.progress.subagents.iter().map(|a| subrow(session, a, now)).collect() } else { vec![] };
     Row {
         surface_id: s.id.to_owned(),
@@ -343,6 +345,75 @@ mod tests {
             .map(|(id, cwd, b, s)| SurfaceView { id, cwd, branch: b.as_deref(), session: s, selected: id == "pawr" })
             .collect();
         snapshot(&views, HOME, Some("zsh"), now)
+    }
+
+    /// One agent tab after `events`, rendered at `now`: its group id and row.
+    fn lone(events: &[(&str, Instant)], now: Instant) -> (String, Row) {
+        let mut s = Session::new(events[0].1);
+        for (e, at) in events {
+            feed(&mut s, &[e], *at);
+        }
+        let snap = render(&[("a".into(), "/w/api".into(), None, s)], now);
+        (snap.groups[0].id.clone(), snap.groups[0].rows[0].clone())
+    }
+
+    #[test]
+    fn a_turn_that_stops_with_subagents_running_works_until_the_last_one_stops() {
+        let t = Instant::now();
+        let s = Duration::from_secs;
+        let started = [
+            (r#"{"event":"prompt_submit","query":"map it"}"#, t),
+            (r#"{"event":"subagent_spawn","agent_type":"Explore","description":"routes"}"#, t),
+            (r#"{"event":"subagent_start","agent_id":"e1","agent_type":"Explore"}"#, t + s(2)),
+            (r#"{"event":"subagent_start","agent_id":"e2","agent_type":"Explore"}"#, t + s(2)),
+            (r#"{"event":"stop"}"#, t + s(3)),
+        ];
+        let (group, row) = lone(&started, t + s(10));
+        assert_eq!(group, RUNNING_ID, "the main turn stopped, its subagents didn't");
+        assert_ne!(row.status_text, "done");
+        assert_eq!(row.subagents.len(), 2);
+        assert_eq!(row.subagents[0].label, "Explore · routes");
+
+        let one = [&started[..], &[(r#"{"event":"subagent_stop","agent_id":"e1"}"#, t + s(20))]].concat();
+        let (group, row) = lone(&one, t + s(25));
+        assert_eq!((group.as_str(), row.subagents.len()), (RUNNING_ID, 2), "one still running");
+
+        let both = [&one[..], &[(r#"{"event":"subagent_stop","agent_id":"e2"}"#, t + s(40))]].concat();
+        let (group, row) = lone(&both, t + s(45));
+        assert_eq!(group, IDLE_ID);
+        assert_eq!(row.status_text, "done");
+        assert!(row.subagents.is_empty());
+        assert_eq!(row.task, "Done in 40s", "timed to the last subagent's stop");
+    }
+
+    #[test]
+    fn a_subagent_stop_that_never_comes_lets_the_row_finish() {
+        let t = Instant::now();
+        let s = Duration::from_secs;
+        let events = [
+            (r#"{"event":"prompt_submit","query":"map it"}"#, t),
+            (r#"{"event":"subagent_start","agent_id":"e1","agent_type":"Explore"}"#, t),
+            (r#"{"event":"subagent_tool","agent_id":"e1","tool_name":"Read"}"#, t + s(60)),
+            (r#"{"event":"stop"}"#, t + s(61)),
+        ];
+        let silence = crate::progress::SUBAGENT_SILENCE;
+        assert_eq!(lone(&events, t + s(60) + silence - s(1)).0, RUNNING_ID, "heard from within the limit");
+        let (group, row) = lone(&events, t + s(60) + silence);
+        assert_eq!((group.as_str(), row.status_text.as_str()), (IDLE_ID, "done"), "silent too long");
+
+        // A new session in the tab ends the old one's subagents at once.
+        let restarted = [&events[..], &[(r#"{"event":"session_start"}"#, t + s(62))]].concat();
+        assert_eq!(lone(&restarted, t + s(63)).0, IDLE_ID);
+    }
+
+    #[test]
+    fn a_turn_without_subagents_is_done_at_its_stop() {
+        let t = Instant::now();
+        let s = Duration::from_secs;
+        let events = [(r#"{"event":"prompt_submit","query":"fix it"}"#, t), (r#"{"event":"stop"}"#, t + s(12))];
+        let (group, row) = lone(&events, t + s(13));
+        assert_eq!((group.as_str(), row.status_text.as_str(), row.task.as_str()), (IDLE_ID, "done", "Done in 12s"));
+        assert!(row.subagents.is_empty());
     }
 
     #[test]
