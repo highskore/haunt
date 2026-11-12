@@ -339,6 +339,11 @@ impl HauntPlugins {
         Ok(haunt_core::sync::lock(&self.set).top_row_clicked(&plugin_id)?)
     }
 
+    /// The open tab a plugin's hold summary action brings forward, before `notify_action`.
+    pub fn hold_surface(&self, plugin_id: String, action_id: String) -> Option<String> {
+        haunt_core::sync::lock(&self.set).hold_surface(&plugin_id, &action_id)
+    }
+
     /// The user chose action `action_id` on a plugin's notification bound to `binding` ("" for none).
     pub fn notify_action(&self, plugin_id: String, action_id: String, binding: String) -> Result<(), HostError> {
         Ok(haunt_core::sync::lock(&self.set).notify_action(&plugin_id, &action_id, &binding)?)

@@ -324,8 +324,8 @@ pub struct HostState {
     activated_at: Option<Instant>,
     /// Set while this plugin has `keys.hover-hold`.
     hover_hold: bool,
-    /// Action ids of this plugin's latest hold summary: the only `"hold"` replies `notify_action` takes.
-    hold_actions: Vec<String>,
+    /// (action id, tab) of this plugin's latest hold summary: the only `"hold"` replies `notify_action` takes.
+    hold_actions: Vec<(String, Option<String>)>,
     /// The manifest's `exec` names.
     exec: Vec<String>,
     /// Jobs started and not yet reported.
@@ -1174,10 +1174,16 @@ impl HostState {
         (self.copy_ok, self.clicked) = (false, None);
     }
 
+    /// The tab hold summary action `action_id` brings forward, while that tab is still open.
+    fn hold_surface(&self, action_id: &str) -> Option<String> {
+        let (_, tab) = self.hold_actions.iter().find(|(a, _)| a == action_id)?;
+        tab.clone().filter(|s| self.core.as_ref().is_some_and(|c| c.has_surface(s)))
+    }
+
     /// The user chose `action_id` on one of this run's notifications or its latest hold summary: armed
     /// like a panel button.
     fn notify_click(&mut self, action_id: &str, binding: &str) -> Result<(), String> {
-        let held = binding == HOLD_BINDING && self.hold_actions.iter().any(|a| a == action_id);
+        let held = binding == HOLD_BINDING && self.hold_actions.iter().any(|(a, _)| a == action_id);
         if !held && !self.notified.iter().any(|(a, b)| a == action_id && b == binding) {
             return Err(format!("no notification action {action_id:?}"));
         }
@@ -1344,7 +1350,8 @@ impl whold::Host for HostState {
         if actions.len() > HOLD_ACTIONS_MAX {
             return Err(format!("at most {HOLD_ACTIONS_MAX} actions"));
         }
-        let mut acts = Vec::new();
+        let core = self.core.as_ref().ok_or("no haunt core")?;
+        let (mut acts, mut tabs) = (Vec::new(), Vec::new());
         for a in actions {
             let (id, title) = (clip(a.id), plain(&a.label, HOLD_LABEL_MAX));
             if id.is_empty() || title.trim().is_empty() {
@@ -1353,9 +1360,13 @@ impl whold::Host for HostState {
             if says_status(&title) {
                 return Err(format!("{title:?} reads as Haunt's own status"));
             }
+            if let Some(s) = a.surface.as_deref().filter(|s| !core.has_surface(s)) {
+                return Err(format!("no open tab {:?}", clip(s.to_owned())));
+            }
+            tabs.push((id.clone(), a.surface));
             acts.push(NotifyAction { id, title });
         }
-        self.hold_actions = acts.iter().map(|a| a.id.clone()).collect();
+        self.hold_actions = tabs;
         let headline = plain_opt(headline, HOLD_HEADLINE_MAX);
         self.request(HostRequest::HoldSummary { plugin_id: self.id.clone(), headline, actions: acts })
     }
@@ -1848,6 +1859,11 @@ impl LoadedPlugin {
             return Err(PluginError(format!("no key {id:?}")));
         }
         self.run_user_action(id, if down { "key-down" } else { "key-up" }, terminal_shown)
+    }
+
+    /// The tab hold summary action `action_id` brings forward, while that tab is still open.
+    pub fn hold_surface(&self, action_id: &str) -> Option<String> {
+        self.store.data().hold_surface(action_id)
     }
 
     /// Whether this plugin has `keys.hover-hold`.
@@ -2616,7 +2632,7 @@ mod tests {
         let caps = Capabilities { notify_hold: true, ..Default::default() };
         let mut focus = HostState::new("dev.x.focus", &caps, None, None, Some(core.handle()));
         let mut other = HostState::new("dev.x.other", &caps, None, None, Some(core.handle()));
-        let act = |id: &str, label: &str| whold::SummaryAction { id: id.into(), label: label.into() };
+        let act = |id: &str, label: &str| whold::SummaryAction { id: id.into(), label: label.into(), surface: None };
         assert!(focus.start(0).is_err() && focus.start(HOLD_MAX_MINUTES + 1).is_err());
         assert!(focus.set_summary(None, vec![]).unwrap_err().contains("no hold"));
         focus.start(25).unwrap();
@@ -2628,7 +2644,7 @@ mod tests {
         focus.set_summary(Some("Focus\nblock over, a long headline that keeps going well past the cap".into()), vec![act("again", "Start another 25 minutes please")]).unwrap();
         let Some(HostRequest::HoldSummary { plugin_id, headline: Some(h), actions }) = focus.outbox.last() else { panic!() };
         assert_eq!((plugin_id.as_str(), h.chars().count(), actions[0].title.chars().count()), ("dev.x.focus", HOLD_HEADLINE_MAX, HOLD_LABEL_MAX));
-        assert!(h.starts_with("Focus block over") && focus.hold_actions == ["again"]);
+        assert!(h.starts_with("Focus block over") && focus.hold_actions == [("again".to_string(), None)]);
 
         other.release();
         assert!(matches!(other.outbox.last(), Some(HostRequest::ReleaseNotifications { plugin_id }) if plugin_id == "dev.x.other"));
@@ -2637,6 +2653,34 @@ mod tests {
         assert!(focus.hold_actions.is_empty(), "a new start clears the summary");
         drop(focus);
         assert!(!core.handle().holds_notifications("dev.x.focus"), "a dropped plugin lets go");
+    }
+
+    #[test]
+    fn a_hold_summary_action_may_bring_an_open_tab_forward() {
+        use whold::Host as _;
+        let core = crate::Core::new(&*tempdir("hold-tab"));
+        let tab = core.register_surface("/a").unwrap().surface_id;
+        let caps = Capabilities { notify_hold: true, ..Default::default() };
+        let mut focus = HostState::new("dev.x.focus", &caps, None, None, Some(core.handle()));
+        let act = |id: &str, surface: Option<&str>| whold::SummaryAction { id: id.into(), label: "Go through them".into(), surface: surface.map(Into::into) };
+        focus.start(25).unwrap();
+        let e = focus.set_summary(None, vec![act("go", Some("no-such-tab"))]).unwrap_err();
+        assert!(e.contains("no open tab"), "{e}");
+        assert!(focus.hold_actions.is_empty(), "a refused summary keeps none of its actions");
+        focus.set_summary(Some("Focus block over".into()), vec![act("go", Some(&tab)), act("again", None)]).unwrap();
+        let Some(HostRequest::HoldSummary { actions, .. }) = focus.outbox.last() else { panic!() };
+        assert_eq!(actions.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(), ["Go through them", "Go through them"], "the tab id never shows");
+
+        assert_eq!(focus.hold_surface("go").as_deref(), Some(tab.as_str()));
+        assert_eq!(focus.hold_surface("again"), None, "an action without a tab brings none forward");
+        assert_eq!(focus.hold_surface("other"), None, "only this summary's actions");
+        focus.notify_click("go", HOLD_BINDING).unwrap();
+        assert!(focus.typing_into.is_none(), "choosing it types nothing");
+        focus.disarm();
+
+        core.unregister_surface(&tab);
+        assert_eq!(focus.hold_surface("go"), None, "a tab closed since the summary is not brought forward");
+        assert!(focus.notify_click("go", HOLD_BINDING).is_ok(), "the action still reaches the plugin");
     }
 
     #[test]

@@ -913,6 +913,11 @@ impl CoreHandle {
         lock(&self.state).selected.clone()
     }
 
+    /// Whether `id` is an open tab.
+    pub fn has_surface(&self, id: &str) -> bool {
+        lock(&self.state).surfaces.iter().any(|s| s.id == id)
+    }
+
     pub fn decisions(&self, query: &str, limit: u32) -> Vec<Decision> {
         self.decisions_where(query, limit, |_| true)
     }

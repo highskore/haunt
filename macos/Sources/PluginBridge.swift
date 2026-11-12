@@ -68,6 +68,7 @@ final class PluginBridge {
     func notificationChosen(pluginId: String, action: String, binding: String) {
         if !binding.isEmpty, binding != NotificationHold.binding { openTab?(binding) }
         guard !action.isEmpty else { return }
+        if binding == NotificationHold.binding, let tab = plugins?.holdSurface(pluginId: pluginId, actionId: action) { openTab?(tab) }
         run("plugin \(pluginId) notification action \(action)") {
             try $0.notifyAction(pluginId: pluginId, actionId: action, binding: binding)
         }

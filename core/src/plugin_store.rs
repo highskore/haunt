@@ -952,6 +952,11 @@ impl PluginSet {
         self.plugin(plugin_id)?.hover_hold(held, surface)
     }
 
+    /// The open tab `plugin_id`'s hold summary action `action_id` brings forward before `notify_action`.
+    pub fn hold_surface(&self, plugin_id: &str, action_id: &str) -> Option<String> {
+        self.plugins.iter().find(|(_, p)| p.id() == plugin_id && p.disabled().is_none())?.1.hold_surface(action_id)
+    }
+
     /// The user chose an action on one of `plugin_id`'s notifications.
     pub fn notify_action(&mut self, plugin_id: &str, action_id: &str, binding: &str) -> Result<(), PluginError> {
         self.plugin(plugin_id)?.notify_action(action_id, binding)

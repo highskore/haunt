@@ -346,6 +346,9 @@ interface hold {
   record summary-action {
     id: string,
     label: string,
+    // An open tab's id: choosing the action brings that tab forward (selection only, nothing is typed),
+    // then calls `on-action` as usual. Refused unless the tab is open when the summary is set.
+    surface: option<string>,
   }
   // Holds for `minutes` (1 to 240); haunt releases it then if the plugin hasn't. Starting again
   // moves the end and clears the summary.

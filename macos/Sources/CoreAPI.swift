@@ -42,6 +42,7 @@ protocol PluginsAPI: AnyObject {
     func returnSheetsDue(typed: Bool)
     func appResigned()
     func hoverHold(pluginId: String, held: Bool, surfaceId: String) throws
+    func holdSurface(pluginId: String, actionId: String) -> String?
     func notifyAction(pluginId: String, actionId: String, binding: String) throws
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?)
@@ -153,6 +154,7 @@ final class NoPlugins: PluginsAPI {
     func returnSheetsDue(typed: Bool) {}
     func appResigned() {}
     func hoverHold(pluginId: String, held: Bool, surfaceId: String) throws {}
+    func holdSurface(pluginId: String, actionId: String) -> String? { nil }
     func notifyAction(pluginId: String, actionId: String, binding: String) throws {}
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?) {}
@@ -186,6 +188,7 @@ final class FixturePlugins: PluginsAPI {
     func returnSheetsDue(typed: Bool) {}
     func appResigned() {}
     func hoverHold(pluginId: String, held: Bool, surfaceId: String) throws {}
+    func holdSurface(pluginId: String, actionId: String) -> String? { nil }
     func notifyAction(pluginId: String, actionId: String, binding: String) throws {}
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?) {}
