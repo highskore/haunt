@@ -10,6 +10,9 @@ final class PluginBridge {
     private let write: (PtyRoute) -> Void
     /// A plugin's answer the gate refused, as one line of the host's own text.
     var onRefused: ((String) -> Void)?
+    /// When each (plugin, reason) was last shown: a plugin retrying can't keep the line up.
+    private var refusalShown: [PluginRefusal: Date] = [:]
+    private static let refusalQuiet: TimeInterval = 30
 
     init(core: CoreAPI, write: @escaping (PtyRoute) -> Void) {
         self.core = core
@@ -29,7 +32,10 @@ final class PluginBridge {
                 write(route)
             }
         }
-        for r in core.takePluginRefusals() {
+        let now = Date()
+        refusalShown = refusalShown.filter { now.timeIntervalSince($0.value) < Self.refusalQuiet }
+        for r in core.takePluginRefusals() where refusalShown[r] == nil {
+            refusalShown[r] = now
             onRefused?(Self.refusedLine(r))
         }
     }

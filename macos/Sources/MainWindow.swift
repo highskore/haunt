@@ -10,7 +10,7 @@ private final class RootView: NSView {
     /// The palette mockup's scrim over everything below the title bar.
     let scrim = NSView()
     let agents = AgentsView()
-    /// One line at the foot of the window, for what Haunt refused on the user's behalf.
+    /// What Haunt refused on the user's behalf, at the sidebar's foot so it never covers the terminal.
     let toast = ToastView()
     var sidebarW = Tok.Size.sidebarW
     /// The review inbox covers the sidebar too; a tab's review only the pane.
@@ -62,11 +62,17 @@ private final class RootView: NSView {
     override func layout() {
         super.layout()
         agents.frame = bounds
-        toast.frame = toast.frame(in: bounds)
-        if agentsOn { return }
+        if agentsOn {
+            toast.frame = toast.frame(in: bounds)
+            return
+        }
         let top = TitleBarView.height(zen: sidebarHidden), w = sidebarHidden ? 0 : sidebarW
         titleBar.frame = NSRect(x: 0, y: 0, width: bounds.width, height: top)
         sidebar.frame = NSRect(x: 0, y: top, width: sidebarW, height: bounds.height - top)
+        // Without the sidebar, the title bar's right half: its title sits on the left.
+        toast.frame = sidebarHidden
+            ? toast.frame(in: NSRect(x: bounds.width / 2, y: 0, width: bounds.width / 2, height: top))
+            : toast.frame(in: sidebar.frame)
         pane.frame = NSRect(x: w, y: top, width: bounds.width - w, height: bounds.height - top)
         review?.frame = reviewCoversSidebar ? NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top) : pane.frame
         scrim.frame = NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top)

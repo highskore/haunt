@@ -1,8 +1,8 @@
 import AppKit
 
-/// A line at the foot of the window that fades after a few seconds; a new line replaces the old.
+/// A note that fades after a few seconds, kept off the terminal; a new note replaces the old.
 final class ToastView: NSView {
-    private let label = NSTextField(labelWithString: "")
+    private let label = NSTextField(wrappingLabelWithString: "")
     private var hideWork: DispatchWorkItem?
     private static let pad = NSSize(width: 14, height: 8)
     private static let shown: TimeInterval = 5
@@ -16,6 +16,7 @@ final class ToastView: NSView {
         layer?.cornerRadius = 6
         label.font = Draw.ui(12, .medium)
         label.textColor = Tok.Color.btnFg
+        label.maximumNumberOfLines = 3
         label.lineBreakMode = .byTruncatingTail
         addSubview(label)
         isHidden = true
@@ -25,21 +26,24 @@ final class ToastView: NSView {
 
     override var isFlipped: Bool { true }
 
-    /// Centred near the bottom of `bounds` (a flipped view's), as wide as its text allows.
-    func frame(in bounds: NSRect) -> NSRect {
-        let text = label.intrinsicContentSize
-        let w = min(text.width + 2 * Self.pad.width, bounds.width - 40), h = text.height + 2 * Self.pad.height
-        return NSRect(x: ((bounds.width - w) / 2).rounded(), y: bounds.height - h - 20, width: w, height: h)
+    /// At the foot of `area` (in a flipped parent) and never outside it, its full width less a margin,
+    /// wrapping to fit.
+    func frame(in area: NSRect) -> NSRect {
+        let w = max(area.width - 16, 1)
+        label.preferredMaxLayoutWidth = w - 2 * Self.pad.width
+        let h = min(label.intrinsicContentSize.height + 2 * Self.pad.height, area.height)
+        let margin = min(8, (area.height - h) / 2)
+        return NSRect(x: area.minX + 8, y: area.maxY - h - margin, width: w, height: h)
     }
 
     override func layout() {
         super.layout()
-        label.frame = bounds.insetBy(dx: Self.pad.width, dy: Self.pad.height)
+        label.frame = bounds.insetBy(dx: Self.pad.width, dy: min(Self.pad.height, bounds.height / 4))
     }
 
     func show(_ text: String) {
         label.stringValue = text
-        if let parent = superview { frame = frame(in: parent.bounds) }
+        superview?.needsLayout = true
         isHidden = false
         alphaValue = 1
         hideWork?.cancel()
