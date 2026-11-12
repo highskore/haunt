@@ -649,22 +649,41 @@ fn plain_opt(s: Option<String>, max: usize) -> Option<String> {
     s.map(|s| plain(&s, max)).filter(|s| !s.trim().is_empty())
 }
 
-/// `s` after NFKD with combining marks dropped, lowercased, lookalikes folded (0→o, 1/i/|→l, 5→s, rn→m,
-/// vv→w).
-fn status_fold(s: &str) -> String {
+/// One character of a label as matched: `wild` when it wasn't ASCII, so it stands for any letter.
+#[derive(Clone, Copy, PartialEq)]
+struct Glyph {
+    c: char,
+    wild: bool,
+}
+
+/// `s` as compared: NFKC, lowercased, combining marks dropped, each character mapped to its TR39
+/// confusable skeleton and lowercased again, lookalikes folded (0→o, 1/i/|→l, 5→s, then rn→m, vv→w).
+fn status_fold(s: &str) -> Vec<Glyph> {
     use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
-    let folded: String = s
-        .nfkd()
-        .filter(|&c| !is_combining_mark(c))
-        .flat_map(char::to_lowercase)
-        .map(|c| match c {
-            '0' => 'o',
-            '1' | 'i' | '|' => 'l',
-            '5' => 's',
-            c => c,
-        })
-        .collect();
-    folded.replace("rn", "m").replace("vv", "w")
+    let lower = s.nfkc().collect::<String>().to_lowercase();
+    let mut out: Vec<Glyph> = Vec::new();
+    for c in lower.nfd().filter(|&c| !is_combining_mark(c)) {
+        if status_separator(c) {
+            out.push(Glyph { c: ' ', wild: false });
+            continue;
+        }
+        let mut buf = [0u8; 4];
+        for k in unicode_security::skeleton(c.encode_utf8(&mut buf)).flat_map(char::to_lowercase) {
+            let k = match k {
+                '0' => 'o',
+                '1' | 'i' | '|' => 'l',
+                '5' => 's',
+                k => k,
+            };
+            let g = Glyph { c: k, wild: !c.is_ascii() };
+            match (out.last().copied(), k) {
+                (Some(Glyph { c: 'r', wild: false }), 'n') if !g.wild => *out.last_mut().unwrap() = Glyph { c: 'm', wild: false },
+                (Some(Glyph { c: 'v', wild: false }), 'v') if !g.wild => *out.last_mut().unwrap() = Glyph { c: 'w', wild: false },
+                _ => out.push(g),
+            }
+        }
+    }
+    out
 }
 
 /// Where the sidebar itself breaks text: words split here, and only here.
@@ -672,13 +691,18 @@ fn status_separator(c: char) -> bool {
     c.is_whitespace() || matches!(c, '·' | ':' | '?')
 }
 
-/// The words of `s` (`status_fold`ed), split at whitespace and `status_separator`s with any other
-/// punctuation inside a word dropped, so "Do.ne" is one word; a run of one-letter words is joined ("d o n e").
-fn status_tokens(s: &str) -> Vec<Vec<char>> {
-    let mut tokens: Vec<Vec<char>> = Vec::new();
+/// What a word keeps: letters and digits, and anything non-ASCII as a wildcard.
+fn status_kept(g: &Glyph) -> bool {
+    g.c.is_alphanumeric() || g.wild
+}
+
+/// The words of `s` (`status_fold`ed), split at `status_separator`s with ASCII punctuation inside a word
+/// dropped, so "Do.ne" is one word; a run of one-letter words is joined ("d o n e").
+fn status_tokens(s: &str) -> Vec<Vec<Glyph>> {
+    let mut tokens: Vec<Vec<Glyph>> = Vec::new();
     let mut joining = false;
-    for word in status_fold(s).split(status_separator) {
-        let word: Vec<char> = word.chars().filter(|c| c.is_alphanumeric()).collect();
+    for word in status_fold(s).split(|g| status_separator(g.c)) {
+        let word: Vec<Glyph> = word.iter().copied().filter(status_kept).collect();
         if word.is_empty() {
             continue;
         }
@@ -692,36 +716,45 @@ fn status_tokens(s: &str) -> Vec<Vec<char>> {
     tokens
 }
 
-/// Whether `label` spells one of Haunt's status words or phrases: the sidebar's own (`layout::STATUS_TEXTS`,
-/// and "Waiting" alone) and the Allow/Deny buttons. Refused when a run of its words matches a phrase, apart
-/// or run together, or when its letters and digits alone equal one, or start or end with one at a break
-/// in the label ("Al·low ok"; "allowlist" is fine). A non-ASCII letter matches any letter, so a lookalike
-/// from another script can't slip by.
-pub(crate) fn says_status(label: &str) -> bool {
-    static PHRASES: std::sync::LazyLock<Vec<Vec<Vec<char>>>> = std::sync::LazyLock::new(|| {
+/// `w` reads as `p`: each glyph equal or a wildcard, and at least one equal, so emoji alone spell nothing.
+fn status_same(w: &[Glyph], p: &[char]) -> bool {
+    w.len() == p.len() && w.iter().zip(p).all(|(g, p)| g.c == *p || g.wild) && w.iter().zip(p).any(|(g, p)| g.c == *p && !g.wild)
+}
+
+/// Whether `text` spells one of Haunt's status words or phrases. The sidebar's own (`layout::STATUS_TEXTS`,
+/// and "Waiting" alone) are refused anywhere in its letters and digits, whatever stands between them
+/// ("ok-done-ok", "idler"). The Allow/Deny buttons only as a word of their own, or at the start or end of
+/// the label at a break ("Al·low ok"), so "allowlist ok" is fine.
+pub(crate) fn says_status(text: &str) -> bool {
+    type Phrases = (Vec<Vec<char>>, Vec<Vec<char>>);
+    static PHRASES: std::sync::LazyLock<Phrases> = std::sync::LazyLock::new(|| {
+        let word = |p: &str| status_fold(p).iter().filter(|g| status_kept(g)).map(|g| g.c).collect::<Vec<char>>();
         let waiting = crate::layout::WAITING.split(' ').next();
-        let phrases = crate::layout::STATUS_TEXTS.iter().copied().chain(waiting).chain(["Allow", "Deny"]).map(status_tokens);
-        phrases.flat_map(|p| [vec![p.concat()], p]).collect()
+        (crate::layout::STATUS_TEXTS.iter().copied().chain(waiting).map(word).collect(), ["Allow", "Deny"].map(word).to_vec())
     });
-    let same = |w: &[char], p: &[char]| w.len() == p.len() && w.iter().zip(p).all(|(w, p)| w == p || !w.is_ascii());
-    let words = status_tokens(label);
-    if PHRASES.iter().any(|p| words.windows(p.len()).any(|run| run.iter().zip(p).all(|(w, p)| same(w, p)))) {
+    let (anywhere, buttons) = &*PHRASES;
+    let folded = status_fold(text);
+    let flat: Vec<Glyph> = folded.iter().copied().filter(status_kept).collect();
+    if anywhere.iter().any(|p| flat.windows(p.len()).any(|w| status_same(w, p))) {
         return true;
     }
-    // The whole label's letters and digits, with a break marked wherever anything else stood.
-    let (mut text, mut breaks) = (Vec::new(), vec![true]);
-    for c in status_fold(label).chars() {
-        if c.is_alphanumeric() {
-            text.push(c);
+    if status_tokens(text).iter().any(|w| buttons.iter().any(|p| status_same(w, p))) {
+        return true;
+    }
+    // Where a break stood before each kept glyph, and after the last.
+    let mut breaks = vec![true];
+    for g in &folded {
+        if status_kept(g) {
             breaks.push(false);
         } else if let Some(b) = breaks.last_mut() {
             *b = true;
         }
     }
     *breaks.last_mut().unwrap() = true;
-    PHRASES.iter().filter(|p| p.len() == 1).map(|p| &p[0]).any(|p| {
-        let n = p.len();
-        n <= text.len() && ((same(&text[..n], p) && breaks[n]) || (same(&text[text.len() - n..], p) && breaks[text.len() - n]))
+    let n = flat.len();
+    buttons.iter().any(|p| {
+        let k = p.len();
+        k <= n && ((status_same(&flat[..k], p) && breaks[k]) || (status_same(&flat[n - k..], p) && breaks[n - k]))
     })
 }
 
@@ -2208,10 +2241,12 @@ mod tests {
             "deny", "RUNNING", "idle", "done", "d0ne", "ldle", "|dle", "1DLE", "Waiting for…", "✓ done", "FAILED", "approve?", "needs you later",
             "done 3/4", "CI: d o n e", "fai1ed", "nee\u{1D41D}s you", "runn1ng", "allovv", "WaitingForYou",
             "Al·low", "Do.ne", "Allo\u{0353}w", "Al·low ok", "ok De·ny", "d\u{f3}ne", "ap-prove",
+            "don\u{212E}", "\u{2373}dle", "d\u{25CB}ne", "D\u{2228}NE", "ok-done-ok", "a.done.b", "[x]done[x]", "x—done—x",
+            "idler", "abandoned", "undone·x", "d\u{043E}ne", "\u{FF44}one",
         ] {
             assert!(decoration(d(bad, wrows::Tone::Dim)).is_err(), "{bad:?}");
         }
-        for ok in ["CI 7/9", "spec 11/18", "3 edits", "idler", "✓", "abandoned", "wait 2m", "allowlist", "allowlist ok", "undone·x"] {
+        for ok in ["CI 7/9", "spec 11/18", "3 edits", "✓", "wait 2m", "allowlist", "allowlist ok", "🚀🚀🚀🚀", "dev ✓", "denylisted"] {
             let dec = decoration(d(ok, wrows::Tone::Warn)).unwrap();
             assert_eq!(dec.spark.unwrap().tone, Tone::Text, "the sparkline may keep text");
         }
