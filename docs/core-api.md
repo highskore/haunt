@@ -291,10 +291,11 @@ id = "glass"                      # what `theme = "glass"` in config.toml names;
 file = "theme.toml"               # the theme file, as in docs/themes.md
 fonts = ["fonts/Exo2.ttf"]        # .ttf, .otf or .ttc
 licenses = ["OFL.txt"]            # required with fonts
+images = ["frame.png"]            # PNGs its [[layer]] tables draw: up to 8, beside `file`, [a-z0-9-].png
 ```
 
 - Paths are relative and plain (no `..`, no absolute path). A file that is a symlink, or sits in a folder that leads out of the plugin's folder, is refused.
-- Caps: 256 KB for the theme file and each licence, 8 MB a font, 24 MB in all.
+- Caps: 256 KB for the theme file, each licence and each image, 8 MB a font, 24 MB in all.
 - `install` copies exactly the manifest and those files into `plugins/<id>/` and pins one digest over them (`sha256_files` in the lockfile, with `sha256_wasm` empty). `load_all` re-hashes them, so a changed file stops the theme loading until `haunt plugin approve <id>`.
 - Two plugins with the same theme id: the second one is a load error.
 - The app registers a theme's fonts for its own process only (`CTFontManager`, `.process` scope), and only while that theme or one it extends is on screen. A theme in `~/.haunt/themes` with the same id wins over the plugin's.

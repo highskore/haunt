@@ -21,6 +21,8 @@ pub struct ThemePack {
     pub file: String,
     pub fonts: Vec<String>,
     pub licenses: Vec<String>,
+    /// PNGs its `[[layer]]` tables draw, beside `file` with plain `[a-z0-9-].png` names.
+    pub images: Vec<String>,
 }
 
 /// An installed theme, with absolute paths inside its plugin's folder.
@@ -58,7 +60,7 @@ fn strings(t: &toml::Table, key: &str) -> Result<Vec<String>, ManifestError> {
 pub fn theme_pack(m: &Manifest) -> Result<Option<ThemePack>, ManifestError> {
     let Some(v) = m.contributes.get("theme") else { return Ok(None) };
     let Some(t) = v.as_table() else { return err("[contributes.theme] must be a table".into()) };
-    if let Some(k) = t.keys().find(|k| !["id", "file", "fonts", "licenses"].contains(&k.as_str())) {
+    if let Some(k) = t.keys().find(|k| !["id", "file", "fonts", "licenses", "images"].contains(&k.as_str())) {
         return err(format!("unknown key {k:?} in [contributes.theme]"));
     }
     let id = t.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
@@ -66,8 +68,8 @@ pub fn theme_pack(m: &Manifest) -> Result<Option<ThemePack>, ManifestError> {
         return err(format!("[contributes.theme] id {id:?} must be lowercase letters, digits and '-', and not \"bw\""));
     }
     let file = t.get("file").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
-    let (fonts, licenses) = (strings(t, "fonts")?, strings(t, "licenses")?);
-    for p in std::iter::once(&file).chain(&fonts).chain(&licenses) {
+    let (fonts, licenses, images) = (strings(t, "fonts")?, strings(t, "licenses")?, strings(t, "images")?);
+    for p in std::iter::once(&file).chain(&fonts).chain(&licenses).chain(&images) {
         if !plain(p) {
             return err(format!("[contributes.theme] path {p:?} must be relative and inside the plugin folder"));
         }
@@ -81,7 +83,17 @@ pub fn theme_pack(m: &Manifest) -> Result<Option<ThemePack>, ManifestError> {
     if !fonts.is_empty() && licenses.is_empty() {
         return err("[contributes.theme] fonts need their licence files in licenses".into());
     }
-    Ok(Some(ThemePack { id, file, fonts, licenses }))
+    let dir = Path::new(&file).parent();
+    if let Some(i) = images.iter().find(|i| {
+        let p = Path::new(i);
+        p.parent() != dir || !p.file_name().and_then(|n| n.to_str()).is_some_and(crate::theme_layers::valid_png_name)
+    }) {
+        return err(format!("[contributes.theme] image {i:?} must be a [a-z0-9-].png beside the theme file"));
+    }
+    if images.len() > crate::theme_layers::MAX_IMAGES {
+        return err(format!("[contributes.theme] at most {} images", crate::theme_layers::MAX_IMAGES));
+    }
+    Ok(Some(ThemePack { id, file, fonts, licenses, images }))
 }
 
 /// A manifest without `entry` must be a theme and nothing else.
@@ -101,7 +113,10 @@ pub fn read_files(dir: &Path, pack: &ThemePack) -> Result<Vec<(String, Vec<u8>)>
     let root = dir.canonicalize().map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     let mut total = 0;
-    let caps = std::iter::once((&pack.file, THEME_CAP)).chain(pack.fonts.iter().map(|f| (f, FONT_CAP))).chain(pack.licenses.iter().map(|l| (l, THEME_CAP)));
+    let caps = std::iter::once((&pack.file, THEME_CAP))
+        .chain(pack.fonts.iter().map(|f| (f, FONT_CAP)))
+        .chain(pack.licenses.iter().map(|l| (l, THEME_CAP)))
+        .chain(pack.images.iter().map(|i| (i, crate::theme_layers::MAX_PNG_BYTES as u64)));
     for (rel, cap) in caps {
         let path = root.join(rel);
         let parent = path.parent().and_then(|p| p.canonicalize().ok());
@@ -212,6 +227,9 @@ mod tests {
             ("id = \"g\"\nfile = \"t.toml\"\nfonts = [\"a.woff\"]\nlicenses = [\"L\"]", ".ttf, .otf or .ttc"),
             ("id = \"g\"\nfile = \"t.toml\"\nfonts = [\"a.ttf\"]", "licence files"),
             ("id = \"g\"\nfile = \"t.toml\"\nscript = \"x\"", "unknown key"),
+            ("id = \"g\"\nfile = \"t.toml\"\nimages = [\"art/a.png\"]", "beside the theme file"),
+            ("id = \"g\"\nfile = \"t.toml\"\nimages = [\"A.png\"]", "beside the theme file"),
+            ("id = \"g\"\nfile = \"t.toml\"\nimages = [\"a.svg\"]", "beside the theme file"),
         ] {
             let e = manifest(bad, "theme = true", "").unwrap_err().0;
             assert!(e.contains(why), "{bad}: {e}");
@@ -226,6 +244,28 @@ mod tests {
         assert!(manifest(t, "theme = true", "entry = \"p.wasm\"").unwrap_err().0.contains("leave out entry"));
         let none = Manifest::parse("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.5\"\n[capabilities]\ntheme = true\n");
         assert!(none.unwrap_err().0.contains("must contribute a theme"));
+    }
+
+    #[test]
+    fn a_themes_images_are_copied_pinned_and_never_followed_through_a_link() {
+        let dir = TempDir::created("pack-images");
+        let store = Store::open(&dir.join("home")).unwrap();
+        let host = PluginHost::new().unwrap();
+        let src = pack(&dir, &format!("{THEME}images = [\"mark.png\"]\n"));
+        fs::write(src.join("mark.png"), "png").unwrap();
+        fs::write(src.join("other.png"), "not listed").unwrap();
+        assert_eq!(store.install(&src, &host, &mut |_| true).unwrap(), Installed::New);
+        let installed = store.plugins_dir().join("dev.haunt.theme-glass");
+        assert_eq!(fs::read(installed.join("mark.png")).unwrap(), b"png");
+        assert!(!installed.join("other.png").exists(), "only the listed files are copied");
+        fs::write(src.join("mark.png"), "changed").unwrap();
+        let read = read_files(&src, &theme_pack(&Manifest::parse(&fs::read_to_string(src.join(MANIFEST)).unwrap()).unwrap()).unwrap().unwrap()).unwrap();
+        assert!(read.iter().any(|(rel, b)| rel == "mark.png" && b == b"changed"), "the image is part of the pinned files");
+
+        fs::remove_file(src.join("mark.png")).unwrap();
+        std::os::unix::fs::symlink(dir.join("home"), src.join("mark.png")).unwrap();
+        let pack = theme_pack(&Manifest::parse(&fs::read_to_string(src.join(MANIFEST)).unwrap()).unwrap()).unwrap().unwrap();
+        assert!(read_files(&src, &pack).unwrap_err().contains("not a regular file"));
     }
 
     #[test]

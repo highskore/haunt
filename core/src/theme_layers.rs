@@ -642,7 +642,7 @@ fn valid_id(s: &str) -> bool {
     (1..=MAX_ID).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-fn valid_png_name(s: &str) -> bool {
+pub(crate) fn valid_png_name(s: &str) -> bool {
     s.strip_suffix(".png").is_some_and(valid_id)
 }
 

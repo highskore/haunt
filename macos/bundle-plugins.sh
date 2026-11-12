@@ -175,7 +175,7 @@ print(pid)
 print(entry)
 if not entry:
     t = m.get("contributes", {}).get("theme", {})
-    for f in [t.get("file", "")] + t.get("fonts", []) + t.get("licenses", []):
+    for f in [t.get("file", "")] + t.get("fonts", []) + t.get("licenses", []) + t.get("images", []):
         if not f or not plain(f):
             sys.exit(f"{sys.argv[1]}: {f!r} is not a file inside the plugin folder")
         print(f)
