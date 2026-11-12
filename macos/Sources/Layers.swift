@@ -104,9 +104,10 @@ enum Layers {
             "titlebar": (["color.window.bg"], ["app.title.fg", "app.title.meta"]),
             "row.selected": (sidebar + ["color.row.selected"], ["color.text.primary", "color.text.sub", "color.text.meta", "color.needs"]),
             "palette.row.selected": (palette + ["color.palette.sel"], ["color.palette.ink", "app.palette.pill.ink"]),
+            "palette.caption": (palette + ["app.row.select.fill"], ["app.row.select.ink"]),
         ]
         for s in ["sidebar", "sidebar.footer", "label.group", "row", "row.hover", "status.needs"] { t[s] = (sidebar, sidebarText) }
-        for s in ["palette", "palette.caption", "palette.field", "palette.row.hover", "button", "button.default"] { t[s] = (palette, paletteText) }
+        for s in ["palette", "palette.field", "palette.row.hover", "button", "button.default"] { t[s] = (palette, paletteText) }
         return t
     }()
 

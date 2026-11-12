@@ -665,10 +665,13 @@ final class PaletteView: NSView {
         let cap = NSRect(x: 3, y: 3, width: bounds.width - 6, height: Self.captionH)
         let stops = app.titlebarFill.compactMap { NSColor(themeHex: $0) }
         if stops.count > 1, let g = NSGradient(colors: stops) { g.draw(in: cap, angle: 0) } else { Draw.fill(cap, app.rowSelectFill) }
-        if let header {
-            let f = Draw.ui(Tok.Size.paletteSmallFont, .bold)
-            Draw.text(Draw.line(header, f, app.rowSelectInk), font: f, x: cap.minX + 4, top: cap.minY + (cap.height - Tok.Size.paletteSmallFont * lh) / 2,
-                      lineHeight: Tok.Size.paletteSmallFont * lh, in: ctx)
+        let state = Layers.state(self)
+        let headerLine = header.map { Draw.line($0, Draw.ui(Tok.Size.paletteSmallFont, .bold), app.rowSelectInk) }
+        let headerRun = headerLine.map { NSRect(x: cap.minX + 4, y: cap.minY + (cap.height - Tok.Size.paletteSmallFont * lh) / 2, width: Draw.width($0),
+                                                height: Tok.Size.paletteSmallFont * lh) }
+        Layers.draw("palette.caption", cap, text: headerRun.map { [Layers.Run(rect: $0, ink: app.rowSelectInk)] } ?? [], state: state, in: ctx)
+        if let headerLine, let r = headerRun {
+            Draw.text(headerLine, font: Draw.ui(Tok.Size.paletteSmallFont, .bold), x: r.minX, top: r.minY, lineHeight: r.height, in: ctx)
         }
         let top = edge + headH, pad = padX
         if let message {
@@ -701,11 +704,14 @@ final class PaletteView: NSView {
             }
             let line = Draw.line(label, f, Tok.Color.paletteInk), lineH = Tok.Size.paletteSmallFont * lh
             let tx = (r.midX - Draw.width(line) / 2).rounded(), ty = r.minY + (r.height - lineH) / 2
+            Layers.draw(isDefault ? "button.default" : "button", r,
+                        text: [Layers.Run(rect: NSRect(x: tx, y: ty, width: Draw.width(line), height: lineH), ink: Tok.Color.paletteInk)], state: state, in: ctx)
             if isDefault { Draw.dottedRing(NSRect(x: tx - 3, y: ty - 1, width: Draw.width(line) + 6, height: lineH + 2).integral, .black) }
             Draw.text(line, font: f, x: tx, top: ty, lineHeight: lineH, in: ctx)
         }
         let close = dialogClose
         Draw.bevel(close, "button")
+        Layers.draw("button", close, text: [], state: state, in: ctx)
         let x = NSBezierPath(), c = close.insetBy(dx: 4.5, dy: 4)
         x.move(to: NSPoint(x: c.minX, y: c.minY)); x.line(to: NSPoint(x: c.maxX, y: c.maxY))
         x.move(to: NSPoint(x: c.maxX, y: c.minY)); x.line(to: NSPoint(x: c.minX, y: c.maxY))

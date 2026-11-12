@@ -40,7 +40,9 @@ enum ThemeCheck {
             Layers.draw("pane.backdrop", pane, within: pane, state: state, in: ctx)
             Layers.draw("pane.frame", pane.insetBy(dx: -4, dy: -4), exclude: pane, state: state, in: ctx)
             let bar = CGRect(x: 0, y: 0, width: 1100, height: top)
-            Layers.draw("titlebar", bar, text: runs(CGRect(x: 400, y: 0, width: 300, height: top), Tok.App.titleFg, Tok.App.titleMeta), state: state, in: ctx)
+            Layers.draw("titlebar", bar, text: Theme.current.effects.titlebarStyle == "caption"
+                            ? runs(CGRect(x: 24, y: 0, width: 300, height: Tok.Size.titlebarH), Theme.current.app.rowSelectInk)
+                            : runs(CGRect(x: 400, y: 0, width: 300, height: top), Tok.App.titleFg, Tok.App.titleMeta), state: state, in: ctx)
             for i in 0..<3 {
                 let d = Tok.Size.lightsD
                 Layers.draw("lights", CGRect(x: Tok.Size.titlebarPadx + CGFloat(i) * (d + Tok.Size.lightsGap), y: (top - d) / 2, width: d, height: d),
@@ -71,14 +73,18 @@ enum ThemeCheck {
             let pal = CGRect(x: 700, y: 300, width: 380, height: 380)
             Layers.draw("palette", pal, state: state, in: ctx)
             Layers.draw("palette.field", CGRect(x: 700, y: 300, width: 380, height: 40), state: state, in: ctx)
-            Layers.draw("palette.caption", CGRect(x: 700, y: 300, width: 380, height: 20), state: state, in: ctx)
+            Layers.draw("palette.caption", CGRect(x: 703, y: 303, width: 374, height: 18), text: runs(CGRect(x: 707, y: 305, width: 120, height: 14), Theme.current.app.rowSelectInk),
+                        state: state, in: ctx)
             let entry = CGRect(x: 704, y: 360, width: 372, height: 36)
             Layers.draw("palette.row.selected", entry, text: Theme.current.effects.paletteSelection == "pill"
                         ? runs(entry.insetBy(dx: 12, dy: 0), Theme.current.app.palettePillInk, Theme.current.app.palettePillMute)
                         : runs(entry.insetBy(dx: 12, dy: 0), Tok.Color.paletteInk, Tok.Color.paletteMute),
                         state: state, in: ctx)
             Layers.draw("palette.row.hover", entry, text: runs(entry.insetBy(dx: 12, dy: 0), Tok.Color.paletteInk, Tok.Color.paletteMute), state: state, in: ctx)
-            for slot in ["button", "button.default"] { Layers.draw(slot, CGRect(x: 980, y: 640, width: 80, height: 24), state: state, in: ctx) }
+            for slot in ["button", "button.default"] {
+                Layers.draw(slot, CGRect(x: 980, y: 640, width: 75, height: 23), text: runs(CGRect(x: 1006, y: 644, width: 24, height: 15), Tok.Color.paletteInk),
+                            state: state, in: ctx)
+            }
         }
     }
 }
