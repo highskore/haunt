@@ -12,9 +12,14 @@ final class KeyGuard {
     /// When a plugin last brought each tab forward; one switch never shortens another tab's window.
     private var switched: [String: TimeInterval] = [:]
 
-    /// A terminal became first responder: no key held before counts as pressed in it.
+    /// A terminal became first responder, or a window became key: no key held before counts as pressed in it.
     func focusMoved() {
         pressedIn = nil
+    }
+
+    /// Any keyDown in the app: one a terminal doesn't get (the palette's Return, a sheet's) ends the hold.
+    func sawKeyDown(inTerminal: Bool) {
+        if !inTerminal { pressedIn = nil }
     }
 
     /// A plugin asks for `surfaceId` (focusTab, a panel button's or hold summary's tab, a notification's

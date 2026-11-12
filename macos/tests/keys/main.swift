@@ -442,6 +442,16 @@ do {
     check(!key("a", "A", needs, at: 40.2), "A then B keeps A's window")
     check(!key("b", "B", needs, at: 40.3), "and B's")
     check(asked == 4, "the core is asked only inside a window (\(asked))")
+
+    // Typing in B, then Return in the palette, whose command focuses B, already selected: no
+    // becomeFirstResponder, and the first repeat comes after the window.
+    check(key("b", "B", idle, at: 50), "typing in B")
+    g.sawKeyDown(inTerminal: false)
+    g.pluginOpen("B", at: 50.2) { _ in true }
+    check(!key("b", "B", repeat: true, needs, at: 50.7), "the palette's held Return never repeats into the tab already selected")
+    check(key("b", "B", idle, at: 51), "a fresh press there goes through")
+    g.sawKeyDown(inTerminal: true)
+    check(key("b", "B", repeat: true, idle, at: 51.1), "a terminal's own key keeps its hold")
 }
 
 print(failures == 0 ? "keys: all passed" : "keys: \(failures) failed")

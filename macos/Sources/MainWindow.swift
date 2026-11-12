@@ -169,6 +169,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
     private let root = RootView()
     var tabs: [Tab] { store.tabs }
     private var observers: [NSObjectProtocol] = []
+    private var keyMonitor: Any?
     /// The core's branch lookup can stall on a dead mount the shell's cwd points at; serial keeps each surface's updates in order.
     private let infoQueue = DispatchQueue(label: "haunt.surface-info", qos: .utility)
     /// For when a running subagent's elapsed time next reads differently: one timer, its fire date moved
@@ -279,6 +280,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
             guard let view = n.object as? Ghostty.SurfaceView else { return }
             self?.surfaceWantsClose(view, processAlive: n.userInfo?["process_alive"] as? Bool ?? false)
         })
+        // A key pressed in the palette, a sheet or a panel, or a window becoming key, starts no hold a
+        // terminal may repeat: even into the tab that was already selected, which never re-becomes first responder.
+        observers.append(nc.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { _ in
+            KeyGuard.shared.focusMoved()
+        })
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
+            KeyGuard.shared.sawKeyDown(inTerminal: e.window?.firstResponder is HauntSurfaceView)
+            return e
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
