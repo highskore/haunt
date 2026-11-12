@@ -2976,19 +2976,22 @@ mod tests {
         std::fs::write(home.join("proj/src/a.rs"), "abc").unwrap();
         let core = crate::Core::new(&*dir.join("haunt"));
         let tab = core.register_surface("/a").unwrap().surface_id;
-        // The walk's report waits until the test lets it through, as a slow filesystem would.
+        // The walk's report waits until the test lets it through, as a slow filesystem would; a tree() that
+        // waited for it would pass the timeout and report early, failing below rather than hanging.
         let (go, gate) = mpsc::channel::<()>();
         let (done_tx, done) = mpsc::channel::<ExecDone>();
         let gate = Mutex::new(gate);
         core.handle().set_exec_sink(Some(Arc::new(move |d| {
-            gate.lock().unwrap().recv().unwrap();
-            done_tx.send(d).unwrap();
+            let _ = gate.lock().unwrap().recv_timeout(Duration::from_secs(5));
+            let _ = done_tx.send(d);
         })));
         let mut p = arming_plugin(&core);
         let st = p.store.data_mut();
         st.fs.set_home(&home);
         assert!(st.fs.add_cwd(home.join("proj").to_str().unwrap()));
+        let started = Instant::now();
         let job = st.tree(home.join("proj").to_str().unwrap().into(), 2).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2), "tree() returns before the walk reports");
 
         p.run_command("https://github.com/o/r/pull/1", true).unwrap();
         assert_eq!(effects(&mut p).2, [tab], "a command runs while the walk is out");
