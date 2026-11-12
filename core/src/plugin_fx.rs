@@ -22,9 +22,10 @@ pub(crate) enum Slot {
     Title,
 }
 
-/// Who owns each `Slot`, and the Dock images waiting to be decoded, shared by every plugin of one set.
+/// Who owns each `Slot`, the Dock images waiting to be decoded, and when the last were queued, shared by every
+/// plugin of one set.
 #[derive(Debug, Clone, Default)]
-pub struct Stage(Arc<Mutex<Vec<(Slot, String)>>>, Arc<Mutex<Vec<DockBatch>>>);
+pub struct Stage(Arc<Mutex<Vec<(Slot, String)>>>, Arc<Mutex<Vec<DockBatch>>>, Arc<Mutex<Option<Instant>>>);
 
 /// One plugin's checked PNGs, by id, for `decode_dock` once the plugin call and the set lock are over; none
 /// drops the plugin's images.
@@ -42,6 +43,16 @@ impl Stage {
             Some(b) => b.pngs = pngs,
             None => q.push(DockBatch { plugin_id: plugin.to_owned(), pngs }),
         }
+    }
+
+    /// One image batch a second across all the set's plugins: the app decodes them on its main thread.
+    fn images_due(&self) -> bool {
+        let mut last = crate::sync::lock(&self.2);
+        if last.is_some_and(|t| t.elapsed() < DOCK_IMAGES_EVERY) {
+            return false;
+        }
+        *last = Some(Instant::now());
+        true
     }
 
     /// The images waiting to be decoded, for `decode_dock`.
@@ -116,6 +127,7 @@ pub const DOCK_PNG_MAX: usize = 1 << 20;
 /// Pixels each way: a Dock tile at 2x.
 pub const DOCK_PIXELS_MAX: u32 = 512;
 const DOCK_ID_MAX: usize = 32;
+const DOCK_IMAGES_EVERY: Duration = Duration::from_secs(1);
 const SHOWS_PER_SEC: usize = 4;
 
 /// One plugin's per-instance state for these imports.
@@ -139,7 +151,7 @@ impl Default for Fx {
     fn default() -> Self {
         Self {
             dock_images: Vec::new(),
-            dock_images_rate: Rate::new(1, Duration::from_secs(1)),
+            dock_images_rate: Rate::new(1, DOCK_IMAGES_EVERY),
             dock_rate: Rate::new(SHOWS_PER_SEC, Duration::from_secs(1)),
             glow_rate: Rate::new(SHOWS_PER_SEC, Duration::from_secs(1)),
             title_rate: Rate::new(SHOWS_PER_SEC, Duration::from_secs(1)),
@@ -322,6 +334,9 @@ impl wdock::Host for HostState {
         }
         if !self.fx.dock_images_rate.ok() {
             return Err("images at most once a second".into());
+        }
+        if !self.stage.images_due() {
+            return Err("images at most once a second across all plugins".into());
         }
         // Decoding waits for the app's drain (`decode_dock`), off this plugin's CPU budget.
         self.fx.dock_images = images.iter().map(|(id, _)| id.clone()).collect();
@@ -690,10 +705,21 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn one_image_batch_a_second_across_all_plugins() {
+        let stage = Stage::default();
+        let (mut a, mut b) = (state("dev.haunt.a", &stage), state("dev.haunt.b", &stage));
+        wdock::Host::images(&mut a, vec![("idle".into(), png(8, 8, &[]))]).unwrap();
+        let e = wdock::Host::images(&mut b, vec![("idle".into(), png(8, 8, &[]))]).unwrap_err();
+        assert!(e.contains("across all plugins"), "{e}");
+        assert_eq!(stage.take_dock().len(), 1, "the main thread decodes one batch a second at most");
+    }
+
+    #[test]
     fn the_first_plugin_to_show_owns_the_dock_tile_until_it_lets_go() {
         let stage = Stage::default();
         let (mut a, mut b) = (state("dev.haunt.a", &stage), state("dev.haunt.b", &stage));
         for st in [&mut a, &mut b] {
+            *crate::sync::lock(&stage.2) = None;
             wdock::Host::images(st, vec![("idle".into(), png(64, 64, &[])), ("blink".into(), png(64, 64, &[]))]).unwrap();
         }
         assert!(wdock::Host::show(&mut a, Some("nope".into()), None, None).unwrap_err().contains("no image"));
