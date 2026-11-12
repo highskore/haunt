@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 mkdir -p build
-swiftc -module-name PluginFxTest macos/Sources/PluginFx.swift macos/Sources/Tokens.swift macos/Sources/TokApp.swift macos/Sources/Theme.swift \
+swiftc -module-name PluginFxTest macos/Sources/PluginFx.swift macos/Sources/Tokens.swift macos/Sources/TokApp.swift macos/Sources/Theme.swift macos/Sources/Layers.swift \
   macos/Sources/Effects.swift macos/Sources/Config.swift macos/Sources/Blank.swift macos/Sources/Keys.swift macos/Sources/HauntAlert.swift \
   macos/tests/pluginfx/main.swift -o build/pluginfx-test
 build/pluginfx-test
