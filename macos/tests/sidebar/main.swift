@@ -124,6 +124,31 @@ do {
     check(changed(render(rows), haunt) == 0, "with no layers, a theme's \"none\" selection and bar are drawn as Haunt's")
     Theme.current = Theme()
 }
+do {
+    // A track that drew, with no fill layer: Haunt's bar stands in, and the track's layers are drawn once.
+    Theme.current.effects.progressStyle = "none"
+    let track = [LayerSpec(id: "t", slot: "bar.track", prims: [PrimSpec(kind: "rect", fill: "#ffffff20")])]
+    Layers.set(Layers.resolve(track, images: [], theme: Theme.current).0, source: LayerSource(specs: track))
+    var tracks = 0
+    Layers.recorder = { slot, _ in if slot == "bar.track" { tracks += 1 } }
+    _ = render(rows)
+    Layers.recorder = nil
+    check(tracks == 1, "the track's layers are drawn once: \(tracks)")
+    // The fallback selection is under the needs word too: in its own colour, the needs word's layers are skipped.
+    Theme.current.effects.rowSelect = "none"
+    Theme.current.color.rowSelected = Tok.Color.needs
+    var waiting = busy
+    waiting.needsYou = true
+    waiting.statusText = "needs you"
+    let one = SidebarView(frame: NSRect(x: 0, y: 0, width: 250, height: 200))
+    one.snapshot = SidebarSnapshot(groups: [SidebarGroup(id: "g", label: "", rows: [waiting])], colorStyle: .dot)
+    let needsLayer = [LayerSpec(id: "n", slot: "status.needs", prims: [PrimSpec(kind: "rect", fill: "#00000001")])]
+    Layers.set(Layers.resolve(needsLayer, images: [], theme: Theme.current).0, source: LayerSource(specs: needsLayer))
+    _ = render(one)
+    check(Layers.skipped.contains { $0.hasPrefix("layers on status.needs ") }, "the fallback fill is under the needs word: \(Layers.skipped)")
+    Layers.set([], source: LayerSource())
+    Theme.current = Theme()
+}
 
 print(failures == 0 ? "sidebar: all passed" : "sidebar: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

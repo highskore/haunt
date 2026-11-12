@@ -625,9 +625,10 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let rowClip = box.intersection(bounds)
         Layers.draw("row", box, within: rowClip, text: text, base: base, state: state, in: ctx)
         if row.selected && !Layers.draw("row.selected", box, within: rowClip, text: text, base: base, state: state, in: ctx) && fx.rowSelect == "none" {
-            // The theme's layers were the selection; with them off or skipped, Haunt's fill stands in.
+            // The theme's layers were the selection; with them off or skipped, Haunt's fill stands in, under the status too.
             Tok.Color.rowSelected.setFill()
             shape.fill()
+            base.append(Tok.Color.rowSelected)
         }
         if hover && !row.selected { Layers.draw("row.hover", box, within: rowClip, text: text, base: base, state: state, in: ctx) }
         let gapY = Tok.Size.rowGap[0], gapX = Tok.Size.rowGap[1]
@@ -728,9 +729,11 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     private func drawBar(_ track: NSRect, fill: NSRect, band: NSRect) {
         let fx = Theme.current.effects, r = min(fx.barRadius, track.height / 2)
         let ctx = NSGraphicsContext.current?.cgContext
+        var trackDrawn = false
         if fx.progressStyle == "none", let ctx {
             // The theme's layers are the bar; if they don't draw, Haunt's plain bar stands in.
-            if Layers.draw("bar.track", track, within: band, in: ctx) && (fill.width == 0 || Layers.draw("bar.fill", fill, within: band, in: ctx)) { return }
+            trackDrawn = Layers.draw("bar.track", track, within: band, in: ctx)
+            if trackDrawn && (fill.width == 0 || Layers.draw("bar.fill", fill, within: band, in: ctx)) { return }
         }
         defer { if let ctx, fill.width > 0 { Layers.draw("bar.fill", fill, within: band, in: ctx) } }
         if fx.progressStyle == "segments" {
@@ -755,13 +758,13 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         }
         guard r > 0 || fx.barGlow else {
             Draw.fill(track, Tok.Color.barTrack)
-            if let ctx { Layers.draw("bar.track", track, within: band, in: ctx) }
+            if let ctx, !trackDrawn { Layers.draw("bar.track", track, within: band, in: ctx) }
             Draw.fill(fill, Tok.Color.barFill)
             return
         }
         Tok.Color.barTrack.setFill()
         NSBezierPath(roundedRect: track, xRadius: r, yRadius: r).fill()
-        if let ctx { Layers.draw("bar.track", track, within: band, in: ctx) }
+        if let ctx, !trackDrawn { Layers.draw("bar.track", track, within: band, in: ctx) }
         guard fill.width > 0 else { return }
         NSGraphicsContext.saveGraphicsState()
         if fx.barGlow {
