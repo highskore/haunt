@@ -27,7 +27,7 @@ mod bindings {
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
-    allowlist as wallow, clock as wclock, exec as wexec, hold as whold, keys as wkeys, sound as wsound, speech as wspeech, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
+    allowlist as wallow, clock as wclock, exec as wexec, hold as whold, keys as wkeys, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
     sidebar as wside, theme as wtheme, timer as wtimer, typing as wtyping, types as wit,
 };
 pub(crate) use bindings::haunt::plugin::panel as wpanel;
@@ -44,9 +44,6 @@ const MAX_PALETTE: usize = 64;
 const MAX_OUTBOX: usize = 256;
 const MAX_NOTIFIED: usize = 64;
 pub const MAX_KEYS: usize = 8;
-const SOUNDS_PER_SEC: usize = 4;
-pub const SAY_MAX: usize = 200;
-const SAY_EVERY: Duration = Duration::from_secs(2);
 const MAX_LOGS: usize = 1000;
 const MAX_STR: usize = 4096;
 /// Characters, not bytes, of a registered command or mode title.
@@ -88,14 +85,6 @@ pub struct PluginKey {
     pub id: String,
     /// Canonical, as `chord::canonical_with_cmd` spells it.
     pub chord: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
-pub enum SoundName {
-    Chime,
-    Bell,
-    Rain,
 }
 
 /// The decision-log markers: open square for your answers, filled for a plugin's, round for one that lapsed.
@@ -142,13 +131,6 @@ pub enum HostRequest {
     ClosePanel { plugin_id: String, id: String },
     /// The plugin bound or unbound a key: the app rebuilds its key map from `PluginSet::keys`.
     KeysChanged { plugin_id: String },
-    /// One shot; `pitch` in semitones, -12 to 12; `volume` 0 to 1.
-    PlaySound { plugin_id: String, sound: SoundName, pitch: i32, volume: f32 },
-    /// The plugin's one loop at `level`, 0 to 1; 0 stops it.
-    Ambient { plugin_id: String, sound: SoundName, level: f32 },
-    /// Plain text, at most `SAY_MAX` characters; it cuts off whatever was being said.
-    Say { plugin_id: String, text: String },
-    StopSpeech { plugin_id: String },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -274,10 +256,6 @@ pub struct HostState {
     exec: Vec<String>,
     /// Jobs started and not yet reported.
     exec_jobs: Vec<u64>,
-    sound_times: VecDeque<Instant>,
-    /// The loop playing, if any.
-    ambient: Option<SoundName>,
-    said_at: Option<Instant>,
 }
 
 impl Drop for HostState {
@@ -324,9 +302,6 @@ impl HostState {
             keys: Vec::new(),
             exec: caps.exec.clone(),
             exec_jobs: Vec::new(),
-            sound_times: VecDeque::new(),
-            ambient: None,
-            said_at: None,
             events: EventGrant { details: caps.event_details, answers: caps.pty_write },
         }
     }
@@ -702,16 +677,6 @@ impl HostState {
         }
     }
 
-    /// A disabled plugin falls silent.
-    fn hush(&mut self) {
-        if let Some(sound) = self.ambient.take() {
-            self.outbox.push(HostRequest::Ambient { plugin_id: self.id.clone(), sound, level: 0.0 });
-        }
-        if self.said_at.take().is_some() {
-            self.outbox.push(HostRequest::StopSpeech { plugin_id: self.id.clone() });
-        }
-    }
-
     /// A disabled plugin's keys go back to the terminal.
     fn drop_keys(&mut self) {
         if !std::mem::take(&mut self.keys).is_empty() {
@@ -782,64 +747,6 @@ impl wkeys::Host for HostState {
         if self.keys.len() != before {
             self.outbox.push(HostRequest::KeysChanged { plugin_id: self.id.clone() });
         }
-    }
-}
-
-fn sound_name(n: wsound::Name) -> SoundName {
-    match n {
-        wsound::Name::Chime => SoundName::Chime,
-        wsound::Name::Bell => SoundName::Bell,
-        wsound::Name::Rain => SoundName::Rain,
-    }
-}
-
-fn unit(x: f32, what: &str) -> Result<f32, String> {
-    if (0.0..=1.0).contains(&x) { Ok(x) } else { Err(format!("{what} is 0 to 1")) }
-}
-
-impl wsound::Host for HostState {
-    fn play(&mut self, sound: wsound::Name, pitch: i32, volume: f32) -> Result<(), String> {
-        if !(-12..=12).contains(&pitch) {
-            return Err("pitch is -12 to 12 semitones".into());
-        }
-        let volume = unit(volume, "volume")?;
-        let now = Instant::now();
-        while self.sound_times.front().is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(1)) {
-            self.sound_times.pop_front();
-        }
-        if self.sound_times.len() >= SOUNDS_PER_SEC {
-            return Err(format!("at most {SOUNDS_PER_SEC} sounds a second"));
-        }
-        self.request(HostRequest::PlaySound { plugin_id: self.id.clone(), sound: sound_name(sound), pitch, volume })?;
-        self.sound_times.push_back(now);
-        Ok(())
-    }
-
-    fn ambient(&mut self, sound: wsound::Name, level: f32) -> Result<(), String> {
-        let (sound, level) = (sound_name(sound), unit(level, "level")?);
-        self.request(HostRequest::Ambient { plugin_id: self.id.clone(), sound, level })?;
-        self.ambient = (level > 0.0).then_some(sound);
-        Ok(())
-    }
-}
-
-impl wspeech::Host for HostState {
-    fn say(&mut self, text: String) -> Result<(), String> {
-        let text = plain(&text, SAY_MAX);
-        if text.trim().is_empty() {
-            return Err("nothing to say".into());
-        }
-        let now = Instant::now();
-        if self.said_at.is_some_and(|t| now.duration_since(t) < SAY_EVERY) {
-            return Err("at most one utterance every 2 s".into());
-        }
-        self.request(HostRequest::Say { plugin_id: self.id.clone(), text })?;
-        self.said_at = Some(now);
-        Ok(())
-    }
-
-    fn stop(&mut self) {
-        let _ = self.request(HostRequest::StopSpeech { plugin_id: self.id.clone() });
     }
 }
 
@@ -1129,7 +1036,6 @@ impl LoadedPlugin {
             data.release_hold();
             data.clear_top_row();
             data.drop_keys();
-            data.hush();
             PluginError(why)
         })
     }
@@ -1357,12 +1263,6 @@ impl PluginHost {
         }
         if !caps.exec.is_empty() {
             wexec::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
-        }
-        if caps.sound {
-            wsound::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
-        }
-        if caps.speech {
-            wspeech::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.pty_write {
             wpty::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
@@ -1864,31 +1764,6 @@ mod tests {
         assert!(p.run(tab, wexec::Command::GitStatus).unwrap_err().contains("not a project folder"), "/tmp is outside home");
         p.exec_jobs = vec![1, 2];
         assert!(p.run("nope".into(), wexec::Command::GitStatus).unwrap_err().contains("at most 2"));
-    }
-
-    #[test]
-    fn sounds_and_speech_are_bounded_and_a_disabled_plugin_falls_silent() {
-        use wsound::Host as _;
-        use wspeech::Host as _;
-        let mut p = HostState::new("dev.x.rain", &Capabilities { sound: true, speech: true, ..Default::default() }, None, None, None);
-        assert!(p.play(wsound::Name::Chime, 13, 1.0).is_err() && p.play(wsound::Name::Chime, 0, f32::NAN).is_err());
-        for _ in 0..SOUNDS_PER_SEC {
-            p.play(wsound::Name::Bell, -12, 0.5).unwrap();
-        }
-        assert!(p.play(wsound::Name::Bell, 0, 0.5).unwrap_err().contains("a second"));
-        assert!(p.ambient(wsound::Name::Rain, 1.5).is_err());
-        p.ambient(wsound::Name::Rain, 0.3).unwrap();
-        assert!(p.say(" \u{200b}\n".into()).is_err());
-        p.say(format!("build\u{1b}[31m done{}", "!".repeat(300))).unwrap();
-        assert!(p.say("again".into()).unwrap_err().contains("2 s"));
-        let Some(HostRequest::Say { text, .. }) = p.outbox.last() else { panic!() };
-        assert!(text.chars().count() == SAY_MAX && !text.contains('\u{1b}'), "{text:?}");
-        p.outbox.clear();
-        p.hush();
-        assert_eq!(p.outbox, [
-            HostRequest::Ambient { plugin_id: "dev.x.rain".into(), sound: SoundName::Rain, level: 0.0 },
-            HostRequest::StopSpeech { plugin_id: "dev.x.rain".into() },
-        ]);
     }
 
     #[test]

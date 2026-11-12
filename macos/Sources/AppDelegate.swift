@@ -99,7 +99,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         shareTheme()
         pluginKeys.onKey = { [weak c] plugin, id, down in c?.pluginKey(pluginId: plugin, id: id, down: down) }
         c.bridge.onKeysChanged = { [weak self] in self?.applyPluginKeys() }
-        c.bridge.sound.enabled = config.pluginSound
         applyPluginKeys()
         Ghostty.App.desktopNotificationHook = { [weak c, weak self] view, title, body in
             guard let self, let tab = c?.tab(for: view) else { return false }
@@ -446,7 +445,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             controller?.updateKeys(config.keys)
             keysApplied()
         }
-        if c.text { controller?.bridge.sound.enabled = config.pluginSound }
         if c.notifications {
             notifier?.settings = config.notifications
             settings?.rebuild()

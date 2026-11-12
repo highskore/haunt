@@ -4,7 +4,7 @@
 // 0.4: `theme` and `typing` imports; `on-theme-changed` export.
 // 0.5: surface, tool, command, file path, task id and request key on agent-event; `rows`, `timer`,
 //      `clock` and `panel` imports; `on-tick` export; `on-event` returns nothing.
-//      `hold`, `top-row`, `keys`, `exec`, `sound` and `speech` imports. Draft, not linked yet: `dock`, `glow`,
+//      `hold`, `top-row`, `keys` and `exec` imports. Draft, not linked yet: `sound`, `speech`, `dock`, `glow`,
 //      `title` and `terminal` imports; `on-exec` and `on-away-changed` exports.
 package haunt:plugin@0.5.0;
 
@@ -389,8 +389,11 @@ interface exec {
   run: func(surface: string, command: command) -> result<u64, string>;
 }
 
-// Capability `sound`. Plays haunt's sounds, never the plugin's own audio: chime and bell are macOS's
-// Glass and Ping, rain is haunt's own. `[sound] plugins = false` silences every plugin.
+// --- Draft: 6-10. The shapes are settled for plugins to build against; the host doesn't link
+// --- these imports yet, and a manifest asking for their capabilities doesn't install yet.
+
+// Capability `sound`. Plays haunt's bundled sounds, never the plugin's own audio; the user's Sound
+// setting can mute every plugin.
 interface sound {
   enum name { chime, bell, rain }
   // One shot. `pitch` in semitones, -12 to 12; `volume` 0 to 1. At most 4 a second.
@@ -400,14 +403,11 @@ interface sound {
 }
 
 // Capability `speech`. Speaks in the system voice. Text is plain and cut to 200 characters; one
-// utterance at a time, at most 1 every 2 s. `[sound] plugins = false` silences it too.
+// utterance at a time, at most 1 every 2 s.
 interface speech {
   say: func(text: string) -> result<_, string>;
   stop: func();
 }
-
-// --- Draft: 7-10. The shapes are settled for plugins to build against; the host doesn't link
-// --- these imports yet, and a manifest asking for their capabilities doesn't install yet.
 
 // Capability `dock`. The Dock tile: whole images, one per state, that the plugin ships.
 interface dock {

@@ -55,11 +55,7 @@ impl Core {
             | HostRequest::ClosePanel { .. }
             | HostRequest::HoldNotifications { .. }
             | HostRequest::ReleaseNotifications { .. }
-            | HostRequest::KeysChanged { .. }
-            | HostRequest::PlaySound { .. }
-            | HostRequest::Ambient { .. }
-            | HostRequest::Say { .. }
-            | HostRequest::StopSpeech { .. } => None,
+            | HostRequest::KeysChanged { .. } => None,
         }
     }
 }

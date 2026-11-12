@@ -120,20 +120,15 @@ on_permission = true # an agent needs you: Allow / Deny / Open tab
 on_done = true       # an agent finished its turn
 menu_bar = true      # the menu bar item
 
-[sound]
-plugins = true       # plugins' sounds and speech; on by default
-
 [ghostty]            # passed through to libghostty, less the keys below
 cursor-style = "bar"
 ```
 
 `agents_view` is the view ⌘⇧A shows. `titlebar_buttons` lists the title bar's icons, left to right, from `search`, `new_tab`, `settings` and `sidebar`. Unknown names are skipped and logged; `[]` leaves the bar empty. Each icon's tooltip shows its shortcut from `[keys]`. `palette_position` puts ⌘K at the top centre or in the bottom-right corner, `palette_width` (240–600) sets its width, and `palette_rows` lays out its rows. `title_format` centres a title in the title bar: `{tab}` is the selected tab's name and `{meta}` the first part of its meta line. A theme's `[layout]` can set these too, and yours win. `row_labels` orders plugins whose decorations want the same row: the first listed one that has one shows, plugins not listed come after in install order, and the rest show in the row's tooltip. Name a plugin by its id, the id's last part (`checklist-meter`) or that part's first word (`checklist`).
 
-`[keys]` sets shortcuts by action name (the generated `config.toml` lists them with their defaults). A plugin's palette command is named `"<plugin id>/<item id>"`, for example `"dev.haunt.tabs-plus/move-up" = "alt+cmd+up"`; a plugin's default key must include cmd and never takes one of Haunt's or a chord the terminal or macOS uses (a chord set here has no such limit), and bound plugin commands appear in the Window menu. A key a plugin binds for itself (`keys`) is named the same way, `"<plugin id>/<key id>"`.
+`[keys]` sets shortcuts by action name (the generated `config.toml` lists them with their defaults). A plugin's palette command is named `"<plugin id>/<item id>"`, for example `"dev.haunt.tabs-plus/move-up" = "alt+cmd+up"`; a plugin's default key must include cmd and never takes one of Haunt's or a chord the terminal or macOS uses (a chord set here has no such limit), and bound plugin commands appear in the Window menu.
 
 `[notifications]` turns agent notifications and the menu bar item on and off. Turning one off takes back what it already posted. Notifications never come for the tab you are looking at.
-
-`[sound] plugins = false` silences every plugin's sounds and speech, and stops what is playing.
 
 `[ghostty]` is passed through to libghostty, except for what would get a paste past Haunt's paste check or slip in config Haunt never sees. These are dropped and logged: `right-click-action = paste` or `copy-or-paste`, `middle-click-action` other than `ignore` (Haunt pastes on middle click itself; `ignore` turns that off), any `keybind` to `paste_from_clipboard` or `paste_from_selection`, `config-file`, `config-default-files`, and any key or value with a line break. Haunt also always unbinds Ghostty's ⌘V, ⇧⌘V and Paste key, so every paste goes through its own Edit menu.
 
