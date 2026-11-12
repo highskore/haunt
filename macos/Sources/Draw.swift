@@ -159,6 +159,13 @@ enum Draw {
         ctx.restoreGState()
     }
 
+    /// A right-pointing cursor triangle, 5 × 8, with its top-left at `p`, filled in the current colour.
+    static func cursor(at p: NSPoint) {
+        let t = NSBezierPath()
+        t.move(to: p); t.line(to: NSPoint(x: p.x + 5, y: p.y + 4)); t.line(to: NSPoint(x: p.x, y: p.y + 8)); t.close()
+        t.fill()
+    }
+
     /// A square turned 45°, `size` across its sides, stroked or filled in the current colour.
     static func diamond(center c: NSPoint, size: CGFloat, stroke: CGFloat? = nil) {
         let k = size / 2 * 2.squareRoot()

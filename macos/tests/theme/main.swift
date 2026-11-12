@@ -320,6 +320,25 @@ check(ex.count == Theme.keys.count + AppTokens.keys.count, "every token exported
 write(user, "fx", "[effects]\nwindow.material = \"glass\"\nwindow.radius = 14\nsidebar.footer = true\n[app]\nsidebar.foot.pad = [8, 12, 10]\n")
 let fx = load("fx")
 check(fx.problems.isEmpty && fx.theme.effects.windowMaterial == "glass" && fx.theme.effects.windowRadius == 14 && fx.theme.effects.sidebarFooter && fx.theme.app.sidebarFootPad == [8, 12, 10], "effects load: \(fx.problems)")
+write(user, "fxlcd", """
+[effects]
+ornament = "lcd"
+label.rule = "block"
+row.select = "cursor"
+palette.selection = "cursor"
+lights.shape = "squares"
+name.font = "display"
+[app]
+palette.rings = ["#0f380f 2", "#9bbc0f 4"]
+bar.segment = [6, 2]
+label.space = 3
+palette.offset.x = -4
+palette.foot.rule = "#0f380f"
+""")
+let lcd = load("fxlcd")
+check(lcd.problems.isEmpty && lcd.theme.effects.ornament == "lcd" && lcd.theme.effects.rowSelect == "cursor" && lcd.theme.effects.nameFont == "display"
+      && lcd.theme.app.paletteRings.count == 2 && lcd.theme.app.barSegment == [6, 2] && lcd.theme.app.labelSpace == 3
+      && lcd.theme.app.paletteOffsetX == -4 && lcd.theme.app.paletteFootRule.alphaComponent == 1, "the LCD elements load: \(lcd.problems)")
 write(user, "fxbad", "[effects]\nwindow.material = \"chrome\"\nwindow.radius = 99\nscript = \"x\"\nwindow.radius.x = [1]\n")
 let fxbad = load("fxbad")
 check(fxbad.theme.effects == Effects() && fxbad.problems.count == 4, "bad effects refused: \(fxbad.problems)")
@@ -450,6 +469,10 @@ check(bwfx.windowFrame == "none" && bwfx.paneFrame == "none" && bwfx.titlebarSty
       && bwfx.iconStyle == "vector" && bwfx.paletteFrame == "panel" && bwapp.titlebarFill.isEmpty && bwapp.paletteOffsetX == 0 && bwapp.paletteRowInset == 0,
       "and every bevel effect")
 check(bwfx.uiWeight == "regular" && bwfx.needsWeight == "regular", "and the UI's and needs-you's weights")
+check(bwfx.nameFont == "ui" && bwapp.sidebarEdge == 0 && bwapp.sidebarFootFrame.alphaComponent == 0 && bwapp.paletteRings.isEmpty
+      && bwapp.titlebarBg.alphaComponent == 0 && bwapp.barFrame.alphaComponent == 0 && bwapp.barSegment == [8, 2] && bwapp.labelSpace == 0
+      && bwapp.paletteFootRule.alphaComponent == 0,
+      "and every LCD effect")
 check(bwapp.displayFont.isEmpty && bwapp.textChrome.isEmpty && bwapp.strings.isEmpty && Theme().chromeStops.isEmpty,
       "and no display face, chrome or theme words")
 

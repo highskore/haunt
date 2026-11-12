@@ -45,6 +45,8 @@ enum Fixture: String {
     case sigil = "th-02-sigil"
     /// The Windows 95 card (haunt-themes 04): the same screen in the win95 plugin's theme.
     case win95 = "th-04-win95"
+    /// The DMG card (haunt-themes 07).
+    case dmg = "th-07-dmg"
 
     static var current: Fixture? {
         ProcessInfo.processInfo.environment["HAUNT_FIXTURE"].flatMap(Fixture.init(rawValue:))
@@ -57,7 +59,7 @@ enum Fixture: String {
 
     /// Mockup 03 and the Glass card show ⌕ + ⚙; other fixtures keep the default.
     var titlebarButtons: [TitlebarButton] {
-        self == .sigil || self == .win95 ? [] : self == .iconOnly || self == .glass ? [.search, .newTab, .settings] : TitlebarButton.defaults
+        [.sigil, .win95, .dmg].contains(self) ? [] : self == .iconOnly || self == .glass ? [.search, .newTab, .settings] : TitlebarButton.defaults
     }
 
     var isThemeCard: Bool { themePlugin != nil }
@@ -67,7 +69,7 @@ enum Fixture: String {
     /// The review mockups' windows: 1100 × 600 (640 for the second set) less the `.win`'s 1 px border.
     var size: NSSize? {
         if self == .reviewInbox { return NSSize(width: Tok.Size.reviewWindowW, height: Tok.Size.inboxWindowH - 2) }
-        if self == .win95 { return NSSize(width: 900, height: 568) }
+        if self == .win95 || self == .dmg { return NSSize(width: 900, height: 568) }
         if isThemeCard { return NSSize(width: 900, height: 560) }
         return isReview ? NSSize(width: Tok.Size.reviewWindowW, height: Tok.Size.reviewWindowH - 2) : nil
     }
@@ -99,6 +101,7 @@ enum Fixture: String {
         case .glass: ("dev.haunt.theme-glass", "glass")
         case .sigil: ("dev.haunt.theme-sigil", "sigil")
         case .win95: ("dev.haunt.theme-win95", "win95")
+        case .dmg: ("dev.haunt.theme-dmg", "dmg")
         default: nil
         }
     }
@@ -197,7 +200,7 @@ enum Fixture: String {
                 SidebarGroup(id: "running", label: "RUNNING", rows: [rows[2]]),
                 SidebarGroup(id: "idle", label: "IDLE", rows: [rows[3]]),
             ], colorStyle: .dot)
-        case .groupedFlat, .palette, .suspicious, .codex, .codexLog, .statusMenu, .glass, .sigil, .win95:
+        case .groupedFlat, .palette, .suspicious, .codex, .codexLog, .statusMenu, .glass, .sigil, .win95, .dmg:
             return SidebarSnapshot(groups: [
                 SidebarGroup(id: "needs-you", label: "NEEDS YOU", rows: [rows[1]]),
                 SidebarGroup(id: "running", label: "RUNNING", rows: [rows[0]]),

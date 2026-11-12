@@ -7439,5 +7439,116 @@
     "tol": 2
    }
   ]
+ },
+ "th-07-dmg": {
+  "file": "haunt-reference/mockups/haunt-themes/index.html",
+  "index": 7,
+  "crop": ".win",
+  "size_pt": [
+   900,
+   568
+  ],
+  "size_px": [
+   1800,
+   1136
+  ],
+  "anchors": [
+   {
+    "name": "tb.bg",
+    "token": "theme",
+    "expect": "#0f380f",
+    "tol": 0.5,
+    "mode": "point",
+    "x": 1400,
+    "y": 10,
+    "ref": "#0f380f"
+   },
+   {
+    "name": "row.fill",
+    "token": "theme",
+    "expect": "#306230",
+    "tol": 3,
+    "mode": "point",
+    "x": 22,
+    "y": 257,
+    "ref": "#306230"
+   },
+   {
+    "name": "row.name",
+    "token": "theme",
+    "expect": "#9bbc0f",
+    "tol": 1.0,
+    "mode": "text",
+    "rect": [
+     98,
+     269,
+     137,
+     289
+    ],
+    "ref": "#9bbc0f"
+   },
+   {
+    "name": "pill",
+    "token": "theme",
+    "expect": "#0f380f",
+    "tol": 1.5,
+    "mode": "point",
+    "x": 447,
+    "y": 128,
+    "ref": "#0f380f"
+   },
+   {
+    "name": "label",
+    "token": "theme",
+    "expect": "#0f380f",
+    "tol": 1.5,
+    "mode": "point",
+    "x": 18,
+    "y": 78,
+    "ref": "#0f370f"
+   }
+  ],
+  "edges": [
+   {
+    "name": "tb.bottom",
+    "x": 600,
+    "y": 20,
+    "dir": "down",
+    "expect": 60,
+    "tol": 2
+   },
+   {
+    "name": "side.edge",
+    "x": 536,
+    "y": 598,
+    "dir": "right",
+    "expect": 540,
+    "tol": 2
+   },
+   {
+    "name": "row.top",
+    "x": 316,
+    "y": 257,
+    "dir": "up",
+    "expect": 245,
+    "tol": 2
+   },
+   {
+    "name": "pal.top",
+    "x": 1412,
+    "y": 760,
+    "dir": "up",
+    "expect": 755,
+    "tol": 2
+   },
+   {
+    "name": "pal.left",
+    "x": 1066,
+    "y": 1082,
+    "dir": "left",
+    "expect": 1059,
+    "tol": 2
+   }
+  ]
  }
 }

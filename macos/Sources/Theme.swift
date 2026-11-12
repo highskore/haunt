@@ -18,7 +18,7 @@ extension Theme {
     /// Sizes outside this are refused: a typo shouldn't push the window off the screen.
     static let sizeRange: ClosedRange<CGFloat> = 0...400
     /// Numbers with a range of their own instead of `sizeRange`.
-    static let numberRanges: [String: ClosedRange<CGFloat>] = ["app.ornament.alpha": 0...0.12]
+    static let numberRanges: [String: ClosedRange<CGFloat>] = ["app.ornament.alpha": 0...0.12, "app.palette.offset.x": -40...40]
     /// Kept in every theme: Claude's mark is always its own orange.
     static let locked: Set<String> = ["color.claude"]
 
@@ -201,12 +201,13 @@ extension Theme {
             ("color.btn.fg", ["color.window.bg", "color.review.panel.bg"]),
             ("color.btn.primary.fg", ["color.window.bg", "color.btn.primary.bg"]),
             ("color.btn.primary.fg", ["color.window.bg", "color.review.panel.bg", "color.btn.primary.bg"]),
-            ("app.title.fg", ["color.window.bg"]),
-            ("app.title.meta", ["color.window.bg"]),
+            ("app.title.fg", ["color.window.bg", "app.titlebar.bg"]),
+            ("app.title.meta", ["color.window.bg", "app.titlebar.bg"]),
             ("app.sidebar.foot.fg", ["color.window.bg", "color.sidebar.bg"]),
             ("app.pill.fg", ["color.window.bg", "color.sidebar.bg", "app.pill.bg"]),
             ("app.palette.pill.ink", ["color.palette.bg", "color.palette.sel"]),
             ("app.row.select.ink", ["color.sidebar.bg", "app.row.select.fill"]),
+            ("app.label.ink", ["color.sidebar.bg", "app.label.fill"]),
         ]
         let guides: [(String, [String])] = [
             ("color.diff.mark", ["color.window.bg"]),
@@ -248,7 +249,7 @@ extension Theme {
         "color.window.border", "color.zen.track",
         "app.scrim", "app.window.ring", "app.window.highlight", "app.palette.ring", "app.palette.highlight", "app.row.raised.ring",
         "app.row.raised.highlight", "app.row.raised.shadow", "app.row.hover", "app.pill.bg", "app.pill.ring", "app.palette.pill.highlight",
-        "app.palette.pill.mute", "app.ornament", "app.ornament.dim", "app.titlebar.rule2", "app.bar.knob", "app.bevel.light", "app.bevel.hi", "app.bevel.shade", "app.bevel.dark", "app.palette.field", "app.row.select.fill",
+        "app.palette.pill.mute", "app.ornament", "app.ornament.dim", "app.titlebar.rule2", "app.bar.knob", "app.bevel.light", "app.bevel.hi", "app.bevel.shade", "app.bevel.dark", "app.palette.field", "app.row.select.fill", "app.label.fill", "app.bar.frame", "app.titlebar.bg", "app.sidebar.foot.frame", "app.palette.foot.rule",
     ]
 
     /// Secondary text that may be see-through, down to `minAlpha`: its contrast is judged blended.

@@ -86,9 +86,29 @@ struct AppTokens: Equatable {
     var paletteOffsetX: CGFloat = 0
     /// How much further in than the input's text the palette's entries start.
     var paletteRowInset: CGFloat = 0
+    /// `label.rule = "block"`: the label's fill and its text.
+    var labelFill = NSColor.black
+    var labelInk = NSColor.white
+    var labelBlockPad: CGFloat = 6
+    /// `progress.style = "segments"`: each block's width and the gap after it; a `bar.frame` with any opacity
+    /// outlines the track at the hairline's width instead of a bevel.
+    var barSegment: [CGFloat] = [8, 2]
+    var barFrame = NSColor.clear
+    /// The sidebar's right edge, when wider than the hairline.
+    var sidebarEdge: CGFloat = 0
+    /// A frame around the sidebar's footer, drawn when it has any opacity.
+    var sidebarFootFrame = NSColor.clear
+    /// Rings around a palette, outermost first, each "#rrggbb width"; they take the border's place.
+    var paletteRings: [String] = []
+    /// A rule above the palette's `[strings] palette.foot`, drawn when it has any opacity.
+    var paletteFootRule = NSColor.clear
+    /// Space above each group label but the first.
+    var labelSpace: CGFloat = 0
     var groupGap: CGFloat = 18
     /// `titlebar.style = "caption"`: the bar's gradient stops, left to right; and `row.select = "name"`'s text.
     var titlebarFill: [String] = []
+    /// The title bar's own colour over the window's.
+    var titlebarBg = NSColor.clear
     var rowSelectInk = NSColor.white
     /// `row.select = "name"`: the fill behind the selected name.
     var rowSelectFill = NSColor(srgbRed: 0, green: 0, blue: 0.5, alpha: 1)
@@ -162,8 +182,19 @@ struct AppTokens: Equatable {
         "app.palette.field": .color(\.app.paletteField),
         "app.palette.offset.x": .number(\.app.paletteOffsetX),
         "app.palette.row.inset": .number(\.app.paletteRowInset),
+        "app.label.fill": .color(\.app.labelFill),
+        "app.label.ink": .color(\.app.labelInk),
+        "app.label.block.pad": .number(\.app.labelBlockPad),
+        "app.bar.segment": .numbers(\.app.barSegment),
+        "app.bar.frame": .color(\.app.barFrame),
+        "app.sidebar.edge": .number(\.app.sidebarEdge),
+        "app.sidebar.foot.frame": .color(\.app.sidebarFootFrame),
+        "app.palette.rings": .strings(\.app.paletteRings),
+        "app.label.space": .number(\.app.labelSpace),
+        "app.palette.foot.rule": .color(\.app.paletteFootRule),
         "app.group.gap": .number(\.app.groupGap),
         "app.titlebar.fill": .strings(\.app.titlebarFill),
+        "app.titlebar.bg": .color(\.app.titlebarBg),
         "app.row.select.ink": .color(\.app.rowSelectInk),
         "app.row.select.fill": .color(\.app.rowSelectFill),
         "app.sidebar.foot.gap": .number(\.app.sidebarFootGap),

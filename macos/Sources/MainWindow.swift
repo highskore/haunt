@@ -52,7 +52,18 @@ final class OrnamentView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        let fx = Theme.current.effects
+        let fx = Theme.current.effects, app = Theme.current.app
+        if fx.ornament == "lcd" {
+            // An LCD's pixel grid, every 3 pt, over all but the terminal.
+            ctx.saveGState()
+            ctx.addRect(bounds)
+            ctx.addRect(pane)
+            ctx.clip(using: .evenOdd)
+            let c = app.ornament.withAlphaComponent(app.ornamentAlpha)
+            for x in stride(from: CGFloat(0), to: bounds.width, by: 3) { Draw.fill(NSRect(x: x, y: 0, width: 1, height: bounds.height), c) }
+            for y in stride(from: CGFloat(0), to: bounds.height, by: 3) { Draw.fill(NSRect(x: 0, y: y, width: bounds.width, height: 1), c) }
+            ctx.restoreGState()
+        }
         if fx.windowFrame == "bevel" { Draw.bevel(bounds, "out") }
         if fx.paneFrame == "bevel" { Draw.bevel(pane, "in") }
         if fx.windowBorder {
@@ -158,7 +169,7 @@ private final class RootView: NSView {
         ring.highlight = Theme.current.app.windowHighlight
         layer?.cornerRadius = fx.windowSquare ? 0 : fx.windowRadius
         layer?.masksToBounds = fx.windowRadius > 0 || fx.windowSquare
-        ornaments.isHidden = !fx.windowBorder && fx.windowFrame == "none" && fx.paneFrame == "none"
+        ornaments.isHidden = fx.ornament != "lcd" && !fx.windowBorder && fx.windowFrame == "none" && fx.paneFrame == "none"
         ornaments.needsDisplay = true
         watermark.isHidden = fx.ornament == "none" || !Theme.current.app.terminalSeeThrough
         watermark.needsDisplay = true

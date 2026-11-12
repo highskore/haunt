@@ -511,7 +511,16 @@ final class PaletteView: NSView {
     private var border: CGFloat { Tok.App.hairline }
     /// A glass palette's ring is drawn over its content, which starts at its edge; otherwise inside the border.
     private var glass: Bool { Theme.current.effects.paletteMaterial == "glass" }
-    private var edge: CGFloat { glass ? 0 : border }
+    private var edge: CGFloat { glass ? 0 : rings.isEmpty ? border : rings.reduce(0) { $0 + $1.width } }
+    /// `app.palette.rings`, parsed; empty when any ring isn't "#rrggbb width".
+    private var rings: [(color: NSColor, width: CGFloat)] {
+        let r = Theme.current.app.paletteRings.compactMap { s -> (NSColor, CGFloat)? in
+            let p = s.split(separator: " ")
+            guard p.count == 2, let c = NSColor(themeHex: String(p[0])), let w = Double(p[1]), w > 0, w <= 8 else { return nil }
+            return (c, CGFloat(w))
+        }
+        return r.count == Theme.current.app.paletteRings.count ? r : []
+    }
     private var pill: Bool { !plainMode && Theme.current.effects.paletteSelection == "pill" }
     private var icons: Bool { !plainMode && Theme.current.effects.paletteIcons }
     private var width: CGFloat { panelW - 2 * edge }
@@ -584,6 +593,14 @@ final class PaletteView: NSView {
             Tok.Color.paletteBg.setFill()
             shape.fill()
             shape.addClip()
+        } else if !rings.isEmpty {
+            var box = bounds
+            for ring in rings {
+                Draw.fill(box, ring.color)
+                box = box.insetBy(dx: ring.width, dy: ring.width)
+            }
+            Draw.fill(box, Tok.Color.paletteBg)
+            ctx.clip(to: box)
         } else {
             let outer = NSBezierPath(roundedRect: bounds, xRadius: r, yRadius: r)
             Tok.Color.paletteBorder.setFill()
@@ -806,6 +823,10 @@ final class PaletteView: NSView {
             if dialog { Draw.dottedRing(box, app.palettePillInk) }
         } else if isSel && plainMode {
             Draw.fill(NSRect(x: 0, y: top, width: width, height: h), Tok.Color.paletteInk)
+        } else if isSel && !plainMode && Theme.current.effects.paletteSelection == "cursor" {
+            Draw.fill(NSRect(x: 0, y: top, width: width, height: h), Tok.Color.paletteSel)
+            Tok.Color.paletteInk.setFill()
+            Draw.cursor(at: NSPoint(x: Tok.Size.paletteSelBar, y: top + Tok.Size.paletteEntryPad[0] + (textLines - 8) / 2))
         } else if isSel {
             Draw.fill(NSRect(x: 0, y: top, width: width, height: h), Tok.Color.paletteSel)
             Draw.fill(NSRect(x: 0, y: top, width: Tok.Size.paletteSelBar, height: h), Tok.Color.paletteInk)
@@ -901,6 +922,7 @@ final class PaletteView: NSView {
         if let footText {
             let size = Tok.Size.paletteSmallFont
             let line = Draw.line(footText, f, Tok.Color.paletteMute, kern: size * 0.25)
+            Draw.fill(NSRect(x: 0, y: top, width: width, height: border), Theme.current.app.paletteFootRule)
             Draw.text(line, font: f, x: ((width - Draw.width(line)) / 2).rounded(), top: top + border + Tok.Size.paletteFootPad[0], lineHeight: h, in: ctx)
             return
         }

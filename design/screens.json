@@ -3469,6 +3469,110 @@
      "expect": "left+2"
     }
    ]
+  },
+  "th-07-dmg": {
+   "file": "th",
+   "index": 7,
+   "crop": ".win",
+   "anchors": [
+    {
+     "name": "tb.bg",
+     "sel": ".tb",
+     "at": [
+      "right-200",
+      "top+5"
+     ],
+     "hex": "#0f380f"
+    },
+    {
+     "name": "row.fill",
+     "sel": ".row.sel",
+     "at": [
+      "left+3",
+      "top+3"
+     ],
+     "hex": "#306230",
+     "tol": 3
+    },
+    {
+     "name": "row.name",
+     "sel": ".row.sel .nm",
+     "text": true,
+     "hex": "#9bbc0f"
+    },
+    {
+     "name": "pill",
+     "sel": ".needs .rt",
+     "at": [
+      "left-1",
+      "top+1"
+     ],
+     "hex": "#0f380f",
+     "tol": 1.5
+    },
+    {
+     "name": "label",
+     "sel": ".grp",
+     "at": [
+      "left+1",
+      "top+1"
+     ],
+     "hex": "#0f380f",
+     "tol": 1.5
+    }
+   ],
+   "edges": [
+    {
+     "name": "tb.bottom",
+     "sel": ".tb",
+     "from": [
+      "left+300",
+      "top+10"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    },
+    {
+     "name": "side.edge",
+     "sel": ".pane",
+     "from": [
+      "left-2",
+      "50%"
+     ],
+     "dir": "right",
+     "expect": "left"
+    },
+    {
+     "name": "row.top",
+     "sel": ".row.sel",
+     "from": [
+      "left+150",
+      "top+3"
+     ],
+     "dir": "up",
+     "expect": "top-3"
+    },
+    {
+     "name": "pal.top",
+     "sel": ".pal",
+     "from": [
+      "50%",
+      "top-3"
+     ],
+     "dir": "up",
+     "expect": "top-5"
+    },
+    {
+     "name": "pal.left",
+     "sel": ".pal",
+     "from": [
+      "left-3",
+      "bottom-5"
+     ],
+     "dir": "left",
+     "expect": "left-6"
+    }
+   ]
   }
  }
 }

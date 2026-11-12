@@ -114,6 +114,15 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
         if boxes { return drawBoxes() }
         for i in 0..<3 {
             let r = lightRect(i)
+            if Theme.current.effects.lightsShape == "squares" && !lightsHover {
+                // Squares in the window's colour edged in the lights'; the close light's filled with it.
+                let hl = Tok.App.hairline, sq = NSBezierPath(rect: r.insetBy(dx: hl / 2, dy: hl / 2))
+                Draw.fill(r, i == 0 ? Tok.Color.lights : Tok.Color.windowBg)
+                Tok.Color.lights.setStroke()
+                sq.lineWidth = hl
+                sq.stroke()
+                continue
+            }
             if Theme.current.effects.lightsShape == "diamond" && !lightsHover {
                 // An outlined diamond; the close light's carries an ×.
                 Tok.App.ornament.setStroke()
@@ -283,6 +292,7 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         Draw.fill(bounds, Tok.Color.windowBg)
+        Draw.fill(bounds, Theme.current.app.titlebarBg)
         if zen {
             if let p = progress {
                 Draw.fill(NSRect(x: 0, y: 0, width: bounds.width, height: Tok.Size.zenBar), Tok.Color.zenTrack)

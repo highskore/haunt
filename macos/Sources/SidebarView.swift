@@ -101,6 +101,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         var y: CGFloat = flat ? Tok.Size.sidebarPadtopIconOnly : Tok.App.sidebarPadtop
         for g in snapshot.groups {
             if !g.label.isEmpty {
+                if g.id != snapshot.groups.first?.id { y += Theme.current.app.labelSpace }
                 items.append(.label(g.label, top: y, group: g.id))
                 y += labelHeight
             }
@@ -309,7 +310,10 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         Draw.fill(bounds, panel ? Tok.Color.windowBg : Tok.Color.sidebarBg)
-        if !panel { Draw.fill(NSRect(x: bounds.width - Tok.App.hairline, y: 0, width: Tok.App.hairline, height: bounds.height), Tok.Color.hairline) }
+        if !panel {
+            let w = max(Tok.App.hairline, Theme.current.app.sidebarEdge)
+            Draw.fill(NSRect(x: bounds.width - w, y: 0, width: w, height: bounds.height), Tok.Color.hairline)
+        }
         if groupBox { drawGroupBoxes() }
         for item in items {
             switch item {
@@ -357,7 +361,18 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let f = Draw.ui(size), lineH = size * lh
         let line = Draw.truncated(Draw.line(n == 1 ? "1 agent" : "\(n) agents", f, Tok.App.sidebarFootFg),
                                   contentWidth - 2 * pad[1], f, Tok.App.sidebarFootFg)
-        Draw.text(line, font: f, x: pad[1], top: bounds.height - pad[2] - lineH, lineHeight: lineH, in: ctx)
+        let top = bounds.height - pad[2] - lineH
+        Draw.text(line, font: f, x: pad[1], top: top, lineHeight: lineH, in: ctx)
+        let frame = Theme.current.app.sidebarFootFrame
+        if frame.alphaComponent > 0 {
+            // Boxed: the frame stands `foot.pad`'s top above the text and as far below it, `rowInset` in from the sides.
+            let hl = Tok.App.hairline, inset = Theme.current.effects.rowInset
+            let r = NSRect(x: inset, y: top - pad[0], width: contentWidth - 2 * inset, height: lineH + 2 * pad[0])
+            let ring = NSBezierPath(rect: r.insetBy(dx: hl / 2, dy: hl / 2))
+            ring.lineWidth = hl
+            frame.setStroke()
+            ring.stroke()
+        }
     }
 
     /// `[effects] ornament = "sigil"`: the sigil centred at the foot over `[strings] sidebar.foot`, or the agent count.
@@ -380,7 +395,9 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             return Draw.display(Tok.Size.labelFont) ?? Draw.ui(Tok.Size.labelFont, w[Theme.current.effects.labelWeight] ?? .regular)
         }
         static var status: NSFont { Draw.uiTabular(Tok.Size.rowRight) }
-        static var name: NSFont { Draw.ui(Tok.Size.rowName) }
+        static var name: NSFont {
+            Theme.current.effects.nameFont == "display" ? Draw.display(Tok.Size.rowName) ?? Draw.ui(Tok.Size.rowName) : Draw.ui(Tok.Size.rowName)
+        }
         static var meta: NSFont { Draw.ui(Tok.Size.rowMeta) }
         static var sub: NSFont { Draw.ui(Tok.Size.subFont) }
         static var glyph: NSFont { Draw.mono(Tok.Size.iconGlyph) }
@@ -420,9 +437,10 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     }
 
     private func drawLabel(_ text: String, top: CGFloat, ctx: CGContext) {
+        let block = Theme.current.effects.labelRule == "block"
         let line = labelLines[text] ?? {
             let upper = Theme.current.effects.labelCase == "upper"
-            let l = Draw.line(upper ? text.uppercased() : Self.labelCase(text), Fonts.label, Tok.Color.textLabel,
+            let l = Draw.line(upper ? text.uppercased() : Self.labelCase(text), Fonts.label, block ? Theme.current.app.labelInk : Tok.Color.textLabel,
                               kern: upper ? Tok.Size.labelFont * Tok.Size.labelTrackingEm : 0)
             labelLines[text] = l
             return l
@@ -434,6 +452,13 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             return Draw.text(line, font: Fonts.label, x: x, top: top - lineH / 2, lineHeight: lineH, in: ctx)
         }
         let lineTop = top + Tok.Size.labelPad[0], lineH = Tok.Size.labelFont * lh
+        if block {
+            // Inverted: the label on its own fill, `label.pad`'s top above and below it; the rest of the bottom
+            // pad is the space under the block.
+            let x = Tok.Size.labelPad[1], padX = Theme.current.app.labelBlockPad
+            Draw.fill(NSRect(x: x, y: top, width: Draw.width(line) + 2 * padX, height: 2 * Tok.Size.labelPad[0] + lineH), Theme.current.app.labelFill)
+            return Draw.text(line, font: Fonts.label, x: x + padX, top: lineTop, lineHeight: lineH, in: ctx)
+        }
         guard Theme.current.effects.labelRule == "diamond" else {
             return Draw.chromeText(line, font: Fonts.label, x: Tok.Size.labelPad[1], top: lineTop, lineHeight: lineH, in: ctx)
         }
@@ -501,37 +526,39 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let col2 = padX + Tok.Size.iconSize + gapX
 
         let pill = row.needsYou && Theme.current.effects.needsPill
+        // `row.select = "cursor"`: the selected row's text all in the selection's ink.
+        let ink: NSColor? = row.selected && Theme.current.effects.rowSelect == "cursor" ? Theme.current.app.rowSelectInk : nil
+        let primary = ink ?? Tok.Color.textPrimary, metaInk = ink ?? Tok.Color.textMeta, subInk = ink ?? Tok.Color.textSub
         let status = pill ? Draw.line(row.statusText, Draw.uiTabular(Tok.Size.rowRight, .semibold), Theme.current.app.pillFg)
             : Draw.line(row.statusText, row.needsYou && Theme.current.effects.needsWeight == "bold" ? Draw.uiTabular(Tok.Size.rowRight, .bold) : Fonts.status,
-                        row.needsYou ? Tok.Color.needs : Tok.Color.textMeta)
+                        row.needsYou ? Tok.Color.needs : metaInk)
         let decor = RowDecor(row.decoration, statusWins: row.needsYou || row.pending != nil)
         let statusW = hovered ? Tok.App.closeSize
             : pill ? Draw.width(status) + 2 * Theme.current.app.pillPad[1] : decor?.rightWidth ?? Draw.width(status)
         let dot = snapshot.colorStyle == .dot ? row.color : nil
         let dotW = dot == nil ? 0 : gapX + Tok.Size.tabDot
-        let name = Draw.truncated(Draw.line(row.name, Fonts.name, Tok.Color.textPrimary), right - gapX - statusW - col2 - dotW,
-                                  Fonts.name, Tok.Color.textPrimary)
+        let name = Draw.truncated(Draw.line(row.name, Fonts.name, primary), right - gapX - statusW - col2 - dotW, Fonts.name, primary)
 
         // A suspicious request shows its preview (⏎ and all) and is answered only in the terminal,
         // so the hint stands where Allow/Deny would.
         var metaRight = right
         var hint: CTLine?
         if let p = row.pending, p.suspicious {
-            let h = Draw.line(Self.suspiciousHint, Fonts.meta, Tok.Color.textMeta)
+            let h = Draw.line(Self.suspiciousHint, Fonts.meta, metaInk)
             metaRight -= Draw.width(h) + gapX
             hint = h
         }
         let preview = row.pending.flatMap { $0.suspicious ? $0.preview : nil }
         let metaLine = preview == nil && decor?.suffix != nil
             ? CTLineCreateWithAttributedString(decor!.meta(row.meta, font: Fonts.meta))
-            : Draw.line(preview ?? row.meta, Fonts.meta, Tok.Color.textMeta)
-        let meta = Draw.truncated(metaLine, metaRight - col2, Fonts.meta, Tok.Color.textMeta)
+            : Draw.line(preview ?? row.meta, Fonts.meta, metaInk)
+        let meta = Draw.truncated(metaLine, metaRight - col2, Fonts.meta, metaInk)
 
         let subs = row.subagents.map { s in
-            let m = Draw.line(s.meta, Fonts.sub, Tok.Color.textSub)
+            let m = Draw.line(s.meta, Fonts.sub, subInk)
             let mw = Draw.width(m)
-            let label = Draw.truncated(Draw.line((Theme.current.string("row.sub.prefix") ?? "↳ ") + s.label, Fonts.sub, Tok.Color.textSub),
-                                       right - col2 - mw - Tok.Size.subGap, Fonts.sub, Tok.Color.textSub)
+            let label = Draw.truncated(Draw.line((Theme.current.string("row.sub.prefix") ?? "↳ ") + s.label, Fonts.sub, subInk),
+                                       right - col2 - mw - Tok.Size.subGap, Fonts.sub, subInk)
             return (label: label, meta: m, metaW: mw)
         }
         let l = RowLines(row: row, width: contentWidth, hovered: hovered, status: status, statusW: statusW,
@@ -547,6 +574,10 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         if row.selected {
             if fx.rowSelect == "name" {
                 // Drawn with the name, below.
+            } else if fx.rowSelect == "cursor" {
+                Draw.fill(box, Theme.current.app.rowSelectFill)
+                Theme.current.app.rowSelectInk.setFill()
+                Draw.cursor(at: NSPoint(x: box.minX + 4, y: top + Tok.Size.rowPad[0] + (rowLine1 - 8) / 2))
             } else if fx.rowSelect == "brackets" { drawBrackets(box, ctx: ctx) } else if fx.rowRaised { drawRaised(shape, box) } else {
                 Tok.Color.rowSelected.setFill()
                 shape.fill()
@@ -694,14 +725,22 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let fx = Theme.current.effects, r = min(fx.barRadius, track.height / 2)
         if fx.progressStyle == "dotted" { return drawDottedBar(track, fill: fill) }
         if fx.progressStyle == "segments" {
-            // A 1 pt sunken track, 2 pt in, filled with 8 pt blocks 2 pt apart.
+            // A sunken (or `app.bar.frame`d) track, 2 pt in, filled with `app.bar.segment` blocks.
+            let app = Theme.current.app, seg = app.barSegment
             Draw.fill(track, Tok.Color.barTrack)
-            Draw.bevel(track, "thin")
+            if app.barFrame.alphaComponent > 0 {
+                let hl = Tok.App.hairline, ring = NSBezierPath(rect: track.insetBy(dx: hl / 2, dy: hl / 2))
+                ring.lineWidth = hl
+                app.barFrame.setStroke()
+                ring.stroke()
+            } else {
+                Draw.bevel(track, "thin")
+            }
             let inner = track.insetBy(dx: 2, dy: 2), end = inner.minX + max(fill.width - 4, 0)
             var x = inner.minX
-            while x < end {
-                Draw.fill(NSRect(x: x, y: inner.minY, width: min(8, end - x), height: inner.height), Tok.Color.barFill)
-                x += 10
+            while x < end, seg[0] > 0 {
+                Draw.fill(NSRect(x: x, y: inner.minY, width: min(seg[0], end - x), height: inner.height), Tok.Color.barFill)
+                x += seg[0] + seg[1]
             }
             return
         }

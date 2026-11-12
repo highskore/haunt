@@ -95,24 +95,25 @@ Some looks need more than colours and sizes. The `[effects]` table switches on e
 | `palette.tab.sub` | `"meta"`, `"task"` | a tab's entry shows its meta line, or only the agent's task (a shell keeps its meta) |
 | `palette.font` | `"mono"`, `"ui"` | the palette's text |
 | `palette.icons` | bool | the sidebar's icons in place of the shortcut column; shortcuts move right |
-| `palette.selection` | `"bar"`, `"pill"` | the selected row (`app.palette.pill.*`) |
+| `palette.selection` | `"bar"`, `"pill"`, `"cursor"` | the selected row (`app.palette.pill.*`), or filled with `palette.sel` behind a triangle cursor |
 | `palette.foot`, `palette.scrim` | bool, default true | the hints line, and the dimmed window behind the palette |
 | `palette.keys` | `"box"`, `"plain"` | shortcuts in a box or as text |
 | `palette.modes` | `"styled"`, `"plain"` | a plugin mode's rows (the decision log) styled like the rest, or in the black-and-white layout and mono font with an inverted selection, inside the themed panel |
 | `palette.input.icon`, `palette.input.weight` | bool; `"regular"`, `"light"` | a search glyph before the query, and the query's weight |
 | `window.square`, `window.border` | bool | square corners instead of the system's, and a 1 pt `color.window.border` inside the edge |
 | `titlebar.double` | bool | a second rule (`app.titlebar.rule2`) just above the title bar's |
-| `lights.shape` | `"circle"`, `"diamond"`, `"boxes"` | the traffic lights at rest, diamonds outlined in `app.ornament`, or bevelled minimise, maximise and close boxes on the right |
-| `label.rule` | `"none"`, `"diamond"`, `"groupbox"` | a group label between a short rule and diamond and a rule fading to the edge, or each group in an etched box with its label on the top edge (`app.group.pad`, `app.group.gap`) |
-| `row.select` | `"fill"`, `"brackets"`, `"name"` | the selected row filled, two corner brackets over a glow from its left edge, or only its name highlighted (`app.row.select.fill`, `app.row.select.ink`) with a dotted ring |
+| `lights.shape` | `"circle"`, `"diamond"`, `"boxes"`, `"squares"` | the traffic lights at rest, diamonds outlined in `app.ornament`, bevelled minimise, maximise and close boxes on the right, or flat squares |
+| `label.rule` | `"none"`, `"diamond"`, `"groupbox"`, `"block"` | a group label between a short rule and diamond and a rule fading to the edge, each group in an etched box with its label on the top edge (`app.group.pad`, `app.group.gap`), or the label in `app.label.ink` on a block of `app.label.fill` (`app.label.block.pad`) |
+| `row.select` | `"fill"`, `"brackets"`, `"name"`, `"cursor"` | the selected row filled, two corner brackets over a glow from its left edge, only its name highlighted (`app.row.select.fill`, `app.row.select.ink`) with a dotted ring, or the whole row in those colours behind a triangle cursor |
 | `icon.ring`, `icon.shell` | bool; `"tile"`, `"diamond"` | rings around the agent icons, and the shell glyph on a tile or in a diamond |
-| `progress.style` | `"bar"`, `"dotted"`, `"segments"` | the progress bar solid, a dotted track with a fading fill and a diamond knob (`app.bar.knob`), or blocks in a sunken track |
+| `progress.style` | `"bar"`, `"dotted"`, `"segments"` | the progress bar solid, a dotted track with a fading fill and a diamond knob (`app.bar.knob`), or blocks (`app.bar.segment`: width, gap) in a sunken track, or in `app.bar.frame` when it has any opacity |
 | `needs.glow` | bool | a glow behind the needs-you status |
 | `needs.weight` | `"regular"`, `"bold"` | the needs-you status's weight, when it isn't a pill |
-| `ornament` | `"none"`, `"sigil"` | artwork drawn in code: a sigil at the sidebar's foot (left out when the rows need its room), and, behind the window's content, a sigil at `app.ornament.alpha` (0–0.12) and marks in the window's corners, shown only when the window and Ghostty's background are both see-through |
+| `ornament` | `"none"`, `"sigil"`, `"lcd"` | artwork drawn in code: a sigil at the sidebar's foot (left out when the rows need its room), and, behind the window's content, a sigil at `app.ornament.alpha` (0–0.12) and marks in the window's corners, shown only when the window and Ghostty's background are both see-through; or an LCD grid in `app.ornament` at that alpha over the title bar and sidebar, never over the terminal |
 | `palette.inset` | 0–80, default 22 | how far the bottom-right palette stands in from the window's edges |
 | `palette.header`, `palette.input.rules` | bool | `[strings] palette.header` above the input, and rules above and below the input |
 | `ui.weight` | `"regular"`, `"light"` | the theme's UI face's regular text drawn light |
+| `name.font` | `"ui"`, `"display"` | the sidebar's tab names in the UI face or in `app.display.font` |
 | `window.frame`, `pane.frame` | `"none"`, `"bevel"` | a raised bevel around the window inside `app.window.pad`, and a sunken one around the terminal, `app.pane.gap` from the sidebar (`app.bevel.*`) |
 | `titlebar.style`, `titlebar.icon`, `titlebar.menu` | `"plain"`, `"caption"`; bool; bool | the title bar as a caption filled with `app.titlebar.fill` and titled on the left in `app.row.select.ink`, a ghost before the title, and a row of Haunt's own menus under it that open them |
 | `icon.style` | `"vector"`, `"pixel"` | the claude and shell icons as pixel art |
@@ -121,6 +122,8 @@ Some looks need more than colours and sizes. The `[effects]` table switches on e
 Every effect is off by default, so black and white draws as it did before them.
 
 **Display type.** `[app] display.font` names a face for the title's `{tab}` or `{app}` part, the group labels and the palette header. `[app] text.chrome` lists gradient stops, top to bottom, that fill that text and a pill selection, each optionally at a place (`"#c9c9cf 22%"`, given for every stop and in order, or spread evenly); every stop must be opaque, and every stop and the blend between them (sixteen samples a segment) must read 3:1 on the window, sidebar and palette backgrounds and carry `palette.pill.ink` at 3:1, or the text is drawn flat and the theme logged.
+
+**Rings.** `[app] palette.rings` lists rings drawn around the palette in place of its border, outermost first, each `"#rrggbb width"` with a width up to 8 pt.
 
 **`[strings]`.** A theme may word seven places: `titlebar.right`, `palette.header`, `palette.foot` (replacing the default hints; a mode's hints stay Haunt's), `palette.input.glyph`, `palette.message` (with `palette.frame = "dialog"`), `sidebar.foot` (with `ornament`; it must show `{agents}` or `{agents.roman}`) and `row.sub.prefix` (before a subagent line). Each is one plain line of up to 64 code points, with no control, bidi or invisible characters and at most two combining marks on a character; none may pass for one of Haunt's status words (Needs you, Running, Idle, Waiting for you, Approve, Done, Failed, and Allow or Deny as a word), checked as plugins' row labels are, lookalikes, spacing and accents included. Anything else is refused and logged. `{day.roman}`, `{month.roman}` and `{year.roman}` come from the clock, `{agents}` and `{agents.roman}` from the sidebar.
 

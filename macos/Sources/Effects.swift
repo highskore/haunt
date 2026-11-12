@@ -102,6 +102,8 @@ struct Effects: Equatable {
     var paletteFrame = "panel"
     /// The theme UI face's regular text drawn "light" (CSS 300), as a card sets it.
     var uiWeight = "regular"
+    /// The tab names in `app.display.font` instead of the UI face.
+    var nameFont = "ui"
 
     enum Key {
         case bool(WritableKeyPath<Effects, Bool>)
@@ -131,7 +133,7 @@ struct Effects: Equatable {
         "palette.blur": .choice(\.paletteBlur, Array(Effects.blurs.keys).sorted()),
         "palette.font": .choice(\.paletteFont, ["mono", "ui"]),
         "palette.icons": .bool(\.paletteIcons),
-        "palette.selection": .choice(\.paletteSelection, ["bar", "pill"]),
+        "palette.selection": .choice(\.paletteSelection, ["bar", "pill", "cursor"]),
         "palette.foot": .bool(\.paletteFoot),
         "palette.scrim": .bool(\.paletteScrim),
         "palette.keys": .choice(\.paletteKeys, ["box", "plain"]),
@@ -141,15 +143,15 @@ struct Effects: Equatable {
         "window.square": .bool(\.windowSquare),
         "window.border": .bool(\.windowBorder),
         "titlebar.double": .bool(\.titlebarDouble),
-        "lights.shape": .choice(\.lightsShape, ["circle", "diamond", "boxes"]),
-        "label.rule": .choice(\.labelRule, ["none", "diamond", "groupbox"]),
-        "row.select": .choice(\.rowSelect, ["fill", "brackets", "name"]),
+        "lights.shape": .choice(\.lightsShape, ["circle", "diamond", "boxes", "squares"]),
+        "label.rule": .choice(\.labelRule, ["none", "diamond", "groupbox", "block"]),
+        "row.select": .choice(\.rowSelect, ["fill", "brackets", "name", "cursor"]),
         "icon.ring": .bool(\.iconRing),
         "icon.shell": .choice(\.iconShell, ["tile", "diamond"]),
         "progress.style": .choice(\.progressStyle, ["bar", "dotted", "segments"]),
         "needs.glow": .bool(\.needsGlow),
         "needs.weight": .choice(\.needsWeight, ["regular", "bold"]),
-        "ornament": .choice(\.ornament, ["none", "sigil"]),
+        "ornament": .choice(\.ornament, ["none", "sigil", "lcd"]),
         "palette.inset": .number(\.paletteInset, 0...80),
         "palette.header": .bool(\.paletteHeader),
         "palette.input.rules": .bool(\.paletteInputRules),
@@ -161,6 +163,7 @@ struct Effects: Equatable {
         "icon.style": .choice(\.iconStyle, ["vector", "pixel"]),
         "palette.frame": .choice(\.paletteFrame, ["panel", "dialog"]),
         "ui.weight": .choice(\.uiWeight, ["regular", "light"]),
+        "name.font": .choice(\.nameFont, ["ui", "display"]),
     ]
 
     /// nil when `name` took `value`; otherwise why not.
