@@ -1,12 +1,17 @@
-# The Linux check needs the Rust workspace, the WIT, the docs the tests read and design/tokens.json.
+# Allow-list: only what the Linux build and its tests read.
+*
+!core
+!cli
+!ffi
+!wit
+!tools
+!shell
+!docs
+!design/tokens.json
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!linux
 **/target
-/build
-/.git
-/.toolchain
-/deps-src
-/.cache
-/macos
-/design/*
-!/design/tokens.json
-/docs/img
-/docs/spike/*.png
+docs/img
+docs/spike

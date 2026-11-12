@@ -722,7 +722,8 @@ impl Core {
     }
 
     /// One hook line delivered as the socket intake would, with the same decoding and nonce check, but
-    /// no rate limit, branch lookup or plugin tap. None if no registered surface has its id.
+    /// no rate limit, branch lookup or plugin tap, and no git read, so a turn's `head_at_start` stays
+    /// unset. None if no registered surface has its id.
     #[cfg(any(test, feature = "replay"))]
     pub fn replay_line(&self, line: &str) -> Option<LineResult> {
         let nonces = lock(&self.state).nonces.clone();
