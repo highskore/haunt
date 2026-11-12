@@ -1,6 +1,6 @@
 #!/bin/bash
 # Plugin output in the app: the Dock tile and badge it sets, the voice path rendered to a buffer (never played),
-# and the synthesised sounds. HAUNT_DOCK_RENDER=<dir> also writes each Dock state as a PNG.
+# and the synthesised sounds. HAUNT_DOCK_RENDER=<dir> also writes each Dock state and glow label as a PNG.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 mkdir -p build

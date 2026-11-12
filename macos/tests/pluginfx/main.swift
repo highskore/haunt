@@ -231,5 +231,25 @@ let up = PluginSound.synth(.chime, ratio: pow(2, 12.0 / 12), loop: false)
 let base = PluginSound.synth(.chime, ratio: 1, loop: false)
 check(up.count == base.count && up != base, "pitch changes the tone, not its length")
 
+// MARK: Glow, drawn offscreen over a dark desktop strip: no panel is ever put on screen.
+
+if let dir = render {
+    let (w, h) = (1200, 44)
+    for (name, label) in [("none", nil), ("needs", PluginGlow.label(count: 3)),
+                          ("row", PluginGlow.label(head: "api · cargo publish?", waited: 74))] as [(String, String?)] {
+        let view = GlowView()
+        view.frame = NSRect(x: 0, y: 0, width: w, height: h)
+        view.update(label: label, below: 10, scale: 2, breathe: false)
+        let ctx = CGContext(data: nil, width: w * 2, height: h * 2, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.setFillColor(NSColor(white: 0.12, alpha: 1).cgColor)
+        ctx.fill(CGRect(x: 0, y: 0, width: w * 2, height: h * 2))
+        ctx.scaleBy(x: 2, y: 2)
+        view.layer!.render(in: ctx)
+        let png = NSBitmapImageRep(cgImage: ctx.makeImage()!).representation(using: .png, properties: [:])!
+        try? png.write(to: URL(fileURLWithPath: "\(dir)/glow-\(name).png"))
+    }
+}
+
 print(failures == 0 ? "pluginfx: all passed" : "pluginfx: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

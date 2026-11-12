@@ -253,7 +253,7 @@ private final class GlowPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-private final class GlowView: NSView {
+final class GlowView: NSView {
     private static let line: CGFloat = 3
     private static let halo: CGFloat = 12
     private static let inset: CGFloat = 12

@@ -195,7 +195,7 @@ macos/tests/bundle-plugins.sh # make-app's --plugins: none by default, exactly t
 macos/tests/notify.sh    # notifications: when Allow shows, answer routing, toggles, the menu bar menu
 macos/tests/answerkey.sh # answers go as keystrokes, and only the fixed Allow/Deny keys do
 macos/tests/palette.sh   # the palette keeps its selection on a refresh, not on new text
-macos/tests/pluginfx.sh  # plugin Dock tile and badge, the voice rendered to a buffer (never played), the synthesised sounds; HAUNT_DOCK_RENDER=<dir> writes the tile states as PNGs
+macos/tests/pluginfx.sh  # plugin Dock tile and badge, the voice rendered to a buffer (never played), the synthesised sounds; HAUNT_DOCK_RENDER=<dir> writes the tile states and glow labels as PNGs
 macos/fidelity.sh        # pixel check against the mockups (HAUNT_INACTIVE=1 for the unfocused window)
 ```
 
