@@ -69,6 +69,8 @@ open build/haunt.app
 
 Signing: set `HAUNT_SIGN_ID`, or put your identity in a `.sign-id` file (gitignored). Without either, the app is signed ad hoc.
 
+`macos/release.sh` builds a release locally from a clean checkout: `make-app.sh --plugins all`, a check that the app is signed as configured (the same identity on the app and the CLI, hardened runtime, the wasmtime entitlement, arm64 only), `build/haunt-<version>-arm64.zip` made with `ditto` and its `.sha256`, and `build/RELEASE_NOTES.md` from `macos/release-notes.md`. It publishes nothing.
+
 ## Set up
 
 ```sh
