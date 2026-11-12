@@ -811,8 +811,10 @@ extension NSColor {
 /// `[effects]`: what plugins may show or play outside their own panels. All on by default.
 struct PluginEffects: Equatable {
     var dock = true
+    var glow = true
+    var glowLabel = true
 
-    static let keys: [String: WritableKeyPath<PluginEffects, Bool>] = ["dock": \.dock]
+    static let keys: [String: WritableKeyPath<PluginEffects, Bool>] = ["dock": \.dock, "glow": \.glow, "glow_label": \.glowLabel]
 
     init() {}
 

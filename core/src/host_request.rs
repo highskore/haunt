@@ -39,4 +39,9 @@ pub enum HostRequest {
     /// the plugin that owns the tile sends one; all none gives haunt's own back.
     #[cfg(feature = "plugins")]
     DockShow { plugin_id: String, image: Option<crate::plugins::DockImage>, badge: Option<u32>, blink: Option<crate::plugins::DockImage> },
+    /// The warn-orange glow along the top of the screen, with `label` at its right end; only from its owner.
+    #[cfg(feature = "plugins")]
+    GlowShow { plugin_id: String, label: Option<String> },
+    #[cfg(feature = "plugins")]
+    GlowHide { plugin_id: String },
 }

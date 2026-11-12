@@ -298,6 +298,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
         root.topRow.onClick = { [weak self] plugin in self?.bridge.topRowClicked(pluginId: plugin) }
         root.sidebar.onHover = { [weak self] id in self?.bridge.hover.pointer(over: id) }
         bridge.hover.canHold = { [weak win, weak root] in win?.isKeyWindow == true && root?.sidebar.isHidden == false }
+        bridge.glow.anchor = win
 
         #if HAUNT_FIXTURES
         if fixture != nil, let path = ProcessInfo.processInfo.environment["HAUNT_BACKDROP"], let image = NSImage(contentsOfFile: path) {

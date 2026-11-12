@@ -439,6 +439,8 @@ enum HostRequest: Equatable, Hashable {
     case openUrl(pluginId: String, url: String)
     case focusTab(pluginId: String, surface: String)
     case dockShow(pluginId: String, image: DockImage?, badge: UInt32?, blink: DockImage?)
+    case glowShow(pluginId: String, label: String?)
+    case glowHide(pluginId: String)
 }
 
 struct PluginKey: Equatable, Hashable {

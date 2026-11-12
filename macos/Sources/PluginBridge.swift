@@ -15,9 +15,14 @@ final class PluginBridge {
     /// A plugin bound or unbound a key.
     var onKeysChanged: (() -> Void)?
     let dock = PluginDock()
+    let glow = PluginGlow()
     /// `[effects]` from config.toml.
     var effects = PluginEffects() {
-        didSet { dock.enabled = effects.dock }
+        didSet {
+            dock.enabled = effects.dock
+            glow.enabled = effects.glow
+            glow.showsLabel = effects.glowLabel
+        }
     }
     /// Set once the core has started, so the decision log is loaded before plugins read it.
     var plugins: PluginsAPI? {
@@ -29,6 +34,7 @@ final class PluginBridge {
             hover.owner = nil
             if plugins == nil { presence.stop() } else { presence.start() }
             dock.reset()
+            glow.hide()
         }
     }
     private let core: CoreAPI
@@ -130,6 +136,10 @@ final class PluginBridge {
                 openTab?(surface)
             case let .dockShow(_, image, badge, blink):
                 dock.show(image: image, badge: badge, blink: blink)
+            case let .glowShow(_, label):
+                glow.show(label: label)
+            case .glowHide:
+                glow.hide()
             case .ptyAnswer, .ptyType:
                 guard let w = core.gatePluginRequest(request: req), let route = PtyRoute(req, w) else { continue }
                 write(route)

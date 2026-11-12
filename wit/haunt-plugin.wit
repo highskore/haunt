@@ -4,8 +4,8 @@
 // 0.4: `theme` and `typing` imports; `on-theme-changed` export.
 // 0.5: surface, tool, command, file path, task id and request key on agent-event; `rows`, `timer`,
 //      `clock` and `panel` imports; `on-tick` export; `on-event` returns nothing.
-//      `hold`, `top-row`, `keys`, `exec`, `terminal` and `dock` imports; `on-exec`, `on-away-changed`,
-//      `on-hover-hold` and `on-fs-tree` exports. Draft, not linked yet: `sound`, `speech`, `glow` and `title` imports.
+//      `hold`, `top-row`, `keys`, `exec`, `terminal`, `dock` and `glow` imports; `on-exec`, `on-away-changed`,
+//      `on-hover-hold` and `on-fs-tree` exports. Draft, not linked yet: `title`, `sound` and `speech` imports.
 package haunt:plugin@0.5.0;
 
 interface types {

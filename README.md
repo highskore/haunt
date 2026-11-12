@@ -122,6 +122,8 @@ menu_bar = true      # the menu bar item
 
 [effects]            # what plugins may do outside their panels; all on by default
 dock = true          # a plugin's Dock icon and badge
+glow = true          # a plugin's orange glow along the top of the screen
+glow_label = true    # and its label
 
 [ghostty]            # passed through to libghostty, less the keys below
 cursor-style = "bar"
@@ -133,7 +135,7 @@ cursor-style = "bar"
 
 `[notifications]` turns agent notifications and the menu bar item on and off. Turning one off takes back what it already posted. Notifications never come for the tab you are looking at.
 
-`[effects]` lets plugins change things outside their own panels, each only with the capability you approved: `dock = false` keeps Haunt's own Dock icon and no badge.
+`[effects]` lets plugins change things outside their own panels, each only with the capability you approved: `dock = false` keeps Haunt's own Dock icon and no badge; `glow = false` hides the glow, `glow_label = false` just its label.
 
 `[ghostty]` is passed through to libghostty, except for what would get a paste past Haunt's paste check or slip in config Haunt never sees. These are dropped and logged: `right-click-action = paste` or `copy-or-paste`, `middle-click-action` other than `ignore` (Haunt pastes on middle click itself; `ignore` turns that off), any `keybind` to `paste_from_clipboard` or `paste_from_selection`, `config-file`, `config-default-files`, and any key or value with a line break. Haunt also always unbinds Ghostty's ⌘V, ⇧⌘V and Paste key, so every paste goes through its own Edit menu.
 

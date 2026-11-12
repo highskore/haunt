@@ -2168,6 +2168,9 @@ impl PluginHost {
         if caps.dock {
             fx::wdock::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
+        if caps.glow {
+            fx::wglow::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
         if caps.fs_read_granted() || caps.fs_write_granted() {
             let mut fs = l.instance("haunt:plugin/fs@0.5.0")?;
             if caps.fs_read_granted() {
