@@ -604,7 +604,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             // The name alone highlighted, with a dotted focus ring inside it.
             let nameH = Tok.Size.rowName * lh
             let r = NSRect(x: col2 - 2, y: y + (rowLine1 - nameH) / 2, width: Draw.width(l.name) + 4, height: nameH).integral
-            Draw.fill(r, Tok.Color.rowSelected)
+            Draw.fill(r, Theme.current.app.rowSelectFill)
             let ring = NSBezierPath(rect: r.insetBy(dx: 0.5, dy: 0.5))
             ring.lineWidth = 1
             ring.setLineDash([1, 1], count: 2, phase: 0)

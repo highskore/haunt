@@ -81,8 +81,8 @@ struct AppTokens: Equatable {
     var groupPad: CGFloat = 4
     /// `palette.frame = "dialog"`: the sunken field and list.
     var paletteField = NSColor.white
-    /// Moves a bottom-right palette right of `palette.inset` (left when negative), for a card whose side and
-    /// bottom margins differ.
+    /// Moves a bottom-right palette this far right of `palette.inset`, for a card whose side margin is
+    /// smaller than its bottom one.
     var paletteOffsetX: CGFloat = 0
     /// How much further in than the input's text the palette's entries start.
     var paletteRowInset: CGFloat = 0
@@ -90,6 +90,8 @@ struct AppTokens: Equatable {
     /// `titlebar.style = "caption"`: the bar's gradient stops, left to right; and `row.select = "name"`'s text.
     var titlebarFill: [String] = []
     var rowSelectInk = NSColor.white
+    /// `row.select = "name"`: the fill behind the selected name.
+    var rowSelectFill = NSColor(srgbRed: 0, green: 0, blue: 0.5, alpha: 1)
     var sidebarFootGap: CGFloat = 6
     /// Ornament lines and outlines, and the fainter rules and rings.
     var ornament = NSColor(white: 1, alpha: 0.6)
@@ -163,6 +165,7 @@ struct AppTokens: Equatable {
         "app.group.gap": .number(\.app.groupGap),
         "app.titlebar.fill": .strings(\.app.titlebarFill),
         "app.row.select.ink": .color(\.app.rowSelectInk),
+        "app.row.select.fill": .color(\.app.rowSelectFill),
         "app.sidebar.foot.gap": .number(\.app.sidebarFootGap),
         "app.ornament": .color(\.app.ornament),
         "app.ornament.dim": .color(\.app.ornamentDim),

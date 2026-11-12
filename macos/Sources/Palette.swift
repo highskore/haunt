@@ -627,7 +627,7 @@ final class PaletteView: NSView {
         // Inside the 2 pt bevel and a 1 pt gap, as in the card.
         let cap = NSRect(x: 3, y: 3, width: bounds.width - 6, height: Self.captionH)
         let stops = app.titlebarFill.compactMap { NSColor(themeHex: $0) }
-        if stops.count > 1, let g = NSGradient(colors: stops) { g.draw(in: cap, angle: 0) } else { Draw.fill(cap, Tok.Color.rowSelected) }
+        if stops.count > 1, let g = NSGradient(colors: stops) { g.draw(in: cap, angle: 0) } else { Draw.fill(cap, app.rowSelectFill) }
         if let header {
             let f = Draw.ui(Tok.Size.paletteSmallFont, .bold)
             Draw.text(Draw.line(header, f, app.rowSelectInk), font: f, x: cap.minX + 4, top: cap.minY + (cap.height - Tok.Size.paletteSmallFont * lh) / 2,

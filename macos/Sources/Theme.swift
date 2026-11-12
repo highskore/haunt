@@ -201,7 +201,7 @@ extension Theme {
             ("app.sidebar.foot.fg", ["color.window.bg", "color.sidebar.bg"]),
             ("app.pill.fg", ["color.window.bg", "color.sidebar.bg", "app.pill.bg"]),
             ("app.palette.pill.ink", ["color.palette.bg", "color.palette.sel"]),
-            ("app.row.select.ink", ["color.sidebar.bg", "color.row.selected"]),
+            ("app.row.select.ink", ["color.sidebar.bg", "app.row.select.fill"]),
         ]
         let guides: [(String, [String])] = [
             ("color.diff.mark", ["color.window.bg"]),
@@ -243,7 +243,7 @@ extension Theme {
         "color.window.border", "color.zen.track",
         "app.scrim", "app.window.ring", "app.window.highlight", "app.palette.ring", "app.palette.highlight", "app.row.raised.ring",
         "app.row.raised.highlight", "app.row.raised.shadow", "app.row.hover", "app.pill.bg", "app.pill.ring", "app.palette.pill.highlight",
-        "app.palette.pill.mute", "app.ornament", "app.ornament.dim", "app.titlebar.rule2", "app.bar.knob", "app.bevel.light", "app.bevel.hi", "app.bevel.shade", "app.bevel.dark", "app.palette.field",
+        "app.palette.pill.mute", "app.ornament", "app.ornament.dim", "app.titlebar.rule2", "app.bar.knob", "app.bevel.light", "app.bevel.hi", "app.bevel.shade", "app.bevel.dark", "app.palette.field", "app.row.select.fill",
     ]
 
     /// Secondary text that may be see-through, down to `minAlpha`: its contrast is judged blended.
