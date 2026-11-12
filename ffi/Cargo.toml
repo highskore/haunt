@@ -10,6 +10,7 @@ name = "haunt_ffi"
 
 [features]
 default = ["plugins"]
+# Never build without it: HostRequest loses ShowPanel and no longer matches the app's bindings.
 plugins = ["haunt-core/plugins"]
 # Calls only the HAUNT_FIXTURES app uses; scripts/build-core.sh turns it on for that build.
 fixtures = ["plugins"]
