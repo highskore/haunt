@@ -150,5 +150,30 @@ do {
     Theme.current = Theme()
 }
 
+// The cursor's triangle is drawn over the icon's layers, so an opaque one reaching it can't hide it.
+do {
+    Theme.current.effects.rowSelect = "cursor"
+    // Narrow, so the icon's 4 pt bleed reaches the cursor at the row's edge.
+    Theme.current.size.rowPad[1] = 8
+    let ink = Theme.current.app.rowSelectInk.usingColorSpace(.sRGB)!
+    func cursorPixels(_ rep: NSBitmapImageRep) -> Int {
+        let s = rep.pixelsWide / Int(rows.bounds.width), right = Int(Theme.current.effects.rowInset + Tok.Size.rowPad[1]) * s
+        var n = 0
+        for y in 0..<rep.pixelsHigh { for x in 0..<right {
+            if let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), abs(c.redComponent - ink.redComponent) < 0.02,
+               abs(c.greenComponent - ink.greenComponent) < 0.02, abs(c.blueComponent - ink.blueComponent) < 0.02 { n += 1 }
+        } }
+        return n
+    }
+    let bare = cursorPixels(render(rows))
+    let cover = Theme.current.app.rowSelectFill.withAlphaComponent(1).themeHex
+    let ring = [LayerSpec(id: "i", slot: "icon", prims: [PrimSpec(kind: "rect", x: SpanSpec(a: -20, b: -20), y: SpanSpec(a: -20, b: -20), fill: cover)])]
+    Layers.set(Layers.resolve(ring, images: [], theme: Theme.current).0, source: LayerSource(specs: ring))
+    let covered = cursorPixels(render(rows))
+    Layers.set([], source: LayerSource())
+    check(bare > 0 && covered == bare, "the cursor shows over an opaque icon layer: \(covered) of \(bare) px")
+    Theme.current = Theme()
+}
+
 print(failures == 0 ? "sidebar: all passed" : "sidebar: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

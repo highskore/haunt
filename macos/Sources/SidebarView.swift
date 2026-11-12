@@ -602,8 +602,6 @@ final class SidebarView: NSView, NSTextFieldDelegate {
                 // "name" is drawn with the name, below; "none" by the theme's layers.
             } else if fx.rowSelect == "cursor" {
                 Draw.fill(box, Theme.current.app.rowSelectFill)
-                Theme.current.app.rowSelectInk.setFill()
-                Draw.cursor(at: NSPoint(x: box.minX + 4, y: top + Tok.Size.rowPad[0] + (rowLine1 - 8) / 2))
             } else {
                 Tok.Color.rowSelected.setFill()
                 shape.fill()
@@ -648,6 +646,11 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         // After the row's last layer: the icon's glyph is text. Its layers stay in the row, left of column 2, where
         // no text is: every line but the icon starts at col2.
         drawIcon(row.kind, in: icon, band: NSRect(x: box.minX, y: box.minY, width: col2 - box.minX, height: box.height).intersection(rowClip), ctx: ctx)
+        if row.selected && fx.rowSelect == "cursor" {
+            // Over the icon's layers, which may reach it.
+            Theme.current.app.rowSelectInk.setFill()
+            Draw.cursor(at: NSPoint(x: box.minX + 4, y: top + Tok.Size.rowPad[0] + (rowLine1 - 8) / 2))
+        }
 
         if l.hovered {
             let r = closeRect(top: top)
