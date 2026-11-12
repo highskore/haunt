@@ -27,7 +27,7 @@ mod bindings {
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
-    allowlist as wallow, clock as wclock, exec as wexec, hold as whold, keys as wkeys, sound as wsound, speech as wspeech, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
+    allowlist as wallow, clock as wclock, dock as wdock, exec as wexec, hold as whold, keys as wkeys, sound as wsound, speech as wspeech, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
     sidebar as wside, theme as wtheme, timer as wtimer, typing as wtyping, types as wit,
 };
 pub(crate) use bindings::haunt::plugin::panel as wpanel;
@@ -47,6 +47,10 @@ pub const MAX_KEYS: usize = 8;
 const SOUNDS_PER_SEC: usize = 4;
 pub const SAY_MAX: usize = 200;
 const SAY_EVERY: Duration = Duration::from_secs(2);
+pub const DOCK_IMAGES: usize = 8;
+pub const DOCK_IMAGE_MAX: usize = 1 << 20;
+/// The Dock tile is at most 512 pt on a 2x display.
+pub const DOCK_SIDE: std::ops::RangeInclusive<u32> = 16..=1024;
 const MAX_LOGS: usize = 1000;
 const MAX_STR: usize = 4096;
 /// Characters, not bytes, of a registered command or mode title.
@@ -149,6 +153,24 @@ pub enum HostRequest {
     /// Plain text, at most `SAY_MAX` characters; it cuts off whatever was being said.
     Say { plugin_id: String, text: String },
     StopSpeech { plugin_id: String },
+    /// Replaces the plugin's Dock images; each a PNG checked by `png_size`.
+    DockImages { plugin_id: String, images: Vec<DockImage> },
+    /// `image` (none: Haunt's icon) and `badge` on the Dock tile, `blink` shown briefly every few seconds.
+    /// All none: the plugin lets the tile go.
+    DockShow { plugin_id: String, image: Option<String>, badge: Option<u32>, blink: Option<String> },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
+pub struct DockImage {
+    pub id: String,
+    pub png: Vec<u8>,
+}
+
+/// Width and height of a PNG with a well-formed header; nothing else is ever handed to the image decoder.
+pub fn png_size(b: &[u8]) -> Option<(u32, u32)> {
+    let be = |i: usize| u32::from_be_bytes(b[i..i + 4].try_into().unwrap());
+    (b.len() >= 33 && b[..8] == *b"\x89PNG\r\n\x1a\n" && be(8) == 13 && &b[12..16] == b"IHDR").then(|| (be(16), be(20)))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -277,6 +299,7 @@ pub struct HostState {
     sound_times: VecDeque<Instant>,
     /// The loop playing, if any.
     ambient: Option<SoundName>,
+    dock_ids: Vec<String>,
     said_at: Option<Instant>,
 }
 
@@ -287,6 +310,7 @@ impl Drop for HostState {
         if let Some(c) = &self.core {
             c.release_notifications(&self.id);
             let _ = c.set_top_row(&self.id, None);
+            c.release_dock(&self.id);
         }
     }
 }
@@ -326,6 +350,7 @@ impl HostState {
             exec_jobs: Vec::new(),
             sound_times: VecDeque::new(),
             ambient: None,
+            dock_ids: Vec::new(),
             said_at: None,
             events: EventGrant { details: caps.event_details, answers: caps.pty_write },
         }
@@ -702,6 +727,13 @@ impl HostState {
         }
     }
 
+    /// A disabled plugin's images leave the Dock tile.
+    fn release_dock(&mut self) {
+        if self.core.as_ref().is_some_and(|c| c.release_dock(&self.id)) {
+            self.outbox.push(HostRequest::DockShow { plugin_id: self.id.clone(), image: None, badge: None, blink: None });
+        }
+    }
+
     /// A disabled plugin falls silent.
     fn hush(&mut self) {
         if let Some(sound) = self.ambient.take() {
@@ -840,6 +872,49 @@ impl wspeech::Host for HostState {
 
     fn stop(&mut self) {
         let _ = self.request(HostRequest::StopSpeech { plugin_id: self.id.clone() });
+    }
+}
+
+impl wdock::Host for HostState {
+    fn images(&mut self, images: Vec<(String, Vec<u8>)>) -> Result<(), String> {
+        if images.len() > DOCK_IMAGES {
+            return Err(format!("at most {DOCK_IMAGES} images"));
+        }
+        let mut out = Vec::with_capacity(images.len());
+        for (id, png) in images {
+            if id.is_empty() || id.len() > 32 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                return Err(format!("image id {:?}: 1 to 32 letters, digits or '-'", shown(&id, 40)));
+            }
+            if png.len() > DOCK_IMAGE_MAX {
+                return Err(format!("image {id}: over {} KB", DOCK_IMAGE_MAX >> 10));
+            }
+            match png_size(&png) {
+                Some((w, h)) if DOCK_SIDE.contains(&w) && DOCK_SIDE.contains(&h) => {}
+                Some((w, h)) => return Err(format!("image {id}: {w}x{h}, each side must be {} to {}", DOCK_SIDE.start(), DOCK_SIDE.end())),
+                None => return Err(format!("image {id}: not a PNG")),
+            }
+            if out.iter().any(|i: &DockImage| i.id == id) {
+                return Err(format!("image {id} twice"));
+            }
+            out.push(DockImage { id, png });
+        }
+        let ids = out.iter().map(|i| i.id.clone()).collect();
+        self.request(HostRequest::DockImages { plugin_id: self.id.clone(), images: out })?;
+        self.dock_ids = ids;
+        Ok(())
+    }
+
+    fn show(&mut self, id: Option<String>, badge: Option<u32>, blink: Option<String>) -> Result<(), String> {
+        let core = self.core.clone().ok_or("no haunt core")?;
+        if let Some(x) = id.iter().chain(&blink).find(|x| !self.dock_ids.contains(x)) {
+            return Err(format!("no image {:?}; send it with images first", shown(x, 40)));
+        }
+        if id.is_none() && badge.is_none() && blink.is_none() {
+            self.release_dock();
+            return Ok(());
+        }
+        core.claim_dock(&self.id)?;
+        self.request(HostRequest::DockShow { plugin_id: self.id.clone(), image: id, badge, blink })
     }
 }
 
@@ -1130,6 +1205,7 @@ impl LoadedPlugin {
             data.clear_top_row();
             data.drop_keys();
             data.hush();
+            data.release_dock();
             PluginError(why)
         })
     }
@@ -1363,6 +1439,9 @@ impl PluginHost {
         }
         if caps.speech {
             wspeech::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if caps.dock {
+            wdock::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.pty_write {
             wpty::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
@@ -1889,6 +1968,39 @@ mod tests {
             HostRequest::Ambient { plugin_id: "dev.x.rain".into(), sound: SoundName::Rain, level: 0.0 },
             HostRequest::StopSpeech { plugin_id: "dev.x.rain".into() },
         ]);
+    }
+
+    #[test]
+    fn dock_images_are_checked_pngs_and_one_plugin_has_the_tile() {
+        use wdock::Host as _;
+        let core = crate::Core::new(&*tempdir("dock"));
+        let caps = Capabilities { dock: true, ..Default::default() };
+        let mut a = HostState::new("dev.x.focus", &caps, None, None, Some(core.handle()));
+        let mut b = HostState::new("dev.x.other", &caps, None, None, Some(core.handle()));
+        let png = |w: u32, h: u32| {
+            let mut p = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+            p.extend(w.to_be_bytes());
+            p.extend(h.to_be_bytes());
+            p.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
+            p
+        };
+        assert_eq!(png_size(&png(512, 256)), Some((512, 256)));
+        assert!(a.images(vec![("idle".into(), b"GIF89a".repeat(8))]).unwrap_err().contains("not a PNG"));
+        assert!(a.images(vec![("idle".into(), png(4096, 512))]).unwrap_err().contains("4096x512"));
+        assert!(a.images(vec![("../x".into(), png(512, 512))]).is_err());
+        assert!(a.images(vec![("big".into(), [png(512, 512), vec![0; DOCK_IMAGE_MAX]].concat())]).is_err());
+        assert!(a.images((0..=DOCK_IMAGES).map(|i| (format!("i{i}"), png(64, 64))).collect()).is_err());
+        a.images(vec![("idle".into(), png(512, 512)), ("busy".into(), png(512, 512))]).unwrap();
+        assert!(a.show(Some("gone".into()), None, None).is_err());
+        a.show(Some("busy".into()), Some(3), Some("idle".into())).unwrap();
+        b.images(vec![("x".into(), png(64, 64))]).unwrap();
+        assert!(b.show(Some("x".into()), None, None).unwrap_err().contains("dev.x.focus"));
+        a.show(None, None, None).unwrap();
+        b.show(None, Some(1), None).unwrap();
+        b.outbox.clear();
+        b.release_dock();
+        assert_eq!(b.outbox, [HostRequest::DockShow { plugin_id: "dev.x.other".into(), image: None, badge: None, blink: None }]);
+        assert!(a.show(Some("idle".into()), None, None).is_ok(), "released, so free again");
     }
 
     #[test]

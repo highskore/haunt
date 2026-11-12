@@ -59,7 +59,9 @@ impl Core {
             | HostRequest::PlaySound { .. }
             | HostRequest::Ambient { .. }
             | HostRequest::Say { .. }
-            | HostRequest::StopSpeech { .. } => None,
+            | HostRequest::StopSpeech { .. }
+            | HostRequest::DockImages { .. }
+            | HostRequest::DockShow { .. } => None,
         }
     }
 }
