@@ -669,8 +669,10 @@ final class PaletteView: NSView {
         let small = Draw.ui(Tok.Size.paletteSmallFont), smallH = Tok.Size.paletteSmallFont * lh
         let headerLine = header.map { Draw.line($0, Draw.ui(Tok.Size.paletteSmallFont, .bold), app.rowSelectInk) }
         let headerRun = headerLine.map { NSRect(x: cap.minX + 4, y: cap.minY + (cap.height - smallH) / 2, width: Draw.width($0), height: smallH) }
+        // The check fills its base flat, so a gradient caption is judged on the stop its ink reads worst on.
         Layers.draw("palette.caption", cap, text: headerRun.map { [Layers.Run(rect: $0, ink: app.rowSelectInk)] } ?? [],
-                    base: stops.count > 1 ? stops : [app.rowSelectFill], state: state, in: ctx)
+                    base: [stops.count > 1 ? stops.min { app.rowSelectInk.contrast($0) < app.rowSelectInk.contrast($1) }! : app.rowSelectFill],
+                    state: state, in: ctx)
         let top = edge + headH, pad = padX
         // The input glyph labels the field from outside it, like the card's "Open:".
         var fx = x0 + pad

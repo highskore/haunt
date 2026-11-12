@@ -78,6 +78,22 @@ for y in 4..<(plain.pixelsHigh - 4) {
 check(lost == 0, "an opaque palette layer leaves the dialog's caption, buttons and labels: \(lost) px lost")
 Theme.current = Theme()
 
+// A gradient caption is judged on the stop its ink reads worst on, not the last one.
+Theme.statusCheck = { _ in false }
+Theme.current.effects.paletteFrame = "dialog"
+Theme.current.effects.paletteHeader = true
+Theme.current.app.strings = ["palette.header": "Run"]
+Theme.current.app.titlebarFill = [Theme.current.app.rowSelectInk.themeHex, "#000000", Theme.current.app.rowSelectInk.readable.themeHex]
+view.update(chip: nil, query: "", placeholder: "", rows: [row("a")], foot: [], maxRows: 8)
+let faintCap = [LayerSpec(id: "cap", slot: "palette.caption", prims: [PrimSpec(kind: "rect", fill: "#00000001")])]
+Layers.set(Layers.resolve(faintCap, images: [], theme: Theme.current).0, source: LayerSource(specs: faintCap))
+_ = snapshot()
+check(view.header != nil && Layers.skipped.contains { $0.hasPrefix("layers on palette.caption ") },
+      "a caption layer is skipped where a stop is the header's own ink: \(Layers.skipped)")
+Layers.set([], source: LayerSource())
+Theme.current = Theme()
+Theme.statusCheck = { _ in true }
+
 if failures > 0 {
     print("\(failures) failed")
     exit(1)
