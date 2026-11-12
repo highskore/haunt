@@ -251,15 +251,18 @@ impl wdock::Host for HostState {
     }
 }
 
-pub const GLOW_LABEL_MAX: usize = 32;
+pub const GLOW_COUNT_MAX: u8 = 99;
 
 impl wglow::Host for HostState {
-    /// Only the warn orange: never Haunt's needs-you white, and no colour of the plugin's own.
-    fn show(&mut self, tone: super::wrows::Tone, label: Option<String>) -> Result<(), String> {
+    /// Only the warn orange: never Haunt's needs-you white, and no colour of the plugin's own. The label is the
+    /// app's, from `count`: free text drawn over other apps could pass for theirs.
+    fn show(&mut self, tone: super::wrows::Tone, count: u8) -> Result<(), String> {
         if tone != super::wrows::Tone::Warn {
             return Err("the glow comes in warn only".into());
         }
-        let label = super::plain_opt(label, GLOW_LABEL_MAX);
+        if count > GLOW_COUNT_MAX {
+            return Err(format!("count must be 0 to {GLOW_COUNT_MAX}"));
+        }
         if !self.fx.glow_rate.ok() {
             return Err(format!("show at most {SHOWS_PER_SEC} times a second"));
         }
@@ -268,7 +271,7 @@ impl wglow::Host for HostState {
         }
         let plugin_id = self.id.clone();
         self.stage.claim(Slot::Glow, &plugin_id).map_err(|who| format!("the glow is taken: {who}"))?;
-        self.request(HostRequest::GlowShow { plugin_id, label })
+        self.request(HostRequest::GlowShow { plugin_id, count })
     }
 
     fn hide(&mut self) {
@@ -511,32 +514,32 @@ mod glow_tests {
     }
 
     #[test]
-    fn the_glow_is_warn_only_with_a_plain_short_label() {
+    fn the_glow_is_warn_only_with_a_count_of_99_at_most() {
         let mut a = state("dev.haunt.a", &Stage::default());
         for t in [Tone::Dim, Tone::Text] {
-            assert!(wglow::Host::show(&mut a, t, None).unwrap_err().contains("warn only"));
+            assert!(wglow::Host::show(&mut a, t, 1).unwrap_err().contains("warn only"));
         }
-        wglow::Host::show(&mut a, Tone::Warn, Some(format!("CI\u{202e} red\n{}", "x".repeat(40)))).unwrap();
-        let [HostRequest::GlowShow { label: Some(l), .. }] = &a.outbox[..] else { panic!("{:?}", a.outbox) };
-        assert_eq!(l.chars().count(), GLOW_LABEL_MAX);
-        assert!(l.starts_with("CI red x"), "{l}");
-        a.outbox.clear();
-        wglow::Host::show(&mut a, Tone::Warn, Some(" \u{200b}\u{2066} ".into())).unwrap();
-        assert!(matches!(&a.outbox[..], [HostRequest::GlowShow { label: None, .. }]), "nothing visible is no label");
+        for bad in [100, 255] {
+            assert!(wglow::Host::show(&mut a, Tone::Warn, bad).unwrap_err().contains("0 to 99"), "{bad}");
+        }
+        assert!(a.outbox.is_empty());
+        wglow::Host::show(&mut a, Tone::Warn, 99).unwrap();
+        wglow::Host::show(&mut a, Tone::Warn, 0).unwrap();
+        assert!(matches!(&a.outbox[..], [HostRequest::GlowShow { count: 99, .. }, HostRequest::GlowShow { count: 0, .. }]), "{:?}", a.outbox);
     }
 
     #[test]
     fn the_first_plugin_to_show_owns_the_glow_until_it_hides_or_is_disabled() {
         let stage = Stage::default();
         let (mut a, mut b) = (state("dev.haunt.a", &stage), state("dev.haunt.b", &stage));
-        wglow::Host::show(&mut a, Tone::Warn, Some("deploy".into())).unwrap();
-        assert!(wglow::Host::show(&mut b, Tone::Warn, None).unwrap_err().contains("dev.haunt.a has it"));
+        wglow::Host::show(&mut a, Tone::Warn, 2).unwrap();
+        assert!(wglow::Host::show(&mut b, Tone::Warn, 0).unwrap_err().contains("dev.haunt.a has it"));
         wglow::Host::hide(&mut b);
         assert!(b.outbox.is_empty(), "a non-owner's hide does nothing");
         a.outbox.clear();
         wglow::Host::hide(&mut a);
         assert!(matches!(&a.outbox[..], [HostRequest::GlowHide { .. }]));
-        wglow::Host::show(&mut b, Tone::Warn, None).unwrap();
+        wglow::Host::show(&mut b, Tone::Warn, 0).unwrap();
         b.outbox.clear();
         b.release_fx();
         assert!(matches!(&b.outbox[..], [HostRequest::GlowHide { .. }]));
@@ -547,9 +550,9 @@ mod glow_tests {
     fn glow_shows_are_rate_limited() {
         let mut a = state("dev.haunt.a", &Stage::default());
         for _ in 0..SHOWS_PER_SEC {
-            wglow::Host::show(&mut a, Tone::Warn, None).unwrap();
+            wglow::Host::show(&mut a, Tone::Warn, 0).unwrap();
         }
-        assert!(wglow::Host::show(&mut a, Tone::Warn, None).unwrap_err().contains("times a second"));
+        assert!(wglow::Host::show(&mut a, Tone::Warn, 0).unwrap_err().contains("times a second"));
     }
 }
 

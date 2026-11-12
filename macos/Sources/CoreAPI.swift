@@ -439,7 +439,7 @@ enum HostRequest: Equatable, Hashable {
     case openUrl(pluginId: String, url: String)
     case focusTab(pluginId: String, surface: String)
     case dockShow(pluginId: String, image: DockImage?, badge: UInt32?, blink: DockImage?)
-    case glowShow(pluginId: String, label: String?)
+    case glowShow(pluginId: String, count: UInt8)
     case glowHide(pluginId: String)
     case titleSet(pluginId: String, text: String?)
     case soundPlay(pluginId: String, sound: SoundName, pitch: Int32, volume: Float)

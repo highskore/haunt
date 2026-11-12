@@ -237,7 +237,7 @@ impl Capabilities {
             out.push(("can change Haunt's Dock icon to its own pictures and put a number on it".into(), false));
         }
         if self.glow {
-            out.push(("can show a thin orange glow and a short label along the top of your screen, over other apps".into(), false));
+            out.push(("can show a thin orange glow along the top of your screen, over other apps, with a count of what needs you".into(), false));
         }
         if self.title {
             out.push(("can show one short line of text in Haunt's title bar".into(), false));

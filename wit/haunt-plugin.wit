@@ -464,11 +464,12 @@ interface dock {
 }
 
 // Capability `glow`. A hairline glow along the top edge of the display haunt's window is on, over every
-// app, breathing (steady under Reduce Motion), with `label` (plain, at most 32 characters) at its right
-// end. The first plugin to show it owns it until `hide`.
+// app, breathing (steady under Reduce Motion). Haunt labels it at its right end from `count`, 0 to 99:
+// "1 needs you", "3 need you", nothing for 0; a plugin can't put text of its own there. The first plugin
+// to show it owns it until `hide`.
 interface glow {
   use rows.{tone};
-  show: func(tone: tone, label: option<string>) -> result<_, string>;
+  show: func(tone: tone, count: u8) -> result<_, string>;
   hide: func();
 }
 

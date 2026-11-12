@@ -107,9 +107,18 @@ final class PluginGlow {
         if let o = anchorObserver { NotificationCenter.default.removeObserver(o) }
     }
 
-    func show(label: String?) {
-        self.label = .some(label)
+    func show(count: UInt8) {
+        label = .some(Self.label(count))
         apply()
+    }
+
+    /// Haunt's words, never the plugin's.
+    static func label(_ count: UInt8) -> String? {
+        switch count {
+        case 0: nil
+        case 1: "1 needs you"
+        default: "\(count) need you"
+        }
     }
 
     func hide() {

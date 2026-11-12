@@ -152,8 +152,8 @@ final class PluginBridge {
                 openTab?(surface)
             case let .dockShow(_, image, badge, blink):
                 dock.show(image: image, badge: badge, blink: blink)
-            case let .glowShow(_, label):
-                glow.show(label: label)
+            case let .glowShow(_, count):
+                glow.show(count: count)
             case .glowHide:
                 glow.hide()
             case let .titleSet(_, text):

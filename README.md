@@ -123,7 +123,7 @@ menu_bar = true      # the menu bar item
 [plugin_fx]          # what plugins may do outside their panels; all on by default
 dock = true          # a plugin's Dock icon and badge
 glow = true          # a plugin's orange glow along the top of the screen
-glow_label = true    # and its label
+glow_label = true    # and its "N need you" label
 title = true         # a plugin's line in the title bar
 sound = true         # plugin sounds; false mutes their speech too
 speech = true        # plugins speaking aloud
