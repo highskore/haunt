@@ -184,7 +184,7 @@ cargo check -p haunt-cli --no-default-features    # the slim CLI, without plugin
 cargo test -p haunt-core --no-default-features --features replay   # what haunt-replay builds, without wasmtime
 ../haunt-plugins/haunt-claude/tests/run.sh
 ../haunt-plugins/haunt-codex/tests/run.sh
-macos/tests/keys.sh      # [keys], [layout], the generated Ghostty config and its refusals
+macos/tests/keys.sh      # [keys], [layout], [plugin_fx], the generated Ghostty config and its refusals
 macos/tests/paste.sh     # the paste preview and what needs confirming
 macos/tests/review.sh    # the review screen's git runner, diff parser, checks and send-back
 macos/tests/sidebar.sh   # sidebar drop targets, the agents view's restored frame
@@ -195,6 +195,7 @@ macos/tests/bundle-plugins.sh # make-app's --plugins: none by default, exactly t
 macos/tests/notify.sh    # notifications: when Allow shows, answer routing, toggles, the menu bar menu
 macos/tests/answerkey.sh # answers go as keystrokes, and only the fixed Allow/Deny keys do
 macos/tests/palette.sh   # the palette keeps its selection on a refresh, not on new text
+macos/tests/pluginfx.sh  # plugin Dock tile and badge, the voice rendered to a buffer (never played), the synthesised sounds; HAUNT_DOCK_RENDER=<dir> writes the tile states as PNGs
 macos/fidelity.sh        # pixel check against the mockups (HAUNT_INACTIVE=1 for the unfocused window)
 ```
 

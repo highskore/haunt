@@ -334,7 +334,7 @@ final class PluginSound {
     }
 
     /// Soft sines with a 5 ms attack and an exponential fade; a loop of chime or bell repeats every 4 s.
-    private static func synth(_ sound: SoundName, ratio: Double, loop: Bool) -> [Float] {
+    static func synth(_ sound: SoundName, ratio: Double, loop: Bool) -> [Float] {
         func tone(_ base: Double, _ partials: [(ratio: Double, amp: Double, decay: Double)], seconds: Double) -> [Float] {
             let n = Int(seconds * rate)
             return (0..<n).map { i in
@@ -404,7 +404,12 @@ final class PluginSpeech {
         guard enabled else { return }
         synth.stopSpeaking(at: .immediate)
         speaker = pluginId
-        synth.speak(AVSpeechUtterance(string: text))
+        synth.speak(Self.utterance(text))
+    }
+
+    /// Plain text in the system voice; the core already made it plain and short.
+    static func utterance(_ text: String) -> AVSpeechUtterance {
+        AVSpeechUtterance(string: text)
     }
 
     func stop(pluginId: String) {
