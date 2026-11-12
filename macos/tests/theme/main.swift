@@ -368,7 +368,7 @@ write(user, "fxbad", "[effects]\nwindow.material = \"chrome\"\nwindow.radius = 9
 let fxbad = load("fxbad")
 check(fxbad.theme.effects == Effects() && fxbad.problems.count == 4, "bad effects refused: \(fxbad.problems)")
 check(load("child").theme.effects == Effects(), "no [effects] keeps every element off")
-write(user, "fxglass", "[effects]\ntitlebar.rule = false\nlabel.case = \"sentence\"\nrow.radius = 9\npalette.selection = \"pill\"\npalette.foot = false\npalette.modes = \"plain\"\nrow.hover = true\nbar.done = false\npalette.blur = \"sheet\"\npalette.tab.sub = \"task\"\n[app]\npill.radius = 6\nsidebar.padtop = 2\npalette.caret.gap = 1\n[font]\nbase.line = 1.4\n")
+write(user, "fxglass", "[effects]\ntitlebar.rule = false\nlabel.case = \"sentence\"\nrow.radius = 9\npalette.selection = \"pill\"\npalette.foot = false\npalette.modes = \"plain\"\nbar.done = false\npalette.blur = \"sheet\"\npalette.tab.sub = \"task\"\n[app]\npill.radius = 6\nsidebar.padtop = 2\npalette.caret.gap = 1\n[font]\nbase.line = 1.4\n")
 let fxg = load("fxglass").theme
 // A blurred palette's tint carries at least half its colour; #…80 is exactly that and passes.
 write(user, "blurthin", "[color]\npalette.bg = \"#12264c7f\"\n[effects]\npalette.material = \"glass\"\npalette.blur = \"sheet\"\n")
@@ -380,7 +380,7 @@ check(half.theme.color.paletteBg.alphaComponent == 128.0 / 255 && !half.problems
       "0x80 passes: \(half.problems)")
 check(!fxg.effects.titlebarRule && fxg.effects.labelCase == "sentence" && fxg.effects.rowRadius == 9 && fxg.effects.paletteSelection == "pill"
       && !fxg.effects.paletteFoot && fxg.effects.paletteScrim && fxg.app.pillRadius == 6 && fxg.effects.paletteModes == "plain"
-      && fxg.effects.rowHover && !fxg.effects.barDone && fxg.app.sidebarPadtop == 2 && fxg.app.paletteCaretGap == 1
+      && !fxg.effects.barDone && fxg.app.sidebarPadtop == 2 && fxg.app.paletteCaretGap == 1
       && fxg.font.baseLine == 1.4 && fxg.effects.paletteBlur == "sheet" && fxg.effects.paletteTabSub == "task", "the glass elements load: \(load("fxglass").problems)")
 write(user, "fxglassbad", "[effects]\nlabel.case = \"lower\"\nbar.radius = 11\npalette.keys = \"/bin/sh\"\n")
 check(load("fxglassbad").problems.count == 3, "and refuse what isn't theirs")

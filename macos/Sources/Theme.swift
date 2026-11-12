@@ -250,8 +250,8 @@ extension Theme {
         "color.review.panel.bg", "color.row.selected", "color.sidebar.bg", "color.statusmenu.bg", "color.statusmenu.border",
         "color.statusmenu.line", "color.table.rule", "color.ticker.sep", "color.window.bg",
         "color.window.border", "color.zen.track",
-        "app.scrim", "app.window.ring", "app.window.highlight", "app.palette.ring", "app.palette.highlight", "app.row.raised.ring",
-        "app.row.raised.highlight", "app.row.raised.shadow", "app.row.hover", "app.pill.bg", "app.pill.ring", "app.palette.pill.highlight",
+        "app.scrim", "app.window.ring", "app.window.highlight", "app.palette.ring", "app.palette.highlight",
+        "app.pill.bg", "app.pill.ring", "app.palette.pill.highlight",
         "app.palette.pill.mute", "app.ornament", "app.ornament.dim", "app.titlebar.rule2", "app.bar.knob", "app.bevel.light", "app.bevel.hi", "app.bevel.shade", "app.bevel.dark", "app.palette.field", "app.row.select.fill", "app.label.fill", "app.bar.frame", "app.titlebar.bg", "app.sidebar.foot.frame", "app.palette.foot.rule",
     ]
 

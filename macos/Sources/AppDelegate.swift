@@ -58,6 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if HAUNT_FIXTURES
+        Offscreen.install()
+        #endif
         guard ghostty.readiness == .ready else {
             FileHandle.standardError.write(Data("ghostty app not ready\n".utf8))
             NSApp.terminate(nil)
@@ -123,26 +126,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         for _ in 0..<(fixture?.tabCount ?? 1) { c.newTab(select: false) }
         c.refresh()
         c.window?.center()
-        #if HAUNT_FIXTURES
-        // HAUNT_OFFSCREEN=1: the window is fully transparent, for captures that must not appear on screen.
-        let offscreen = ProcessInfo.processInfo.environment["HAUNT_OFFSCREEN"] == "1"
-        if offscreen { c.window?.alphaValue = 0; c.window?.ignoresMouseEvents = true }
-        #endif
         c.showWindow(nil)
         #if HAUNT_FIXTURES
-        // The window stays invisible; HAUNT_SNAPSHOT=<png> draws its views (not the terminal's Metal layer) into
-        // that file and quits.
-        if offscreen, let path = ProcessInfo.processInfo.environment["HAUNT_SNAPSHOT"], let w = c.window {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                let views = [w.contentView].compactMap { $0 } + NSApp.windows.filter { $0 !== w && $0.isVisible }.compactMap(\.contentView)
-                for (i, v) in views.enumerated() {
-                    guard let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { continue }
-                    v.cacheDisplay(in: v.bounds, to: rep)
-                    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: i == 0 ? path : path + ".\(i).png"))
-                }
-                exit(0)
-            }
-        }
+        if let w = c.window { Offscreen.snapshot(w) }
         #endif
         if let startError { c.showStartError(startError) }
         // A real launch leaves focus to the launcher. Fixtures are for the fidelity script, which captures

@@ -27,11 +27,6 @@ struct Effects: Equatable {
     /// How far a row's background stands in from the sidebar's sides, and its corner radius.
     var rowInset: CGFloat = 0
     var rowRadius: CGFloat = 0
-    /// The selected row is lifted: a ring, a top highlight and a soft shadow ([app] row.raised.*).
-    var rowRaised = false
-    /// The row under the pointer, in the sidebar and the palette, gets a faint fill ([app] row.hover) shaped
-    /// like the selection.
-    var rowHover = false
     /// The needs-you status is a pill ([app] pill.*).
     var needsPill = false
     /// The progress bar's corner radius, and a glow in its fill colour.
@@ -122,8 +117,6 @@ struct Effects: Equatable {
         "label.weight": .choice(\.labelWeight, ["regular", "medium", "semibold"]),
         "row.inset": .number(\.rowInset, 0...40),
         "row.radius": .number(\.rowRadius, 0...40),
-        "row.raised": .bool(\.rowRaised),
-        "row.hover": .bool(\.rowHover),
         "needs.pill": .bool(\.needsPill),
         "bar.radius": .number(\.barRadius, 0...10),
         "bar.glow": .bool(\.barGlow),

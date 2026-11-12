@@ -606,13 +606,10 @@ final class SidebarView: NSView, NSTextFieldDelegate {
                 Draw.fill(box, Theme.current.app.rowSelectFill)
                 Theme.current.app.rowSelectInk.setFill()
                 Draw.cursor(at: NSPoint(x: box.minX + 4, y: top + Tok.Size.rowPad[0] + (rowLine1 - 8) / 2))
-            } else if fx.rowSelect == "brackets" { drawBrackets(box, ctx: ctx) } else if fx.rowRaised { drawRaised(shape, box) } else {
+            } else if fx.rowSelect == "brackets" { drawBrackets(box, ctx: ctx) } else {
                 Tok.Color.rowSelected.setFill()
                 shape.fill()
             }
-        } else if fx.rowHover && hoverId == row.surfaceId {
-            Theme.current.app.rowHover.setFill()
-            shape.fill()
         }
         if let c = row.color, snapshot.colorStyle == .tint {
             Tok.Color.tab(c).withAlphaComponent(Tok.Color.tabTintAlpha).setFill()
@@ -735,28 +732,6 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         p.stroke()
     }
 
-    /// `[effects] row.raised`: the fill with a soft shadow under it, a ring, and a highlight along the top.
-    private func drawRaised(_ shape: NSBezierPath, _ box: NSRect) {
-        let app = Theme.current.app, hl = Tok.App.hairline, r = Theme.current.effects.rowRadius
-        NSGraphicsContext.saveGraphicsState()
-        let shadow = NSShadow()
-        shadow.shadowColor = app.rowRaisedShadow
-        shadow.shadowBlurRadius = app.rowRaisedBlur
-        shadow.shadowOffset = NSSize(width: 0, height: -app.rowRaisedDrop)
-        shadow.set()
-        Tok.Color.rowSelected.setFill()
-        shape.fill()
-        NSGraphicsContext.restoreGraphicsState()
-        NSGraphicsContext.saveGraphicsState()
-        shape.addClip()
-        Draw.fill(NSRect(x: box.minX, y: box.minY, width: box.width, height: hl), app.rowRaisedHighlight)
-        NSGraphicsContext.restoreGraphicsState()
-        let ring = NSBezierPath(roundedRect: box.insetBy(dx: hl / 4, dy: hl / 4), xRadius: max(r - hl / 4, 0), yRadius: max(r - hl / 4, 0))
-        ring.lineWidth = hl / 2
-        app.rowRaisedRing.setStroke()
-        ring.stroke()
-    }
-
     /// The progress bar, with `[effects] bar.radius` and `bar.glow`.
     private func drawBar(_ track: NSRect, fill: NSRect) {
         let fx = Theme.current.effects, r = min(fx.barRadius, track.height / 2)
@@ -831,8 +806,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
 
     /// How far a raised row's shadow reaches past it, for redrawing.
     private var shadowReach: CGFloat {
-        let layers = ["row", "row.selected", "row.hover"].contains(where: Layers.has) ? Layers.bleed["row"] ?? 0 : 0
-        return max(layers, Theme.current.effects.rowRaised ? Theme.current.app.rowRaisedBlur + Theme.current.app.rowRaisedDrop : 0)
+        ["row", "row.selected", "row.hover"].contains(where: Layers.has) ? Layers.bleed["row"] ?? 0 : 0
     }
 
     private func drawIcon(_ kind: RowKind, in r: NSRect, ctx: CGContext) {

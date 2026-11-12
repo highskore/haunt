@@ -85,8 +85,6 @@ Some looks need more than colours and sizes. The `[effects]` table switches on e
 | `sidebar.footer` | bool | the live agent count under the sidebar |
 | `label.case`, `label.weight` | `"upper"`, `"sentence"`; `"regular"`, `"medium"`, `"semibold"` | group labels |
 | `row.inset`, `row.radius` | 0–40 | rows as rounded boxes inset from the sidebar's edges |
-| `row.raised` | bool | the selected row lifted: shadow, ring and highlight (`app.row.raised.*`) |
-| `row.hover` | bool | a faint fill (`app.row.hover`) on the sidebar or palette row under the pointer, shaped like the selection |
 | `needs.pill` | bool | a needs-you row's status in a pill (`app.pill.*`) |
 | `bar.radius`, `bar.glow` | 0–10; bool | rounded progress bars, and a glow on the fill (`app.bar.glow`) |
 | `bar.done` | bool | a finished task keeps its full bar (default); off, only work in progress has one |

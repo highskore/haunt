@@ -450,7 +450,7 @@ final class PaletteView: NSView {
     var singleLine = false { didSet { clampScroll(); needsDisplay = true } }
     /// `[effects] palette.modes = "plain"` in a plugin mode: the black-and-white rows inside the theme's panel.
     var plainMode = false
-    /// The entry under the pointer, for `[effects] row.hover`.
+    /// The entry under the pointer, for the `palette.row.hover` layers.
     private var hovered: Int? { didSet { if hovered != oldValue { needsDisplay = true } } }
 
     override var isFlipped: Bool { true }
@@ -825,11 +825,6 @@ final class PaletteView: NSView {
         let h = entryH(index)
         let isSel = index == selected && row.action != .none
         let app = Theme.current.app
-        if !isSel && index == hovered && Theme.current.effects.rowHover && row.action != .none {
-            let inset = pill ? app.palettePillInset : 0, r = pill ? app.palettePillRadius : 0
-            app.rowHover.setFill()
-            NSBezierPath(roundedRect: NSRect(x: inset, y: top, width: width - 2 * inset, height: h), xRadius: r, yRadius: r).fill()
-        }
         if isSel && pill {
             let box = NSRect(x: app.palettePillInset, y: top, width: width - 2 * app.palettePillInset, height: h)
             let shape = NSBezierPath(roundedRect: box, xRadius: app.palettePillRadius, yRadius: app.palettePillRadius)

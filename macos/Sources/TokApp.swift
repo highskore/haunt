@@ -26,14 +26,6 @@ struct AppTokens: Equatable {
     var windowHighlight = NSColor(white: 1, alpha: 0.32)
     var paletteRing = NSColor(white: 1, alpha: 0.18)
     var paletteHighlight = NSColor(white: 1, alpha: 0.3)
-    /// `[effects] row.raised`: the selected row's ring, top highlight, and shadow with its blur and drop.
-    var rowRaisedRing = NSColor(white: 1, alpha: 0.22)
-    var rowRaisedHighlight = NSColor(white: 1, alpha: 0.2)
-    var rowRaisedShadow = NSColor(white: 0, alpha: 0.18)
-    var rowRaisedBlur: CGFloat = 14
-    var rowRaisedDrop: CGFloat = 4
-    /// `[effects] row.hover`'s fill.
-    var rowHover = NSColor(white: 1, alpha: 0.06)
     /// `[effects] needs.pill`: fill, ring, text, corner radius and padding (vertical, horizontal).
     var pillBg = NSColor(white: 1, alpha: 0.2)
     var pillRing = NSColor(white: 1, alpha: 0.3)
@@ -143,12 +135,6 @@ struct AppTokens: Equatable {
         "app.window.highlight": .color(\.app.windowHighlight),
         "app.palette.ring": .color(\.app.paletteRing),
         "app.palette.highlight": .color(\.app.paletteHighlight),
-        "app.row.raised.ring": .color(\.app.rowRaisedRing),
-        "app.row.raised.highlight": .color(\.app.rowRaisedHighlight),
-        "app.row.raised.shadow": .color(\.app.rowRaisedShadow),
-        "app.row.raised.blur": .number(\.app.rowRaisedBlur),
-        "app.row.raised.drop": .number(\.app.rowRaisedDrop),
-        "app.row.hover": .color(\.app.rowHover),
         "app.pill.bg": .color(\.app.pillBg),
         "app.pill.ring": .color(\.app.pillRing),
         "app.pill.fg": .color(\.app.pillFg),
