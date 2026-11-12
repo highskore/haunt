@@ -30,6 +30,7 @@ protocol PluginsAPI: AnyObject {
     func paletteItems(mode: String?, query: String) -> [PaletteItem]
     func invokePaletteItem(pluginId: String, itemId: String, terminalShown: Bool) throws
     func takeRequests() -> [HostRequest]
+    func drainAudit() -> AuditDrain
     func rowMenuItems(surfaceId: String) -> [RowMenuItem]
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws
     func topRowClicked(pluginId: String) throws
@@ -139,6 +140,7 @@ final class NoPlugins: PluginsAPI {
     func paletteItems(mode: String?, query: String) -> [PaletteItem] { [] }
     func invokePaletteItem(pluginId: String, itemId: String, terminalShown: Bool) throws {}
     func takeRequests() -> [HostRequest] { [] }
+    func drainAudit() -> AuditDrain { AuditDrain(lines: [], error: nil) }
     func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
     func topRowClicked(pluginId: String) throws {}
@@ -170,6 +172,7 @@ final class FixturePlugins: PluginsAPI {
     func themes() -> [ThemeContribution] { [] }
     func invokePaletteItem(pluginId: String, itemId: String, terminalShown: Bool) throws {}
     func takeRequests() -> [HostRequest] { [] }
+    func drainAudit() -> AuditDrain { AuditDrain(lines: [], error: nil) }
     func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
     func topRowClicked(pluginId: String) throws {}
@@ -426,6 +429,19 @@ struct PluginKey: Equatable, Hashable {
     var pluginId: String
     var id: String
     var chord: String
+}
+
+struct AuditLine: Equatable, Hashable {
+    var tsMs: UInt64
+    var plugin: String
+    var kind: String
+    var surface: String
+    var n: UInt64
+}
+
+struct AuditDrain: Equatable, Hashable {
+    var lines: [AuditLine]
+    var error: String?
 }
 
 enum PanelPlacement: Equatable, Hashable {

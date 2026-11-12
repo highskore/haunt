@@ -71,6 +71,11 @@ final class PluginBridge {
 
     func drain() {
         guard let plugins else { return }
+        let audit = plugins.drainAudit()
+        for l in audit.lines {
+            AppDelegate.logger.notice("plugin audit \(l.plugin, privacy: .public) \(l.kind, privacy: .public) surface=\(l.surface, privacy: .public) n=\(l.n)")
+        }
+        if let e = audit.error { AppDelegate.logger.error("plugin audit: \(e, privacy: .public)") }
         var keysChanged = false
         defer { if keysChanged { onKeysChanged?() } }
         for req in plugins.takeRequests() {

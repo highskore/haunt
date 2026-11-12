@@ -149,7 +149,7 @@ impl From<haunt_core::plugins::PluginError> for HostError {
 }
 
 #[cfg(feature = "plugins")]
-pub use haunt_core::plugins::{HostRequest, Mark, NotifyAction, PaletteItem, PluginKey, RowMenuItem};
+pub use haunt_core::plugins::{AuditLine, HostRequest, Mark, NotifyAction, PaletteItem, PluginKey, RowMenuItem};
 #[cfg(feature = "plugins")]
 pub use haunt_core::plugin_theme::ThemeToken;
 #[cfg(feature = "plugins")]
@@ -195,6 +195,13 @@ pub fn install_bundled_plugin(haunt_dir: String, bundled_dir: String, id: String
 
 /// What `set_config` did: whether `[plugins]` changed (so palette commands may have), and what it ignored.
 #[cfg(feature = "plugins")]
+/// `HauntPlugins::drain_audit`: the lines, and why the file couldn't be written.
+#[derive(uniffi::Record)]
+pub struct AuditDrain {
+    pub lines: Vec<AuditLine>,
+    pub error: Option<String>,
+}
+
 #[derive(uniffi::Record)]
 pub struct ConfigApplied {
     pub changed: bool,
@@ -269,6 +276,13 @@ impl HauntPlugins {
     /// plugin is busy with an event it returns none, and the listener fires again once it is done.
     pub fn take_requests(&self) -> Vec<HostRequest> {
         haunt_core::plugin_store::take_requests_now(&self.set)
+    }
+
+    /// What plugins did with the user's terminal and machine since the last call, now in
+    /// `<haunt home>/plugin-audit.jsonl`; call after every plugin call, with `take_requests`.
+    pub fn drain_audit(&self) -> AuditDrain {
+        let (lines, error) = haunt_core::plugin_store::drain_audit_now(&self.set);
+        AuditDrain { lines, error }
     }
 
     /// Plugin entries for a row's context menu, built when the menu opens.

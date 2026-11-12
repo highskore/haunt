@@ -45,6 +45,22 @@ const MAX_OUTBOX: usize = 256;
 const MAX_NOTIFIED: usize = 64;
 pub const MAX_KEYS: usize = 8;
 const MAX_LOGS: usize = 1000;
+/// Audit lines kept between drains; past this they are counted, never silently lost.
+const MAX_AUDIT: usize = 1024;
+
+/// What the host did for a plugin with the user's terminal or machine, recorded by the host apart from
+/// the plugin's own log, so `log` can't crowd it out. Drained to `plugin-audit.jsonl`.
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditLine {
+    pub ts_ms: u64,
+    pub plugin: String,
+    /// `terminal.read`, `pty.answer`, `pty.type`, `exec`, or `audit.dropped` for lines past `MAX_AUDIT`.
+    pub kind: String,
+    pub surface: String,
+    /// Lines read, the request answered, bytes typed, the job started, or lines dropped.
+    pub n: u64,
+}
 const MAX_STR: usize = 4096;
 /// Characters, not bytes, of a registered command or mode title.
 const MAX_TITLE: usize = 80;
@@ -228,6 +244,8 @@ pub struct HostState {
     id: String,
     name: String,
     logs: Vec<String>,
+    audit: Vec<AuditLine>,
+    audit_dropped: u64,
     wasi: WasiCtx,
     table: ResourceTable,
     limits: StoreLimits,
@@ -296,6 +314,8 @@ impl HostState {
             id: id.to_owned(),
             name: id.to_owned(),
             logs: Vec::new(),
+            audit: Vec::new(),
+            audit_dropped: 0,
             wasi: WasiCtx::builder().wall_clock(CoarseWall).monotonic_clock(CoarseMono(Instant::now())).build(),
             table: ResourceTable::new(),
             limits: StoreLimitsBuilder::new().memory_size(MEMORY_CAP).instances(16).tables(64).memories(4).build(),
@@ -352,6 +372,25 @@ impl HostState {
         if self.logs.len() < MAX_LOGS {
             self.logs.push(line);
         }
+    }
+
+    fn audit(&mut self, kind: &str, surface: &str, n: u64) {
+        if self.audit.len() >= MAX_AUDIT {
+            self.audit_dropped += 1;
+            return;
+        }
+        let ts_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+        self.audit.push(AuditLine { ts_ms, plugin: self.id.clone(), kind: kind.into(), surface: surface.into(), n });
+    }
+
+    fn take_audit(&mut self) -> Vec<AuditLine> {
+        let mut out = std::mem::take(&mut self.audit);
+        if self.audit_dropped > 0 {
+            let n = std::mem::take(&mut self.audit_dropped);
+            let ts_ms = out.last().map_or(0, |l| l.ts_ms);
+            out.push(AuditLine { ts_ms, plugin: self.id.clone(), kind: "audit.dropped".into(), surface: String::new(), n });
+        }
+        out
     }
 
     fn request(&mut self, r: HostRequest) -> Result<(), String> {
@@ -488,7 +527,7 @@ impl wpty::Host for HostState {
             return Err(format!("pty rate limit ({PTY_PER_SEC}/s)"));
         }
         let surface = clip(surface);
-        self.push_log(format!("info pty.answer surface={surface} allow={allow} request={request_id}"));
+        self.audit("pty.answer", &surface, request_id);
         self.request(HostRequest::PtyAnswer { plugin_id: self.id.clone(), surface, allow, request_id })
     }
 }
@@ -502,7 +541,7 @@ impl wtyping::Host for HostState {
         if !self.pty_rate_ok() {
             return Err(format!("pty rate limit ({PTY_PER_SEC}/s)"));
         }
-        self.push_log(format!("info typing surface={surface} bytes={} enter={enter}", text.len()));
+        self.audit("pty.type", &surface, text.len() as u64);
         self.request(HostRequest::PtyType { plugin_id: self.id.clone(), surface, text, enter })
     }
 }
@@ -535,9 +574,10 @@ impl wterm::Host for HostState {
         let reader = core.screen_reader().ok_or("haunt can't read screens here")?;
         self.reads_left -= 1;
         let got = reader(&surface, lines).ok_or("that tab's screen can't be read now")?;
-        self.push_log(format!("info terminal.read surface={surface} lines={lines}"));
         let skip = got.len().saturating_sub(lines as usize);
-        Ok(got.iter().skip(skip).map(|l| shown(l, READ_LINE_CHARS)).collect())
+        let out: Vec<String> = got.iter().skip(skip).map(|l| shown(l, READ_LINE_CHARS)).collect();
+        self.audit("terminal.read", &surface, out.len() as u64);
+        Ok(out)
     }
 }
 
@@ -1086,6 +1126,7 @@ impl wexec::Host for HostState {
             .spawn(move || sink(ExecDone { plugin_id, job, outcome: px::run(&cmd, &repo) }))
             .map_err(|e| e.to_string())?;
         self.exec_jobs.push(job);
+        self.audit("exec", &clip(surface), job);
         Ok(job)
     }
 }
@@ -1595,6 +1636,10 @@ impl LoadedPlugin {
 
     pub fn take_logs(&mut self) -> Vec<String> {
         std::mem::take(&mut self.store.data_mut().logs)
+    }
+
+    pub fn take_audit(&mut self) -> Vec<AuditLine> {
+        self.store.data_mut().take_audit()
     }
 
     pub fn take_requests(&mut self) -> Vec<HostRequest> {
@@ -2194,6 +2239,31 @@ mod tests {
         (st.reads_left, st.read_only) = (READS_PER_ACTION, Some(tab.clone()));
         assert_eq!(st.read(tab, 1).unwrap(), ["three"], "a hover-hold reads the hovered tab");
         assert!(st.read(other, 1).unwrap_err().contains("only the hovered"));
+    }
+
+    #[test]
+    fn a_read_is_audited_however_much_the_plugin_logs() {
+        use wterm::Host as _;
+        let dir = tempdir("audit");
+        let core = crate::Core::new(&*dir);
+        let tab = core.register_surface(dir.to_str().unwrap()).unwrap().surface_id;
+        core.handle().set_screen_reader(Some(Arc::new(|_, _| Some(vec!["one".into(), "two".into()]))));
+        let mut st = HostState::new("dev.x.read", &Capabilities { terminal_read: true, ..Default::default() }, None, None, Some(core.handle()));
+        for i in 0..1000 {
+            wlog::Host::log(&mut st, wit::LogLevel::Info, format!("filler {i}"));
+        }
+        st.reads_left = READS_PER_ACTION;
+        st.read(tab.clone(), 2).unwrap();
+        let audit = st.take_audit();
+        assert!(matches!(&audit[..], [l] if l.kind == "terminal.read" && l.surface == tab && l.n == 2 && l.plugin == "dev.x.read"), "{audit:?}");
+        assert!(st.take_audit().is_empty(), "drained");
+        assert!(!st.logs.iter().any(|l| l.contains("terminal.read")), "not in the plugin's own log");
+        for _ in 0..MAX_AUDIT + 5 {
+            st.audit("exec", &tab, 1);
+        }
+        let audit = st.take_audit();
+        assert_eq!(audit.len(), MAX_AUDIT + 1);
+        assert!(matches!(audit.last(), Some(l) if l.kind == "audit.dropped" && l.n == 5), "an overflow is counted");
     }
 
     #[test]

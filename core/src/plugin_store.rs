@@ -18,9 +18,13 @@ use crate::plugin_pack::{self, ThemeContribution};
 use crate::plugin_settings::PluginConfig;
 use crate::plugin_theme::{Theme, ThemeToken};
 use crate::plugin_panel::PanelPlacement;
-use crate::plugins::{dropped_fs_grants, HostRequest, HostState, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost, RowMenuItem};
+use crate::plugins::{dropped_fs_grants, AuditLine, HostRequest, HostState, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost, RowMenuItem};
 
 pub const LOCKFILE: &str = "plugins.lock";
+/// In the haunt dir: one JSON line per `AuditLine`.
+pub const AUDIT_LOG: &str = "plugin-audit.jsonl";
+/// Past this the log moves to `plugin-audit.1.jsonl`, replacing the one there.
+const AUDIT_LOG_MAX: u64 = 8 << 20;
 pub const WASM: &str = "plugin.wasm";
 const WASM_CAP: u64 = 64 << 20;
 
@@ -559,6 +563,7 @@ impl Store {
             settings_problems: config.problems.clone(),
             config_tables: config.parsed.then(|| config.tables.clone()),
             core: core.cloned(),
+            audit_log: Some(self.home.join(AUDIT_LOG)),
             ..PluginSet::default()
         };
         if let Some(core) = core {
@@ -814,6 +819,8 @@ pub struct PluginSet {
     /// When the user's last input was, while they are away.
     away_since: Option<std::time::Instant>,
     core: Option<CoreHandle>,
+    /// Where `drain_audit` appends; None in sets not loaded from a store.
+    audit_log: Option<PathBuf>,
 }
 
 /// The most settings JSON one plugin gets.
@@ -1081,6 +1088,17 @@ impl PluginSet {
         out
     }
 
+    /// Every plugin's audit lines since the last drain, appended to `plugin-audit.jsonl` (owner-only).
+    /// Returns them for the app's own log, with why the file couldn't be written.
+    pub fn drain_audit(&mut self) -> (Vec<AuditLine>, Option<String>) {
+        let lines: Vec<AuditLine> = self.plugins.iter_mut().flat_map(|(_, p)| p.take_audit()).collect();
+        let err = match (&self.audit_log, lines.is_empty()) {
+            (Some(path), false) => append_audit(path, &lines).err().map(|e| format!("{AUDIT_LOG}: {e}")),
+            _ => None,
+        };
+        (lines, err)
+    }
+
     pub fn take_logs(&mut self) -> Vec<(String, String)> {
         self.plugins.iter_mut().flat_map(|(_, p)| {
             let id = p.id().to_owned();
@@ -1182,6 +1200,31 @@ fn own_right_pane(owner: &mut Option<(String, String)>, requests: Vec<HostReques
     (out, displaced)
 }
 
+fn append_audit(path: &Path, lines: &[AuditLine]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    if fs::symlink_metadata(path).is_ok_and(|m| m.len() > AUDIT_LOG_MAX) {
+        fs::rename(path, path.with_extension("1.jsonl"))?;
+    }
+    let mut text = String::new();
+    for l in lines {
+        let v = serde_json::json!({ "ts": l.ts_ms, "plugin": l.plugin, "kind": l.kind, "surface": l.surface, "n": l.n });
+        text.push_str(&v.to_string());
+        text.push('\n');
+    }
+    let mut f = fs::OpenOptions::new().append(true).create(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(path)?;
+    f.write_all(text.as_bytes())
+}
+
+/// `drain_audit` without blocking the main thread on a plugin call in progress; the lines wait for the next.
+pub fn drain_audit_now(set: &Mutex<PluginSet>) -> (Vec<AuditLine>, Option<String>) {
+    match set.try_lock() {
+        Ok(mut s) => s.drain_audit(),
+        Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner().drain_audit(),
+        Err(std::sync::TryLockError::WouldBlock) => (Vec::new(), None),
+    }
+}
+
 pub fn take_requests_now(set: &Mutex<PluginSet>) -> Vec<HostRequest> {
     match set.try_lock() {
         Ok(mut s) => s.take_requests(),
@@ -1192,6 +1235,24 @@ pub fn take_requests_now(set: &Mutex<PluginSet>) -> Vec<HostRequest> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn audit_lines_append_to_an_owner_only_jsonl() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("haunt-audit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(AUDIT_LOG);
+        let line = |n| AuditLine { ts_ms: 7, plugin: "dev.x.p".into(), kind: "terminal.read".into(), surface: "s\"1".into(), n };
+        append_audit(&path, &[line(1)]).unwrap();
+        append_audit(&path, &[line(2)]).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let rows: Vec<serde_json::Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1], serde_json::json!({ "ts": 7, "plugin": "dev.x.p", "kind": "terminal.read", "surface": "s\"1", "n": 2 }));
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     use super::*;
     use crate::testdir::TempDir;
 
