@@ -1,0 +1,7 @@
+# The first-party plugin commits make-app.sh bundles: <name> <repo> <rev>. Bump a rev after pushing the plugin.
+allowlist ssh://git@github.com/highskore/haunt-allowlist.git ce24cb6c9e09834f452ff952a14b5da53491b1b2
+commands ssh://git@github.com/highskore/haunt-commands.git 1a4a1d8ed1342ac8c4c1d35be238eed80541080f
+decision-log ssh://git@github.com/highskore/haunt-decision-log.git e27bc9d3938b2748c099b92a9aeccd48099cb23c
+tabs-plus ssh://git@github.com/highskore/haunt-tabs-plus.git ead079c822f2739b1d31d4d66dea4c86ca9f3856
+theme-glass ssh://git@github.com/highskore/haunt-theme-glass.git 85cf9a975d4b7dc8df35033f2e5d7c503acbcddf
+theme-sigil ssh://git@github.com/highskore/haunt-theme-sigil.git 1b46ccbfd17fef661c23dac9d0a0fa40555ceaf0

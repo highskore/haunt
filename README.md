@@ -65,7 +65,7 @@ macos/make-app.sh --plugins tabs-plus,allowlist   # also bundles those plugins (
 open build/haunt.app
 ```
 
-`make-app.sh` needs the Claude adapter checked out (see below). It also bundles the Codex adapter if `../haunt-plugins/haunt-codex` is there (or `HAUNT_CODEX_ADAPTER`), the `haunt` CLI as `haunt.app/Contents/Helpers/haunt`, and the first-party plugins you name with `--plugins` (or `HAUNT_PLUGINS`): a name is the repo `../haunt-plugins/haunt-<name>` (`HAUNT_PLUGINS_DIR`), today `allowlist`, `commands`, `decision-log`, `tabs-plus` or `theme-<name>`, and `all` is every plugin repo there. The default is none, and an unknown name fails the build. Code plugins are built for `wasm32-wasip2`; a data-only theme plugin is copied as its manifest and the files it names. `HAUNT_FIRST_PARTY_PLUGINS` adds repos by path (each built once, and only with a real id). Every repo is checked before any is built. A bundled plugin is only offered: nothing is installed until you choose it in `haunt setup`.
+`make-app.sh` needs the Claude adapter checked out (see below). It also bundles the Codex adapter if `../haunt-plugins/haunt-codex` is there (or `HAUNT_CODEX_ADAPTER`), the `haunt` CLI as `haunt.app/Contents/Helpers/haunt`, and the first-party plugins you name with `--plugins` (or `HAUNT_PLUGINS`): a name is one `macos/plugins.lock` pins, the repo `../haunt-plugins/haunt-<name>` (`HAUNT_PLUGINS_DIR`), today `allowlist`, `commands`, `decision-log`, `tabs-plus`, `theme-glass` or `theme-sigil`, and `all` is every one it pins. The default is none, and an unknown name fails the build. Code plugins are built for `wasm32-wasip2`; a data-only theme plugin is copied as its manifest and the files it names. `HAUNT_FIRST_PARTY_PLUGINS` adds repos by path (each built once, and only with a real id). Every repo is checked before any is built. A bundled plugin is only offered: nothing is installed until you choose it in `haunt setup`.
 
 Signing: set `HAUNT_SIGN_ID`, or put your identity in a `.sign-id` file (gitignored). Without either, the app is signed ad hoc.
 
@@ -92,7 +92,7 @@ claude plugin install haunt@haunt
 
 For Codex it runs the adapter's own `install.sh`, which adds a marked block of hooks to `$CODEX_HOME/config.toml` and backs the file up first; then trust the hooks with `/hooks` in Codex. See [haunt-codex](../haunt-plugins/haunt-codex).
 
-The Claude adapter is the haunt-claude repo, cloned next to this one as `../haunt-plugins/haunt-claude`. `make-app.sh` also bundles a copy into `haunt.app/Contents/Resources/adapters/claude` (and haunt-codex into `adapters/codex`): the commit `macos/adapters.lock` pins, taken with `git archive`. It refuses a checkout with uncommitted changes or at another commit; bump the pin after pushing the adapter, or set `HAUNT_ADAPTER_UNPINNED=1` to bundle the working tree while iterating. Set `HAUNT_CLAUDE_ADAPTER` to use a checkout somewhere else. Or try it without installing: `claude --plugin-dir ../haunt-plugins/haunt-claude`. Needs `jq` 1.6+ and `nc`, both on macOS by default.
+The Claude adapter is the haunt-claude repo, cloned next to this one as `../haunt-plugins/haunt-claude`. `make-app.sh` also bundles a copy into `haunt.app/Contents/Resources/adapters/claude` (and haunt-codex into `adapters/codex`): the commit `macos/adapters.lock` pins, taken with `git archive`. It refuses a checkout with uncommitted changes or at another commit; bump the pin after pushing the adapter, or set `HAUNT_ADAPTER_UNPINNED=1` to bundle the working tree while iterating. Set `HAUNT_CLAUDE_ADAPTER` to use a checkout somewhere else. First-party plugins (`--plugins`) are pinned the same way, in `macos/plugins.lock`: each is built from `git archive` of its pinned commit, never the working tree, and make-app refuses one whose manifest `api` isn't the one this haunt supports before it builds anything. The pinned sources are unpacked under `target/plugin-src` and built with this repo's toolchain; a source with a `.cargo` folder, or a `.cargo` or `rust-toolchain` file between it and the checkout, is refused. Bump a pin after pushing the plugin, or set `HAUNT_PLUGINS_UNPINNED=1` to build the working trees. Or try it without installing: `claude --plugin-dir ../haunt-plugins/haunt-claude`. Needs `jq` 1.6+ and `nc`, both on macOS by default.
 
 Optional: `shell/install.sh` installs a matching Claude Code theme and prints the zsh lines for a minimal prompt inside Haunt. It never edits your `~/.zshrc`.
 
@@ -177,7 +177,7 @@ macos/tests/sidebar.sh   # sidebar drop targets, the agents view's restored fram
 macos/tests/theme.sh     # theme files: lookup, extends, validation, the user over the theme
 macos/tests/themepicker.sh   # the theme pickers (⌘K and the Themes window): preview, keep, revert
 macos/tests/loginpath.sh # the login-shell PATH lookup
-macos/tests/bundle-plugins.sh # make-app's --plugins: none by default, exactly the names given
+macos/tests/bundle-plugins.sh # make-app's --plugins: none by default, exactly the names given, pinned, api checked
 macos/tests/notify.sh    # notifications: when Allow shows, answer routing, toggles, the menu bar menu
 macos/tests/answerkey.sh # answers go as keystrokes, and only the fixed Allow/Deny keys do
 macos/tests/palette.sh   # the palette keeps its selection on a refresh, not on new text
