@@ -851,11 +851,11 @@ impl LoadedPlugin {
         self.call(|b, s| b.call_init(s, settings_json))
     }
 
-    /// Only a `verified` event's cwd widens the plugin's `${cwd}` grant; anything in the pty can
-    /// forge the rest.
+    /// A `verified` event widens the plugin's `${cwd}` grant to the folder the app opened the tab in,
+    /// never to the cwd the event names.
     pub fn on_event(&mut self, t: &Tapped) -> Result<(), PluginError> {
-        if t.verified && let Some(cwd) = &t.event.cwd {
-            self.store.data_mut().fs.add_cwd(cwd);
+        if t.verified {
+            self.store.data_mut().fs.add_cwd(&t.tab_cwd);
         }
         let ev = agent_event(t, self.store.data().events);
         self.call(|b, s| b.call_on_event(s, &ev))
@@ -1272,7 +1272,7 @@ mod tests {
             truncated: false,
             kind,
         };
-        Tapped { surface: "tab-1".into(), event, verified, request_key }
+        Tapped { surface: "tab-1".into(), event, verified, tab_cwd: "/w".into(), request_key }
     }
 
     #[test]

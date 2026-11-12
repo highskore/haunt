@@ -96,6 +96,8 @@ pub struct Tapped {
     pub surface: String,
     pub event: AgentEvent,
     pub verified: bool,
+    /// The folder the app opened the tab in (`register_surface`); nothing in the pty can change it.
+    pub tab_cwd: String,
     /// The surface's answerable request key, on a verified `permission_seen` that made one.
     pub request_key: Option<u64>,
 }
@@ -107,6 +109,8 @@ pub type EventTap = Arc<dyn Fn(&Tapped) -> bool + Send + Sync>;
 struct Surface {
     id: String,
     cwd: String,
+    /// The cwd at `register_surface`, kept when the shell reports another.
+    opened_in: String,
     /// Branch at `cwd`.
     branch: Option<String>,
     /// Branch at `session.cwd`.
@@ -181,8 +185,10 @@ impl State {
         s.live_permission().filter(|p| p.agent.answer_bytes(true).is_some() && !s.terminal_only(p)).map(|p| p.key())
     }
 
-    fn tap_for(&self, surface_id: &str) -> Option<EventTap> {
-        self.event_tap.clone().filter(|_| self.surfaces.iter().any(|s| s.id == surface_id))
+    /// The tap, and the surface's `opened_in`, when the surface is registered.
+    fn tap_for(&self, surface_id: &str) -> Option<(EventTap, String)> {
+        let s = self.surfaces.iter().find(|s| s.id == surface_id)?;
+        Some((self.event_tap.clone()?, s.opened_in.clone()))
     }
 
     /// Runs `f` on one surface, then moves the requests it ended into the decision log. Only
@@ -450,8 +456,8 @@ fn deliver(state: &Mutex<State>, offload: &Offload, d: Delivery) -> bool {
         if d.verified {
             let _ = offload.branch.try_send((d.surface_id.clone(), event.cwd.clone(), turn));
         }
-        if let Some(tap) = tap {
-            let _ = offload.tap.try_send((tap, Tapped { surface: d.surface_id, event, verified: d.verified, request_key }));
+        if let Some((tap, tab_cwd)) = tap {
+            let _ = offload.tap.try_send((tap, Tapped { surface: d.surface_id, event, verified: d.verified, tab_cwd, request_key }));
         }
     }
     changed
@@ -582,7 +588,7 @@ impl Core {
                 return false;
             }
             let (id, cwd) = (env.surface_id.clone(), cwd.to_owned());
-            st.surfaces.push(Surface { id, cwd, branch: None, agent_branch: None, session: Session::new(now), turn: TurnLog::default() });
+            st.surfaces.push(Surface { id, opened_in: cwd.clone(), cwd, branch: None, agent_branch: None, session: Session::new(now), turn: TurnLog::default() });
             write(&st.nonces).insert(env.surface_id.clone(), env.nonce.clone());
             true
         });
@@ -650,8 +656,9 @@ impl Core {
             tap = st.tap_for(surface_id);
             st.apply_unverified(surface_id, &event, now)
         });
-        let t = Tapped { surface: surface_id.to_owned(), event, verified: false, request_key: None };
-        if tap.is_some_and(|tap| tap(&t)) {
+        let Some((tap, tab_cwd)) = tap else { return };
+        let t = Tapped { surface: surface_id.to_owned(), event, verified: false, tab_cwd, request_key: None };
+        if tap(&t) {
             requests_queued(&self.state);
         }
     }

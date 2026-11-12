@@ -38,7 +38,7 @@ Every plugin can add palette commands and modes, add entries to a tab's context 
 | `notifications = true` | `notify.notify`, notifications with action buttons; replies arrive at `on-action` |
 | `pty_write = true` | `pty.answer`: Allow or Deny for the surface's pending permission request, nothing else. A verified `permission_seen` haunt can answer carries its `request-key`. |
 | `pty_type = true` | `typing.type-text`: types text, then Return if asked, into the current tab, only while handling a palette command or key the user just ran and never while that tab has a prompt up. No control or invisible characters but a tab. |
-| `fs_read = ["${cwd}/glob", ...]` | `fs.read` (files up to 4 MB) and `fs.list` (at most 4096 names) on matching paths inside agent folders; shown in red at install |
+| `fs_read = ["${cwd}/glob", ...]` | `fs.read` (files up to 4 MB) and `fs.list` (at most 4096 names) on matching paths inside agents' project folders; shown in red at install |
 | `fs_write = ["glob", ...]` | `fs.write` on matching paths |
 | `decisions_read = true` | `decisions.query`: the verified permission decisions, newest first. Read only. |
 | `allowlist_suggest = true` | `allowlist.approvals` (each exact Bash command approved in haunt at least twice, per project, with its folder) and `allowlist.propose`, which only offers a rule; Haunt writes it when the user accepts. |

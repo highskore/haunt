@@ -154,7 +154,7 @@ impl Capabilities {
             }
         }
         if let Some(g) = self.fs_read.iter().chain(&self.fs_write).find(|g| !g.starts_with(FS_PREFIX)) {
-            return err(format!("fs glob {g:?} must start with {FS_PREFIX}: a plugin reads and writes only inside agent folders"));
+            return err(format!("fs glob {g:?} must start with {FS_PREFIX}: a plugin reads and writes only inside agents' project folders"));
         }
         for g in self.fs_read.iter().chain(&self.fs_write) {
             crate::plugin_fs::validate_glob(g).map_err(ManifestError)?;
@@ -243,7 +243,7 @@ pub const FS_PREFIX: &str = "${cwd}/";
 pub const ALWAYS: &str = "can add commands and modes to the palette and entries to tab menus, keep up to 10 MB of its own data, and write to its log";
 
 fn plain_glob(g: &str) -> String {
-    g.replace("${cwd}", "<agent folder>")
+    g.replace("${cwd}", "<the agent's project folder>")
 }
 
 pub fn valid_id(id: &str) -> bool {
@@ -396,7 +396,7 @@ mod tests {
         ))
         .unwrap();
         assert!(m.capabilities.notifications);
-        assert!(m.capabilities.describe().iter().any(|(l, _)| l.contains("<agent folder>/.claude/settings.json")));
+        assert!(m.capabilities.describe().iter().any(|(l, _)| l.contains("<the agent's project folder>/.claude/settings.json")));
     }
 
     #[test]
@@ -473,7 +473,7 @@ mod tests {
         assert!(lines.iter().any(|(l, red)| l.contains("label, a bar or a sparkline") && !red));
         assert!(lines.iter().any(|(l, red)| l.contains("every 15 seconds") && !red));
         assert!(lines.iter().any(|(l, red)| l.starts_with("can show its own panels") && *red));
-        assert!(lines.iter().any(|(l, red)| l.starts_with("can read files matching <agent folder>/x") && *red));
+        assert!(lines.iter().any(|(l, red)| l.starts_with("can read files matching <the agent's project folder>/x") && *red));
         assert!(lines.iter().any(|(l, red)| l.starts_with("reads the commands, file paths and prompts") && *red));
     }
 

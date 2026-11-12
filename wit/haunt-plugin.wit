@@ -117,6 +117,8 @@ interface typing {
 }
 
 // `read` and `list` need `fs_read`, `write` needs `fs_write`; paths must match the declared globs.
+// Capabilities `fs_read` and `fs_write`: globs under `${cwd}/`, the folder the app opened an agent's tab in,
+// inside $HOME and not under a dot-folder or ~/Library. The host refuses everything else.
 interface fs {
   read: func(path: string) -> result<list<u8>, string>;
   write: func(path: string, data: list<u8>) -> result<_, string>;

@@ -93,16 +93,17 @@ impl FsScope {
         Self { read: valid(read), write: valid(write), cwds: Vec::new(), home, haunt }
     }
 
-    /// `${cwd}` expands to the cwd of agents the plugin has seen verified events for. A cwd that is
-    /// `$HOME`, an ancestor of it, inside the haunt dir or containing it is ignored: a grant there
-    /// would reach every project, or haunt's own lockfile and plugins. Without a known `$HOME`
-    /// nothing is added.
+    /// `${cwd}` expands to the folders of tabs the plugin has seen verified agent events in. Only a
+    /// folder strictly inside `$HOME` counts, and not one under a dot-folder or `~/Library`, inside
+    /// the haunt dir or containing it: those hold keys, app data or haunt's own lockfile. Without a
+    /// known `$HOME` nothing is added.
     pub fn add_cwd(&mut self, cwd: &str) {
         let Some(home) = &self.home else { return };
         let Ok(c) = Path::new(cwd).canonicalize() else { return };
-        let too_wide = c.parent().is_none() || home.starts_with(&c);
+        let Some(rel) = c.strip_prefix(home).ok().filter(|r| r.components().next().is_some()) else { return };
+        let private = rel.components().any(|p| p.as_os_str().as_bytes().starts_with(b".")) || rel.starts_with("Library");
         let haunt = c.starts_with(&self.haunt) || self.haunt.starts_with(&c);
-        if !too_wide && !haunt && !self.cwds.contains(&c) && self.cwds.len() < MAX_CWDS {
+        if !private && !haunt && !self.cwds.contains(&c) && self.cwds.len() < MAX_CWDS {
             self.cwds.push(c);
         }
     }
@@ -299,6 +300,7 @@ mod tests {
 
     fn scope(root: &Path) -> FsScope {
         let mut s = FsScope::new(&["${cwd}/.claude/*.json".into()], &["${cwd}/.claude/settings.local.json".into()], None);
+        s.home = Some(root.canonicalize().unwrap());
         s.add_cwd(root.join("proj").to_str().unwrap());
         s
     }
@@ -415,16 +417,23 @@ mod tests {
     }
 
     #[test]
-    fn cwd_is_never_home_an_ancestor_of_it_or_the_haunt_dir() {
+    fn cwd_is_a_project_folder_inside_home_and_never_private_or_the_haunt_dir() {
         let root = tempdir("wide");
         let home = root.join("Users/me");
         std::fs::create_dir_all(home.join("code/p")).unwrap();
         std::fs::create_dir_all(home.join(".haunt/plugins")).unwrap();
         let mut s = FsScope::new(&["${cwd}/*".into()], &[], Some(&home.join(".haunt")));
         s.home = Some(home.canonicalize().unwrap());
+        for private in [".ssh", ".config/gh", "Library", "Library/Application Support", "code/p/.git"] {
+            std::fs::create_dir_all(home.join(private)).unwrap();
+        }
         for wide in [home.clone(), root.join("Users"), root.to_path_buf(), PathBuf::from("/"), home.join(".haunt"), home.join(".haunt/plugins")] {
             s.add_cwd(wide.to_str().unwrap());
         }
+        for private in [".ssh", ".config/gh", "Library", "Library/Application Support", "code/p/.git"] {
+            s.add_cwd(home.join(private).to_str().unwrap());
+        }
+        s.add_cwd(std::env::temp_dir().to_str().unwrap());
         s.add_cwd(&format!("{}/code/..", home.display()));
         assert!(s.cwds.is_empty(), "{:?}", s.cwds);
         s.add_cwd(home.join("code/p").to_str().unwrap());
