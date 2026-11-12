@@ -1,7 +1,5 @@
 import AppKit
 import AVFoundation
-import ImageIO
-import UniformTypeIdentifiers
 
 /// The Dock tile the owning plugin asked for (`HostRequest.dockShow`); the core lets one plugin at a time
 /// send these. `blink` is flashed every few seconds, never under Reduce Motion.
@@ -16,18 +14,15 @@ final class PluginDock {
     private struct Shown { let image: NSImage?, badge: UInt32?, blink: NSImage? }
     private var shown: Shown?
     private var timer: Timer?
-    /// Decoded images by their bytes; a plugin has at most 8.
-    private var decoded: [Data: NSImage] = [:]
 
     func show(image: DockImage?, badge: UInt32?, blink: DockImage?) {
-        shown = image == nil && badge == nil ? nil : Shown(image: image.flatMap(decode), badge: badge, blink: blink.flatMap(decode))
+        shown = image == nil && badge == nil ? nil : Shown(image: image.flatMap(Self.image), badge: badge, blink: blink.flatMap(Self.image))
         apply()
     }
 
     /// Haunt's own icon and no badge, as when the owner lets go or the plugins reload.
     func reset() {
         shown = nil
-        decoded = [:]
         apply()
     }
 
@@ -48,21 +43,19 @@ final class PluginDock {
         }
     }
 
-    /// A still PNG that decodes whole, at most 1024 pixels each way; anything else is dropped and logged.
-    private func decode(_ d: DockImage) -> NSImage? {
-        if let img = decoded[d.png] { return img }
-        guard let src = CGImageSourceCreateWithData(d.png as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
-              CGImageSourceGetType(src) as String? == UTType.png.identifier, CGImageSourceGetCount(src) == 1,
-              let cg = CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary),
-              (1...Self.pixelsMax).contains(cg.width), (1...Self.pixelsMax).contains(cg.height)
+    /// The pixels the core decoded, as an image; no ImageIO. One whose size doesn't add up is dropped and logged.
+    static func image(_ d: DockImage) -> NSImage? {
+        let (w, h) = (Int(d.width), Int(d.height))
+        guard (1...pixelsMax).contains(w), (1...pixelsMax).contains(h), d.rgba.count == w * h * 4,
+              let provider = CGDataProvider(data: d.rgba as CFData), let srgb = CGColorSpace(name: CGColorSpace.sRGB),
+              let cg = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4, space: srgb,
+                               bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue), provider: provider,
+                               decode: nil, shouldInterpolate: true, intent: .defaultIntent)
         else {
-            AppDelegate.logger.error("plugin dock image \(d.id, privacy: .public) does not decode as a still PNG; dropped")
+            AppDelegate.logger.error("plugin dock image \(d.id, privacy: .public) is not \(w)×\(h) RGBA pixels; dropped")
             return nil
         }
-        let img = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
-        if decoded.count >= 16 { decoded = [:] }
-        decoded[d.png] = img
-        return img
+        return NSImage(cgImage: cg, size: NSSize(width: w, height: h))
     }
 }
 

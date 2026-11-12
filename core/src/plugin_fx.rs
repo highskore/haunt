@@ -89,7 +89,7 @@ const SHOWS_PER_SEC: usize = 4;
 /// One plugin's per-instance state for these imports.
 #[derive(Debug)]
 pub(crate) struct Fx {
-    dock_images: Vec<(String, Vec<u8>)>,
+    dock_images: Vec<DockImage>,
     dock_images_rate: Rate,
     dock_rate: Rate,
     glow_rate: Rate,
@@ -119,36 +119,42 @@ impl Default for Fx {
     }
 }
 
-/// A Dock tile image: the PNG as the plugin gave it, checked by `check_png`; the app decodes it again
-/// and drops it if that fails.
+/// A Dock tile image, decoded here by `decode_png` so the plugin's bytes never reach ImageIO: `rgba` is
+/// `width` × `height` pixels, 8 bits a channel, alpha not premultiplied, rows top first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct DockImage {
     pub id: String,
-    pub png: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
 }
 
 fn dock_id_ok(id: &str) -> bool {
     (1..=DOCK_ID_MAX).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-/// A still PNG of at most `DOCK_PIXELS_MAX` pixels each way: the signature, an IHDR first, whole
-/// chunks, no animation (`acTL`), and IEND last.
-pub(crate) fn check_png(png: &[u8]) -> Result<(u32, u32), String> {
+/// The PNG with only the chunks haunt reads: a still image of at most `DOCK_PIXELS_MAX` pixels each way,
+/// every chunk whole with a good CRC, an IHDR first and IEND last. Other ancillary chunks (colour profiles,
+/// text, Exif) are dropped unread; an unknown critical chunk or an animation (`acTL`) is refused.
+pub(crate) fn keep_chunks(png: &[u8]) -> Result<Vec<u8>, String> {
     const SIG: &[u8] = b"\x89PNG\r\n\x1a\n";
     if png.len() > DOCK_PNG_MAX {
         return Err(format!("larger than {DOCK_PNG_MAX} bytes"));
     }
     let mut rest = png.strip_prefix(SIG).ok_or("not a PNG")?;
-    let mut size = None;
+    let mut out = SIG.to_vec();
     let mut first = true;
     loop {
         if rest.len() < 12 {
             return Err("a PNG cut short".into());
         }
         let len = u32::from_be_bytes(rest[..4].try_into().unwrap()) as usize;
-        let kind = &rest[4..8];
-        let Some(data) = rest.get(8..8 + len).filter(|_| rest.len() >= 12 + len) else { return Err("a PNG chunk runs past the end".into()) };
+        let Some(whole) = rest.get(..12 + len) else { return Err("a PNG chunk runs past the end".into()) };
+        let (kind, data, crc) = (&whole[4..8], &whole[8..8 + len], &whole[8 + len..]);
+        if crc32fast::hash(&whole[4..8 + len]).to_be_bytes() != crc {
+            return Err("a PNG chunk with a bad checksum".into());
+        }
         if first {
             if kind != b"IHDR" || len != 13 {
                 return Err("a PNG without its header".into());
@@ -158,19 +164,49 @@ pub(crate) fn check_png(png: &[u8]) -> Result<(u32, u32), String> {
             if !(1..=DOCK_PIXELS_MAX).contains(&w) || !(1..=DOCK_PIXELS_MAX).contains(&h) {
                 return Err(format!("{w}×{h} pixels; at most {DOCK_PIXELS_MAX} each way"));
             }
-            size = Some((w, h));
             first = false;
         } else if kind == b"IHDR" {
             return Err("two PNG headers".into());
         }
-        if kind == b"acTL" {
-            return Err("an animated PNG; send each frame as its own image".into());
+        match kind {
+            b"IHDR" | b"PLTE" | b"tRNS" | b"IDAT" | b"IEND" => out.extend_from_slice(whole),
+            b"acTL" => return Err("an animated PNG; send each frame as its own image".into()),
+            [k, ..] if k.is_ascii_lowercase() && kind.iter().all(u8::is_ascii_alphabetic) => {}
+            _ => return Err(format!("a PNG chunk {:?} haunt doesn't read", String::from_utf8_lossy(kind))),
         }
-        rest = &rest[8 + len + 4..];
+        rest = &rest[12 + len..];
         if kind == b"IEND" {
-            return if rest.is_empty() { size.ok_or_else(|| "an empty PNG".into()) } else { Err("bytes after the PNG's end".into()) };
+            return if rest.is_empty() { Ok(out) } else { Err("bytes after the PNG's end".into()) };
         }
     }
+}
+
+/// `png` decoded to straight-alpha RGBA, after `keep_chunks`.
+pub(crate) fn decode_png(png: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+    let clean = keep_chunks(png)?;
+    let bad = |e: png::DecodingError| format!("a PNG that doesn't decode: {e}");
+    let limits = png::Limits { bytes: 4 * (DOCK_PIXELS_MAX * DOCK_PIXELS_MAX * 4) as usize };
+    let mut d = png::Decoder::new_with_limits(std::io::Cursor::new(&clean[..]), limits);
+    d.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut r = d.read_info().map_err(bad)?;
+    let mut buf = vec![0; r.output_buffer_size().ok_or("a PNG too large to decode")?];
+    let info = r.next_frame(&mut buf).map_err(bad)?;
+    r.finish().map_err(bad)?;
+    buf.truncate(info.buffer_size());
+    if info.bit_depth != png::BitDepth::Eight {
+        return Err("a PNG that doesn't decode to 8 bits".into());
+    }
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buf,
+        png::ColorType::Rgb => buf.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 255]).collect(),
+        png::ColorType::GrayscaleAlpha => buf.as_chunks::<2>().0.iter().flat_map(|&[g, a]| [g, g, g, a]).collect(),
+        png::ColorType::Grayscale => buf.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::Indexed => return Err("a palette PNG that didn't expand".into()),
+    };
+    if rgba.len() != info.width as usize * info.height as usize * 4 {
+        return Err("a PNG that decodes short".into());
+    }
+    Ok((info.width, info.height, rgba))
 }
 
 impl HostState {
@@ -194,12 +230,7 @@ impl HostState {
     }
 
     fn dock_image(&self, id: &str) -> Result<DockImage, String> {
-        self.fx
-            .dock_images
-            .iter()
-            .find(|(i, _)| i == id)
-            .map(|(id, png)| DockImage { id: id.clone(), png: png.clone() })
-            .ok_or_else(|| format!("no image {id:?}; register it with images first"))
+        self.fx.dock_images.iter().find(|i| i.id == id).cloned().ok_or_else(|| format!("no image {id:?}; register it with images first"))
     }
 }
 
@@ -215,12 +246,17 @@ impl wdock::Host for HostState {
             if images[..i].iter().any(|(other, _)| other == id) {
                 return Err(format!("image id {id:?} twice"));
             }
-            check_png(png).map_err(|e| format!("image {id:?}: {e}"))?;
+            keep_chunks(png).map_err(|e| format!("image {id:?}: {e}"))?;
         }
         if !self.fx.dock_images_rate.ok() {
             return Err("images at most once a second".into());
         }
-        self.fx.dock_images = images;
+        let mut decoded = Vec::with_capacity(images.len());
+        for (id, png) in images {
+            let (width, height, rgba) = decode_png(&png).map_err(|e| format!("image {id:?}: {e}"))?;
+            decoded.push(DockImage { id, width, height, rgba });
+        }
+        self.fx.dock_images = decoded;
         Ok(())
     }
 
@@ -388,10 +424,33 @@ pub(super) mod tests {
         st
     }
 
+    pub(crate) fn chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let crc = crc32fast::hash(&[&kind[..], data].concat());
+        [&(data.len() as u32).to_be_bytes()[..], kind, data, &crc.to_be_bytes()].concat()
+    }
+
+    /// A real `w` × `h` PNG of `color`, with the chunks in `extra` right after its header.
+    pub(crate) fn png_of(w: u32, h: u32, color: png::ColorType, extra: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut e = png::Encoder::new(&mut out, w, h);
+        e.set_color(color);
+        let channels = color.samples();
+        let mut wr = e.write_header().unwrap();
+        let px: Vec<u8> = (0..w * h).flat_map(|i| (0..channels).map(move |c| (i as usize * 7 + c * 50) as u8)).collect();
+        wr.write_image_data(&px).unwrap();
+        wr.finish().unwrap();
+        // The signature (8) and IHDR (25) come first.
+        [&out[..33], extra, &out[33..]].concat()
+    }
+
     pub(crate) fn png(w: u32, h: u32, extra: &[u8]) -> Vec<u8> {
-        let chunk = |kind: &[u8], data: &[u8]| [&(data.len() as u32).to_be_bytes()[..], kind, data, &[0; 4]].concat();
+        png_of(w, h, png::ColorType::Rgba, extra)
+    }
+
+    /// A PNG whose IHDR claims `w` × `h`, for size checks that come before any decoding.
+    fn header_only(w: u32, h: u32) -> Vec<u8> {
         let ihdr = [&w.to_be_bytes()[..], &h.to_be_bytes(), &[8, 6, 0, 0, 0]].concat();
-        [&b"\x89PNG\r\n\x1a\n"[..], &chunk(b"IHDR", &ihdr), extra, &chunk(b"IDAT", &[0; 16]), &chunk(b"IEND", &[])].concat()
+        [&b"\x89PNG\r\n\x1a\n"[..], &chunk(b"IHDR", &ihdr), &chunk(b"IEND", &[])].concat()
     }
 
     const DOCK_IMPORT: &str = r#"(component (import "haunt:plugin/dock@0.5.0" (instance
@@ -410,21 +469,61 @@ pub(super) mod tests {
 
     #[test]
     fn dock_images_are_still_capped_pngs() {
-        assert_eq!(check_png(&png(1024, 1024, &[])), Ok((1024, 1024)));
-        let actl = [&8u32.to_be_bytes()[..], b"acTL", &[0; 8], &[0; 4]].concat();
+        let (w, h, rgba) = decode_png(&png(1024, 1024, &[])).unwrap();
+        assert_eq!((w, h, rgba.len()), (1024, 1024, 1024 * 1024 * 4));
+        let mut bad_crc = png(64, 64, &[]);
+        bad_crc[29] ^= 1;
         for (bad, why) in [
-            (png(1025, 10, &[]), "pixels"),
-            (png(0, 10, &[]), "pixels"),
-            (png(64, 64, &actl), "animated"),
+            (header_only(1025, 10), "pixels"),
+            (header_only(0, 10), "pixels"),
+            (png(64, 64, &chunk(b"acTL", &[0; 8])), "animated"),
+            (png(64, 64, &chunk(b"ZZZZ", &[1])), "doesn't read"),
+            (png(64, 64, &chunk(b"a\0bc", &[1])), "doesn't read"),
+            (bad_crc, "checksum"),
             (b"GIF89a".to_vec(), "not a PNG"),
             (png(64, 64, &[])[..50].to_vec(), "past the end"),
             (png(64, 64, &[])[..40].to_vec(), "cut short"),
             ([png(64, 64, &[]), b"tail".to_vec()].concat(), "after the PNG"),
             ([png(64, 64, &[]), vec![0; DOCK_PNG_MAX]].concat(), "larger than"),
+            (header_only(64, 64), "doesn't decode"),
         ] {
-            let e = check_png(&bad).unwrap_err();
+            let e = decode_png(&bad).unwrap_err();
             assert!(e.contains(why), "{why}: {e}");
         }
+    }
+
+    #[test]
+    fn dock_images_lose_every_chunk_but_the_pixels_unread() {
+        // A colour profile, Exif and compressed text, each garbage inside, so parsing any of them would fail.
+        let extra = [chunk(b"iCCP", b"x\0\0garbage"), chunk(b"eXIf", b"MM\0*junk"), chunk(b"zTXt", b"k\0\0not zlib"), chunk(b"gAMA", &[0; 4])].concat();
+        let with = png(16, 16, &extra);
+        let kept = keep_chunks(&with).unwrap();
+        for kind in [&b"iCCP"[..], b"eXIf", b"zTXt", b"gAMA"] {
+            assert!(!kept.windows(4).any(|w| w == kind), "{}", String::from_utf8_lossy(kind));
+        }
+        assert_eq!(kept, png(16, 16, &[]));
+        assert_eq!(decode_png(&with), decode_png(&png(16, 16, &[])));
+    }
+
+    #[test]
+    fn dock_images_decode_to_straight_rgba_whatever_the_colour_type() {
+        let (_, _, rgba) = decode_png(&png_of(2, 1, png::ColorType::Rgb, &[])).unwrap();
+        assert_eq!(rgba, [0, 50, 100, 255, 7, 57, 107, 255]);
+        let (_, _, rgba) = decode_png(&png_of(2, 1, png::ColorType::Grayscale, &[])).unwrap();
+        assert_eq!(rgba, [0, 0, 0, 255, 7, 7, 7, 255]);
+        let (_, _, rgba) = decode_png(&png_of(1, 1, png::ColorType::GrayscaleAlpha, &[])).unwrap();
+        assert_eq!(rgba, [0, 0, 0, 50]);
+        // A palette with a transparent second entry.
+        let mut out = Vec::new();
+        let mut e = png::Encoder::new(&mut out, 2, 1);
+        e.set_color(png::ColorType::Indexed);
+        e.set_depth(png::BitDepth::Eight);
+        e.set_palette(vec![255, 0, 0, 0, 0, 255]);
+        e.set_trns(vec![255, 0]);
+        let mut wr = e.write_header().unwrap();
+        wr.write_image_data(&[0, 1]).unwrap();
+        wr.finish().unwrap();
+        assert_eq!(decode_png(&out).unwrap().2, [255, 0, 0, 255, 0, 0, 255, 0]);
     }
 
     #[test]
@@ -439,6 +538,8 @@ pub(super) mod tests {
         }
         assert!(wdock::Host::images(&mut st, vec![img("a"), img("a")]).unwrap_err().contains("twice"));
         assert!(wdock::Host::images(&mut st, vec![("a".into(), b"no".to_vec())]).unwrap_err().contains("not a PNG"));
+        assert!(wdock::Host::images(&mut st, vec![("a".into(), header_only(8, 8))]).unwrap_err().contains("doesn't decode"));
+        st.fx.dock_images_rate = Rate::new(1, Duration::from_secs(1));
         wdock::Host::images(&mut st, vec![img("idle"), img("busy")]).unwrap();
         assert!(wdock::Host::images(&mut st, vec![img("idle")]).unwrap_err().contains("once a second"));
         assert!(st.outbox.is_empty(), "images alone change nothing on screen");
@@ -457,7 +558,7 @@ pub(super) mod tests {
 
         wdock::Host::show(&mut a, Some("idle".into()), Some(3), Some("blink".into())).unwrap();
         let [HostRequest::DockShow { image: Some(i), badge: Some(3), blink: Some(k), .. }] = &a.outbox[..] else { panic!("{:?}", a.outbox) };
-        assert_eq!((i.id.as_str(), k.id.as_str(), i.png.len()), ("idle", "blink", png(64, 64, &[]).len()));
+        assert_eq!((i.id.as_str(), k.id.as_str(), i.width, i.rgba.len()), ("idle", "blink", 64, 64 * 64 * 4));
         assert!(wdock::Host::show(&mut b, Some("idle".into()), None, None).unwrap_err().contains("dev.haunt.a has it"));
         wdock::Host::show(&mut b, None, None, None).unwrap();
         assert!(b.outbox.is_empty(), "a non-owner clearing changes nothing");

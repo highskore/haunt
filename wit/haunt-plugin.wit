@@ -455,7 +455,8 @@ interface speech {
 
 // Capability `dock`. The Dock tile: whole images, one per state, that the plugin ships.
 interface dock {
-  // Up to 8 PNGs, at most 1 MB each, by id (letters, digits, '-'); replaces earlier ones.
+  // Up to 8 still PNGs, at most 1 MB and 1024 pixels each way, by id (letters, digits, '-'); replaces earlier
+  // ones. Haunt reads only IHDR, PLTE, tRNS, IDAT and IEND; other ancillary chunks are dropped unread.
   images: func(images: list<tuple<string, list<u8>>>) -> result<_, string>;
   // Shows image `id` (none: haunt's own icon) with `badge` as the Dock's count badge (none: no badge).
   // `blink` is an image haunt shows briefly every few seconds, except under Reduce Motion. The first

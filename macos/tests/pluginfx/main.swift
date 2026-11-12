@@ -5,7 +5,9 @@ import os
 // The app's types PluginFx.swift uses, as the UniFFI bindings shape them.
 struct DockImage: Equatable, Hashable {
     var id: String
-    var png: Data
+    var width: UInt32
+    var height: UInt32
+    var rgba: Data
 }
 
 enum SoundName: Equatable, Hashable {
@@ -28,19 +30,25 @@ func run(_ seconds: TimeInterval) {
     RunLoop.main.run(until: Date().addingTimeInterval(seconds))
 }
 
-/// dock-ghost's art when it is checked out next to this repo, else plain squares.
+/// dock-ghost's art when it is checked out next to this repo, else plain squares, as the straight-alpha RGBA
+/// the core hands over (the test decodes the art itself; the app never does).
 func dockImage(_ id: String, fill: NSColor) -> DockImage {
     let dir = ProcessInfo.processInfo.environment["HAUNT_DOCK_ASSETS"]
         ?? NSHomeDirectory() + "/code/haunt-plugins/haunt-dock-ghost/assets"
-    if let png = FileManager.default.contents(atPath: "\(dir)/\(id).png") { return DockImage(id: id, png: png) }
-    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 256, pixelsHigh: 256, bitsPerSample: 8, samplesPerPixel: 4,
-                               hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    let art = NSImage(contentsOfFile: "\(dir)/\(id).png")
+    let side = art.map { Int($0.representations.first?.pixelsWide ?? 256) } ?? 256
+    var px = [UInt8](repeating: 0, count: side * side * 4)
+    let ctx = CGContext(data: &px, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+                        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
     NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-    fill.setFill()
-    NSRect(x: 0, y: 0, width: 256, height: 256).fill()
+    NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+    let r = NSRect(x: 0, y: 0, width: side, height: side)
+    if let art { art.draw(in: r) } else { fill.setFill(); r.fill() }
     NSGraphicsContext.restoreGraphicsState()
-    return DockImage(id: id, png: rep.representation(using: .png, properties: [:])!)
+    for i in stride(from: 0, to: px.count, by: 4) where px[i + 3] > 0 && px[i + 3] < 255 {
+        for c in 0..<3 { px[i + c] = UInt8(min(255, Int(px[i + c]) * 255 / Int(px[i + 3]))) }
+    }
+    return DockImage(id: id, width: UInt32(side), height: UInt32(side), rgba: Data(px))
 }
 
 /// What the Dock is handed, drawn offscreen: the tile image, and `badgeLabel` in a red pill at the top right
@@ -116,12 +124,12 @@ check(NSApp.dockTile.badgeLabel == nil && tile() == haunt, "[plugin_fx] dock = f
 dock.enabled = true
 check(tile() == working, "and turning it on again shows the plugin's")
 
-dock.show(image: DockImage(id: "bad", png: Data("\u{89}PNG\r\n\u{1a}\nnot really".utf8)), badge: 2, blink: nil)
-check(tile() != working && NSApp.dockTile.badgeLabel == "2", "a PNG that doesn't decode shows Haunt's icon")
-check(tile() == haunt, "Haunt's own icon exactly")
-let gif = DockImage(id: "gif", png: Data(base64Encoded: "R0lGODlhAQABAIAAAP///wAAACwAAAAAAQABAAACAkQBADs=")!)
-dock.show(image: gif, badge: nil, blink: nil)
-check(tile() != working, "a GIF is refused")
+dock.show(image: DockImage(id: "short", width: 64, height: 64, rgba: Data(count: 64 * 64 * 4 - 1)), badge: 2, blink: nil)
+check(NSApp.dockTile.badgeLabel == "2" && tile() == haunt, "pixels that don't fill the size show Haunt's own icon")
+for (w, h) in [(0, 1), (1025, 1)] {
+    dock.show(image: DockImage(id: "big", width: UInt32(w), height: UInt32(h), rgba: Data(count: w * h * 4)), badge: nil, blink: nil)
+    check(tile() == haunt, "\(w)×\(h) is refused")
+}
 
 dock.show(image: needs, badge: 3, blink: nil)
 dock.reset()

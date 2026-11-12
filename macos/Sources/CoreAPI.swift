@@ -484,7 +484,9 @@ struct AuditDrain: Equatable, Hashable {
 
 struct DockImage: Equatable, Hashable {
     var id: String
-    var png: Data
+    var width: UInt32
+    var height: UInt32
+    var rgba: Data
 }
 
 enum PanelPlacement: Equatable, Hashable {
