@@ -18,6 +18,8 @@ final class HauntConfig {
     private(set) var titleFormat = ""
     /// Haunt's own middle-click paste; `[ghostty] middle-click-action = ignore` turns it off.
     private(set) var middleClickPaste = true
+    /// `[sound] plugins`: whether plugins may play sounds and speak.
+    private(set) var pluginSound = true
 
     /// The theme on screen: `theme` from config.toml, unless a preview or a fixture says otherwise.
     private(set) var themeName = "bw"
@@ -132,6 +134,11 @@ final class HauntConfig {
             problems.append($0)
         }
         problems += Self.refusedGhostty(toml["ghostty"] ?? [:]).map { "[ghostty] \($0.key) = \($0.value): not allowed, ignored" }
+        let soundSetting = toml["sound"]?["plugins"]
+        if let soundSetting, soundSetting != .scalar("true"), soundSetting != .scalar("false") {
+            problems.append("[sound] plugins: expected true or false")
+        }
+        pluginSound = soundSetting != .scalar("false")
         // One save can fire several events; each problem is logged once per edit.
         if problems != lastKeyProblems {
             for p in problems { Self.logger.error("\(p, privacy: .public)") }

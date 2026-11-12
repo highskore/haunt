@@ -403,6 +403,14 @@ enum HostRequest: Equatable, Hashable {
     case releaseNotifications(pluginId: String)
     case closePanel(pluginId: String, id: String)
     case keysChanged(pluginId: String)
+    case playSound(pluginId: String, sound: SoundName, pitch: Int32, volume: Float)
+    case ambient(pluginId: String, sound: SoundName, level: Float)
+    case say(pluginId: String, text: String)
+    case stopSpeech(pluginId: String)
+}
+
+enum SoundName: Equatable, Hashable {
+    case chime, bell, rain
 }
 
 struct PluginKey: Equatable, Hashable {
