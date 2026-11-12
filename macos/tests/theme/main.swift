@@ -670,6 +670,34 @@ do {
     let pillFg = white.app.pillFg, pillBg = white.app.pillBg
     check(drawn("status.needs", [PrimSpec(kind: "rect", fill: pillFg.themeHex)], text: inner, ink: pillFg, on: pillBg) == 0, "a layer in the pill's ink hides the pill's word")
     check(drawn("status.needs", [PrimSpec(kind: "rect", fill: "#000000")], text: inner, ink: pillFg, on: pillBg) > 0, "a dark one doesn't")
+    // Review 2: a slot's text is judged over the layers of the slots drawn under it too, as they stack.
+    let veil = PrimSpec(kind: "rect", fill: "#ffffff8a"), needs = white.color.needs
+    func stacked(_ under: String, _ over: String, ink: NSColor, veil: PrimSpec = veil) -> (under: Bool, over: Bool) {
+        let (l, _) = Layers.resolve([LayerSpec(id: "u", slot: under, prims: [veil]), LayerSpec(id: "o", slot: over, prims: [veil])], images: [], theme: white)
+        Layers.set(l, source: LayerSource())
+        let c = canvas(), box = CGRect(x: 10, y: 10, width: 80, height: 40), run = [Layers.Run(rect: inner[0], ink: ink)]
+        Layers.draw(under, box, text: run, in: c.ctx)
+        Layers.draw(over, box, text: run, state: ["selected"], in: c.ctx)
+        Layers.endFrame()
+        return (!Layers.skipped.contains { $0.hasPrefix("layers on \(under) ") }, !Layers.skipped.contains { $0.hasPrefix("layers on \(over) ") })
+    }
+    check(drawn("row", [veil], text: inner, ink: needs) > 0 && drawn("status.needs", [veil], text: inner, ink: needs) > 0, "one veil alone is fine")
+    check(stacked("row", "status.needs", ink: needs) == (true, false), "a veil on the row and one on the needs word are judged together")
+    let faint = PrimSpec(kind: "rect", fill: "#ffffff60")
+    check(drawn("row.selected", [faint], text: inner) > 0, "a fainter veil alone is fine on a row")
+    check(stacked("row", "row.selected", ink: white.color.textPrimary, veil: faint) == (true, false), "and a row's veil under a selected row's")
+    // At the screen's scale: half-point rules every point read as a grey at 1x, as solid lines on a Retina screen.
+    var rules: [PrimSpec.Cmd] = []
+    for y in 0..<40 {
+        let top = Double(y), bottom = Double(y) + 0.5
+        rules += [PrimSpec.Cmd(op: "M", pts: [0, top]), PrimSpec.Cmd(op: "L", pts: [80, top]), PrimSpec.Cmd(op: "L", pts: [80, bottom]),
+                  PrimSpec.Cmd(op: "L", pts: [0, bottom]), PrimSpec.Cmd(op: "Z", pts: [])]
+    }
+    check(drawn("status.needs", [PrimSpec(kind: "path", fill: "#ffffffc0", path: rules, view: [80, 40])], text: inner, ink: .white) == 0,
+          "half-point rules across the needs word are judged at 2x")
+    // Fails closed: text it can't measure is not called readable.
+    check(drawn("row.selected", [PrimSpec(kind: "rect", fill: "#000000")], text: [CGRect(x: 20, y: 20.1, width: 60, height: 0.3)]) == 0
+          && Layers.skipped.contains { $0.contains("too small to check") }, "a run with no whole pixel skips the layers")
 
     // Clipped to the slot (bleed included), never into the excluded terminal, and states pick layers.
     func layer(_ slot: String, _ p: PrimSpec, when: [String] = [], opacity: Double = 1) -> ResolvedLayer {
@@ -777,6 +805,11 @@ do {
     Layers.draw("palette.field", CGRect(x: 700, y: 300, width: 380, height: 40), in: big)
     for r in 0..<8 { Layers.draw(r == 0 ? "palette.row.selected" : "palette.row.hover", CGRect(x: 704, y: 344 + 40 * r, width: 372, height: 36), in: big) }
     }
+    // A live resize never turns layers off, though its redraws are still timed.
+    Layers.liveResize = { true }
+    for _ in 0..<2 { drawWindow(); Layers.endFrame() }
+    check(!Layers.current.isEmpty && Layers.lastFrameMs > Layers.slowMs, "slow redraws in a live resize leave layers on: \(Int(Layers.lastFrameMs)) ms")
+    Layers.liveResize = { false }
     // Too slow to draw: the theme's layers are turned off for the session, said once, and the next redraw is fast.
     var said: [String] = []
     Layers.report = { said.append($0) }

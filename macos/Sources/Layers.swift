@@ -111,6 +111,13 @@ enum Layers {
     /// A light may be ringed past its circle. Rows get no bleed: each is clipped to its own box, so it never
     /// reaches the text of the row or label next to it.
     static let bleed: [String: CGFloat] = ["lights": 4]
+    /// The slots drawn under each slot's text, bottom first, in the order they are drawn: their layers are in the
+    /// pixels the slot's text is checked against.
+    static let below: [String: [String]] = [
+        "row": ["sidebar"], "row.selected": ["sidebar", "row"], "row.hover": ["sidebar", "row"],
+        "status.needs": ["sidebar", "row", "row.selected", "row.hover"], "label.group": ["sidebar"], "sidebar.footer": ["sidebar"],
+        "palette.field": ["palette"], "palette.row.selected": ["palette", "palette.field"], "palette.row.hover": ["palette", "palette.field"],
+    ]
     /// Bitmaps under text, and anything behind the terminal, are kept this faint, all of a slot's together.
     static let faintAlpha: CGFloat = 0.12
 
@@ -131,6 +138,7 @@ enum Layers {
         current = tooSlow.contains(source) ? [:] : Dictionary(grouping: layers, by: \.slot)
         skipped = []
         verdicts = [:]
+        drawn = [:]
         self.source = source
         frame = (0, false)
     }
@@ -156,12 +164,16 @@ enum Layers {
     /// The last redraw's layer time, checks included.
     private(set) static var lastFrameMs = 0.0
 
+    /// Whether a window is being resized live: its redraws are many and cheap to lose, so they never turn layers off.
+    static var liveResize: () -> Bool = { NSApp?.windows.contains { $0.inLiveResize } ?? false }
+
     static func endFrame() {
+        drawn = [:]
         guard frame.open else { return }
         let ms = frame.ms
         lastFrameMs = ms
         frame = (0, false)
-        guard !current.isEmpty else { return }
+        guard !current.isEmpty, !liveResize() else { return }
         if ms > slowMs { slowFrames += 1 }
         guard ms > stopMs || slowFrames >= 2 else { return }
         tooSlow.append(source)
@@ -206,71 +218,129 @@ enum Layers {
         defer { frame.ms += Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6 }
         let run = textRun ?? bounds
         let runs = Self.text[slot].map { t in text ?? t.fg.compactMap(Theme.colorPath).map { Run(rect: run, ink: Theme.current[keyPath: $0]) } } ?? []
-        if !runs.isEmpty, let why = verdict(shown, slot: slot, bounds: bounds, clip: clip, run: run, runs: runs, base: base, state: state, index: index) {
+        // Never under 2x: a hairline that 1x would blend away is a solid line on a Retina screen.
+        let scale = max(2, abs(ctx.userSpaceToDeviceSpaceTransform.a).rounded(.up))
+        if !runs.isEmpty, let why = verdict(shown, slot: slot, bounds: bounds, clip: clip, exclude: exclude, run: run, runs: runs, base: base,
+                                            state: state, index: index, scale: scale, ctm: ctx.ctm) {
             let said = "layers on \(slot) skipped: \(why)"
             if skipped.insert(said).inserted { report(said) }
             return
         }
+        drawn[slot] = Drawn(shown: shown, bounds: bounds, clip: clip, exclude: exclude, run: run, ctm: ctx.ctm)
+        paint(drawn[slot]!, slot: slot, in: ctx)
+    }
+
+    /// A slot's layers as last drawn in this redraw, for the checks of the slots drawn over it.
+    private struct Drawn {
+        var shown: [ResolvedLayer]
+        var bounds, clip: NSRect
+        var exclude: NSRect?
+        var run: NSRect
+        var ctm: CGAffineTransform
+    }
+    private static var drawn: [String: Drawn] = [:]
+
+    private static func paint(_ d: Drawn, slot: String, in ctx: CGContext) {
         ctx.saveGState()
         defer { ctx.restoreGState() }
-        if let exclude, exclude.intersects(clip) {
-            ctx.addRect(clip)
+        if let exclude = d.exclude, exclude.intersects(d.clip) {
+            ctx.addRect(d.clip)
             ctx.addRect(exclude)
             ctx.clip(using: .evenOdd)
         } else {
-            ctx.clip(to: clip)
+            ctx.clip(to: d.clip)
         }
-        render(shown, slot: slot, bounds: bounds, run: run, ctx: ctx)
+        render(d.shown, slot: slot, bounds: d.bounds, run: d.run, ctx: ctx)
     }
 
-    /// Verdicts already reached, by slot, size, state and text; emptied with the theme. nil means readable.
+    /// Verdicts already reached, by slot, size, state and text; emptied with the theme, or when it holds 512.
+    /// nil means readable.
     private static var verdicts: [String: String?] = [:]
 
-    /// Renders `shown` over the slot's real background at 1x, as painted (stacking, winding, every kind), and says
-    /// which run, if any, it leaves under 3:1.
-    static func verdict(_ shown: [ResolvedLayer], slot: String, bounds: NSRect, clip: NSRect, run: NSRect, runs: [Run], base: [NSColor],
-                        state: Set<String>, index: Int?) -> String? {
+    /// Renders `shown`, over the slot's real background and the layers of the slots drawn under it, at `scale`, as
+    /// painted (stacking, winding, every kind), and says which run, if any, it leaves under 3:1. Fails closed: a
+    /// run it can't measure is unreadable.
+    static func verdict(_ shown: [ResolvedLayer], slot: String, bounds: NSRect, clip: NSRect, exclude: NSRect? = nil, run: NSRect, runs: [Run],
+                        base: [NSColor], state: Set<String>, index: Int?, scale: CGFloat = 2, ctm: CGAffineTransform = .identity) -> String? {
+        let inside = runs.map { $0.rect.intersection(clip) }.filter { !$0.isEmpty }
+        guard !inside.isEmpty else { return nil }
+        let area = inside.dropFirst().reduce(inside[0]) { $0.union($1) }.integral
         func rel(_ r: NSRect) -> String { String(format: "%.1f,%.1f,%.1f,%.1f", r.minX - clip.minX, r.minY - clip.minY, r.width, r.height) }
-        let key = "\(slot)|\(shown.map { $0.id ?? "" })|\(shown.count)|\(rel(clip))|\(rel(bounds))|\(rel(run))|\(state.sorted())|\(index ?? -1)|"
-            + runs.map { "\(rel($0.rect))\($0.ink.themeHex)\($0.on?.themeHex ?? "")" }.joined(separator: ";") + "|" + base.map(\.themeHex).joined()
-        if let v = verdicts[key] { return v }
-        let w = Int(clip.width.rounded(.up)), h = Int(clip.height.rounded(.up))
-        var v: String?
-        if w > 0, h > 0, w * h <= 4 << 20,
-           let c = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
-            c.translateBy(x: 0, y: CGFloat(h))
-            c.scaleBy(x: 1, y: -1)
-            c.translateBy(x: -clip.minX, y: -clip.minY)
-            let theme = Theme.current
-            let ground = (text[slot]?.over ?? []).compactMap(Theme.colorPath).map { theme[keyPath: $0] } + base
-            c.setFillColor((ground.reduce(theme.app.appearance == "light" ? NSColor.white : .black) { $1.over($0) }).cgColor)
-            c.fill(clip)
-            c.saveGState()
-            render(shown, slot: slot, bounds: bounds, run: run, ctx: c)
-            c.restoreGState()
-            for r in runs {
-                if let on = r.on {
-                    c.setFillColor(on.cgColor)
-                    c.fill(r.rect)
-                }
-                if let ratio = worst(r, in: c, clip: clip, height: h), ratio < LoadedTheme.minContrast {
-                    v = "text in \(r.ink.themeHex) reads at \(String(format: "%.1f", ratio)):1 over them, under \(Int(LoadedTheme.minContrast)):1"
-                    break
-                }
-            }
+        // The lower slots, mapped from where they were drawn into this slot's space.
+        let lower: [(String, Drawn, CGAffineTransform)] = (below[slot] ?? []).compactMap { s in
+            guard let d = drawn[s] else { return nil }
+            let to = d.ctm.concatenating(ctm.inverted())
+            return d.clip.applying(to).intersects(area) ? (s, d, to) : nil
         }
+        var key = "\(slot)|\(shown.map { $0.id ?? "" })|\(shown.count)|\(rel(clip))|\(exclude.map(rel) ?? "")|\(rel(bounds))|\(rel(run))|\(state.sorted())|"
+            + "\(index ?? -1)|\(scale)|" + runs.map { "\(rel($0.rect))\($0.ink.themeHex)\($0.on?.themeHex ?? "")" }.joined(separator: ";") + "|"
+            + base.map(\.themeHex).joined()
+        for (s, d, to) in lower {
+            key += "|\(s):\(d.shown.map { $0.id ?? "" })\(d.shown.count)\(rel(d.clip.applying(to)))\(rel(d.bounds.applying(to)))\(d.exclude.map(rel) ?? "")"
+        }
+        if let v = verdicts[key] { return v }
+        if verdicts.count >= 512 { verdicts = [:] }
+        let v = measure(shown, slot: slot, bounds: bounds, clip: clip, exclude: exclude, run: run, runs: runs, base: base, area: area,
+                        lower: lower, scale: scale)
         verdicts[key] = v
         return v
     }
 
+    private static func measure(_ shown: [ResolvedLayer], slot: String, bounds: NSRect, clip: NSRect, exclude: NSRect?, run: NSRect, runs: [Run],
+                                base: [NSColor], area: NSRect, lower: [(String, Drawn, CGAffineTransform)], scale: CGFloat) -> String? {
+        let w = Int((area.width * scale).rounded(.up)), h = Int((area.height * scale).rounded(.up))
+        guard w > 0, h > 0, w * h <= 4 << 20 else { return "its text is too large to check (\(w)x\(h) px)" }
+        guard let c = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return "its text could not be checked" }
+        c.translateBy(x: 0, y: CGFloat(h))
+        c.scaleBy(x: scale, y: -scale)
+        c.translateBy(x: -area.minX, y: -area.minY)
+        let theme = Theme.current
+        let ground = (text[slot]?.over ?? []).compactMap(Theme.colorPath).map { theme[keyPath: $0] }
+        c.setFillColor((ground.reduce(theme.app.appearance == "light" ? NSColor.white : .black) { $1.over($0) }).cgColor)
+        c.fill(area)
+        // Real order: the panel's own slot, then what the site fills under its layers, then the slots over it.
+        let root = below[slot]?.first
+        if root == nil || lower.first?.0 != root { fill(base, area, c) }
+        for (s, d, to) in lower {
+            c.saveGState()
+            c.concatenate(to)
+            paint(d, slot: s, in: c)
+            c.restoreGState()
+            if s == root { fill(base, area, c) }
+        }
+        paint(Drawn(shown: shown, bounds: bounds, clip: clip, exclude: exclude, run: run, ctm: .identity), slot: slot, in: c)
+        for r in runs where r.rect.intersects(clip) {
+            if let on = r.on {
+                c.setFillColor(on.cgColor)
+                c.fill(r.rect)
+            }
+            guard let ratio = worst(r, in: c, area: area, scale: scale) else { return "text at \(rel(r.rect, area)) is too small to check" }
+            if ratio < LoadedTheme.minContrast {
+                return "text in \(r.ink.themeHex) reads at \(String(format: "%.1f", ratio)):1 over them, under \(Int(LoadedTheme.minContrast)):1"
+            }
+        }
+        return nil
+    }
+
+    private static func fill(_ colors: [NSColor], _ r: NSRect, _ c: CGContext) {
+        for color in colors {
+            c.setFillColor(color.cgColor)
+            c.fill(r)
+        }
+    }
+
+    private static func rel(_ r: NSRect, _ to: NSRect) -> String {
+        String(format: "%.1f,%.1f %.1fx%.1f", r.minX - to.minX, r.minY - to.minY, r.width, r.height)
+    }
+
     /// The contrast `r`'s ink gets on the worst pixel wholly inside its box: any of them may sit under a glyph's
     /// stroke, so a hairline across the text fails it, while antialiasing that only grazes the box's edge doesn't.
-    private static func worst(_ r: Run, in c: CGContext, clip: NSRect, height: Int) -> Double? {
+    private static func worst(_ r: Run, in c: CGContext, area: NSRect, scale: CGFloat) -> Double? {
         guard let data = c.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
         let row = c.bytesPerRow
-        let x0 = max(Int((r.rect.minX - clip.minX).rounded(.up)), 0), x1 = min(Int((r.rect.maxX - clip.minX).rounded(.down)), c.width)
-        let y0 = max(Int((r.rect.minY - clip.minY).rounded(.up)), 0), y1 = min(Int((r.rect.maxY - clip.minY).rounded(.down)), height)
+        let x0 = max(Int(((r.rect.minX - area.minX) * scale).rounded(.up)), 0), x1 = min(Int(((r.rect.maxX - area.minX) * scale).rounded(.down)), c.width)
+        let y0 = max(Int(((r.rect.minY - area.minY) * scale).rounded(.up)), 0), y1 = min(Int(((r.rect.maxY - area.minY) * scale).rounded(.down)), c.height)
         guard x1 > x0, y1 > y0 else { return nil }
         let ink = r.ink.usingColorSpace(.sRGB) ?? r.ink
         let a = Double(ink.alphaComponent), keep = 1 - a
