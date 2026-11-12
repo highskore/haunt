@@ -257,8 +257,10 @@ pub struct HostState {
     user_call: bool,
     /// (id, canonical chord) from `keys.bind`.
     keys: Vec<(String, String)>,
-    /// `terminal.read` calls left in the command or key the user just used; 0 outside one.
+    /// `terminal.read` calls left in the command, key or hover-hold the user just used; 0 outside one.
     reads_left: u32,
+    /// The only tab `terminal.read` may read now, during a hover-hold: the row under the pointer.
+    read_only: Option<String>,
     /// Set while the plugin hears that the user came back.
     returning: bool,
     /// The sheet it asked for then, until the user switches to Haunt.
@@ -323,6 +325,7 @@ impl HostState {
             returning: false,
             return_sheet: None,
             reads_left: 0,
+            read_only: None,
             exec: caps.exec.clone(),
             exec_jobs: Vec::new(),
             events: EventGrant { details: caps.event_details, answers: caps.pty_write },
@@ -515,6 +518,9 @@ impl wterm::Host for HostState {
         }
         let core = self.core.as_ref().ok_or("no haunt core")?;
         let surface = clip(surface);
+        if self.read_only.as_ref().is_some_and(|only| *only != surface) {
+            return Err("only the hovered tab".into());
+        }
         if core.tab_folders(&surface).is_none() {
             return Err(format!("no tab {:?}", shown(&surface, 40)));
         }
@@ -1383,7 +1389,17 @@ impl LoadedPlugin {
         if !self.store.data().hover_hold {
             return Err(PluginError("no hover-hold".into()));
         }
-        self.call(|b, s| b.call_on_hover_hold(s, held, surface))
+        if !held {
+            return self.call(|b, s| b.call_on_hover_hold(s, false, surface));
+        }
+        let data = self.store.data_mut();
+        data.reads_left = READS_PER_ACTION;
+        data.read_only = Some(surface.to_owned());
+        let res = self.call(|b, s| b.call_on_hover_hold(s, true, surface));
+        let data = self.store.data_mut();
+        data.reads_left = 0;
+        data.read_only = None;
+        res
     }
 
     pub fn keys(&self) -> Vec<PluginKey> {
@@ -2018,7 +2034,11 @@ mod tests {
         while st.reads_left > 0 {
             st.read(tab.clone(), 1).unwrap();
         }
-        assert!(st.read(tab, 1).is_err(), "a few reads per action");
+        assert!(st.read(tab.clone(), 1).is_err(), "a few reads per action");
+        let other = core.register_surface(dir.to_str().unwrap()).unwrap().surface_id;
+        (st.reads_left, st.read_only) = (READS_PER_ACTION, Some(tab.clone()));
+        assert_eq!(st.read(tab, 1).unwrap(), ["three"], "a hover-hold reads the hovered tab");
+        assert!(st.read(other, 1).unwrap_err().contains("only the hovered"));
     }
 
     #[test]

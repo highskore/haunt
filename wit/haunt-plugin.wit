@@ -457,8 +457,8 @@ interface title {
 
 // Capability `terminal_read`. The last `lines` (1 to 50) visible lines of any tab's screen, oldest
 // first, blank lines below the text dropped, hidden characters spelled out, each cut to 512. Read
-// only, never input; only while handling a key or palette command the user just used, at most 8
-// reads each time.
+// only, never input; only while handling a key or palette command the user just used, or in
+// `on-hover-hold(true, surface)` for that surface alone; at most 8 reads each time.
 interface terminal {
   read: func(surface: string, lines: u32) -> result<list<string>, string>;
 }
