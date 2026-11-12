@@ -10,7 +10,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent))
 from fid import DESIGN, SCALE, delta_e, hex_rgb, ink, rgb_hex, sample, scan  # noqa: E402
-from tokens import FILES, source_html  # noqa: E402
+from tokens import FILES, MOCKUPS, source_html  # noqa: E402
 
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 REF = DESIGN / "reference"
@@ -84,7 +84,27 @@ ISOLATE_REVIEW = r"""
   Object.assign(root.style, { width: (S.width + 2) + 'px', borderRadius: '0' });
   Object.assign(root.querySelector('.win').style, { boxShadow: 'none', borderRadius: '0' });
 """
-ISOLATE = {"ui": ISOLATE_ITEMS, "av": ISOLATE_ITEMS, "dl": ISOLATE_PLACEMENTS, "nt": ISOLATE_PLACEMENTS, "rv": ISOLATE_REVIEW, "rv2": ISOLATE_REVIEW}
+# haunt-themes: one `section.card` per theme, its window on a stage over the theme's wallpaper.
+ISOLATE_THEMES = r"""
+  document.querySelector('header.top')?.remove();
+  const cards = [...document.querySelectorAll('section.card')];
+  cards.forEach((c, i) => { if (i !== S.index - 1) c.remove(); });
+  const card = cards[S.index - 1];
+  card.querySelectorAll(':scope > .chead, :scope > .specs').forEach(e => e.remove());
+  document.body.style.margin = '0';
+  Object.assign(document.querySelector('main').style, { padding: '0', margin: '0', maxWidth: 'none' });
+  Object.assign(card.style, { padding: '0', margin: '0', border: '0' });
+  root = card.querySelector('.stage');
+  root.style.transform = 'none';
+  root.parentElement.style.height = 'auto';
+  // The backdrop pass: only what shows through the window's glass, for the fixture to stand in for the desktop.
+  if (S.backdrop) {
+    const win = root.querySelector('.win');
+    [...win.children].forEach(e => { e.style.visibility = 'hidden'; });
+    Object.assign(win.style, { background: 'transparent', boxShadow: 'none' });
+  }
+"""
+ISOLATE = {"th": ISOLATE_THEMES, "ui": ISOLATE_ITEMS, "av": ISOLATE_ITEMS, "dl": ISOLATE_PLACEMENTS, "nt": ISOLATE_PLACEMENTS, "rv": ISOLATE_REVIEW, "rv2": ISOLATE_REVIEW}
 
 
 def expand(spec, groups):
@@ -108,7 +128,7 @@ def expand(spec, groups):
 
 def default_tol(a):
     # Text is sampled as its inkiest pixel, so it gets a little slack that flat surfaces don't.
-    return 1.0 if a.get("text") or a["token"] == "color.claude" else 0.5
+    return 1.0 if a.get("text") or a.get("token") == "color.claude" else 0.5
 
 
 def coord(expr, box, axis):
@@ -132,21 +152,31 @@ def chrome(args):
                           capture_output=True, text=True, check=True)
 
 
-def render(name, spec, groups, tokens):
-    anchors, edges = expand(spec, groups)
-    selectors = sorted({a["sel"] for a in anchors} | {e["sel"] for e in edges} | {e["expect_sel"] for e in edges if "expect_sel" in e})
-    js = json.dumps({"index": spec["index"], "crop": spec["crop"], "fill": spec.get("fill", False), "width": spec.get("width", 900), "selectors": selectors})
-    inject = INJECT.replace("__ISOLATE__", ISOLATE[spec["file"]]).replace("__SPEC__", js)
-    # A screen's `css` fixes mockup layout accidents (a row that wraps) without touching colours or sizes.
-    css = f"<style>{spec['css']}</style>" if "css" in spec else ""
-    html = source_html(spec["file"]).replace("</body>", css + inject + "</body>")
+def source(key):
+    return (MOCKUPS / "haunt-themes/index.html").read_text() if key == "th" else source_html(key)
+
+
+def shoot(html):
     with tempfile.TemporaryDirectory() as tmp:
         page = Path(tmp) / "page.html"
         page.write_text(html)
         dom = chrome(["--dump-dom", page.as_uri()]).stdout
         shot = Path(tmp) / "shot.png"
         chrome([f"--screenshot={shot}", page.as_uri()])
-        full = Image.open(shot).convert("RGB")
+        return dom, Image.open(shot).convert("RGB")
+
+
+def render(name, spec, groups, tokens):
+    anchors, edges = expand(spec, groups)
+    selectors = sorted({a["sel"] for a in anchors} | {e["sel"] for e in edges} | {e["expect_sel"] for e in edges if "expect_sel" in e})
+    def page(backdrop):
+        js = json.dumps({"index": spec["index"], "crop": spec["crop"], "fill": spec.get("fill", False), "width": spec.get("width", 900),
+                         "selectors": selectors, "backdrop": backdrop})
+        inject = INJECT.replace("__ISOLATE__", ISOLATE[spec["file"]]).replace("__SPEC__", js)
+        # A screen's `css` fixes mockup layout accidents (a row that wraps) without touching colours or sizes.
+        css = f"<style>{spec['css']}</style>" if "css" in spec else ""
+        return source(spec["file"]).replace("</body>", css + inject + "</body>")
+    dom, full = shoot(page(False))
     geo = json.loads(dom.split('id="__fid">', 1)[1].split("</script>", 1)[0])
     errors = list(geo["errors"])
     w, h = geo["crop"]["w"], geo["crop"]["h"]
@@ -158,8 +188,9 @@ def render(name, spec, groups, tokens):
         box = geo["boxes"].get(a["sel"])
         if box is None:
             continue
-        expect = tokens[a["token"]]["value"]
-        entry = {"name": a["name"], "token": a["token"], "expect": expect, "tol": a.get("tol", default_tol(a))}
+        # A theme card's colours aren't haunt tokens, so its anchors give the colour itself.
+        expect = a["hex"] if "hex" in a else tokens[a["token"]]["value"]
+        entry = {"name": a["name"], "token": a.get("token", "theme"), "expect": expect, "tol": a.get("tol", default_tol(a))}
         if a.get("text"):
             t = geo["text"][a["sel"]]
             rect = [math.floor(t["left"] * SCALE), math.floor(t["top"] * SCALE), math.ceil(t["right"] * SCALE), math.ceil(t["bottom"] * SCALE)]
@@ -175,7 +206,7 @@ def render(name, spec, groups, tokens):
         de = delta_e(got, hex_rgb(expect))
         entry["ref"] = rgb_hex(got)
         if de > entry["tol"]:
-            errors.append(f"{a['name']}: reference shows {rgb_hex(got)}, token {a['token']} is {expect} (ΔE {de:.1f}); anchor misplaced")
+            errors.append(f"{a['name']}: reference shows {rgb_hex(got)}, {entry['token']} is {expect} (ΔE {de:.1f}); anchor misplaced")
         out_anchors.append(entry)
 
     out_edges = []
@@ -195,7 +226,11 @@ def render(name, spec, groups, tokens):
 
     REF.mkdir(exist_ok=True)
     im.save(REF / f"{name}.png")
-    return {"file": f"haunt-reference/mockups/{FILES[spec['file']].parent.name}/index.html", "index": spec["index"], "crop": spec["crop"],
+    if spec.get("backdrop"):
+        _, back = shoot(page(True))
+        back.crop((x0, y0, x0 + w * SCALE, y0 + h * SCALE)).save(REF / f"{name}-backdrop.png")
+    folder = "haunt-themes" if spec["file"] == "th" else FILES[spec["file"]].parent.name
+    return {"file": f"haunt-reference/mockups/{folder}/index.html", "index": spec["index"], "crop": spec["crop"],
             "size_pt": [w, h], "size_px": [w * SCALE, h * SCALE], "anchors": out_anchors, "edges": out_edges}, errors
 
 

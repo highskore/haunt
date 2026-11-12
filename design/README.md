@@ -16,6 +16,10 @@ Everything runs through `uv`, so you don't need a venv.
 
 `ui-03-icon-only`, `ui-06-grouped-flat`, `ui-07-rail`, `ui-08-breadcrumb`, `ui-10-zen`
 (pawr-ui layouts), and `av-01-narrow-list` to `av-09-focus` (agents-only views 01–09).
+`th-01-glass` is the Glass card from `haunt-themes`, 900×560 pt, checked on its solid colours and edges only: its
+`hex` anchors give the card's colour, as theme colours aren't tokens. Its render also writes
+`reference/th-01-glass-backdrop.png`, the card's wallpaper as the glass shows it, which `macos/fidelity.sh` hands the
+fixture (HAUNT_BACKDROP) in place of the desktop.
 `.win` screens are 900×440 pt. Floating panels use their own size (see `size_pt` in the manifest),
 and the ticker is 1440×29 pt.
 

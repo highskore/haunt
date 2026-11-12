@@ -1,6 +1,6 @@
 #!/bin/bash
 # Launches build/haunt-fixtures.app on a mockup fixture, captures its window and runs design/check.
-# Usage: macos/fidelity.sh [screen...]   (default: ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox nt-07-menu)
+# Usage: macos/fidelity.sh [screen...]   (default: ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox nt-07-menu th-01-glass)
 # HAUNT_INACTIVE=1 captures the window unfocused; captures then get an -inactive suffix.
 set -uo pipefail
 cd "$(dirname "$0")"
@@ -14,24 +14,30 @@ FBIN="$ROOT/build/macos/haunt-fixtures"
 if [ ! -x "$FBIN" ] || [ -n "$(find Sources Vendor deps/lib -newer "$FBIN" -print -quit)" ]; then
   HAUNT_FIXTURES=1 ./build.sh >/dev/null || exit 1
 fi
-if [ ! -d "$APP" ] || [ "$FBIN" -nt "$APP/Contents/MacOS/haunt" ] || [ "$ROOT/build/haunt.app" -nt "$APP" ]; then
+PLUGINS="${HAUNT_PLUGINS_DIR:-$ROOT/../haunt-plugins}"
+if [ ! -d "$APP" ] || [ "$FBIN" -nt "$APP/Contents/MacOS/haunt" ] || [ "$ROOT/build/haunt.app" -nt "$APP" ] ||
+  [ -n "$(find "$PLUGINS/haunt-decision-log" "$PLUGINS/haunt-theme-glass" "$PLUGINS/haunt-theme-sigil" -newer "$APP" -not -path '*/target/*' -print -quit 2>/dev/null)" ]; then
   rm -rf "$APP"
   cp -R "$ROOT/build/haunt.app" "$APP"
   cp "$FBIN" "$APP/Contents/MacOS/haunt"
-  # The log palettes go through the real decision-log plugin, whatever the shipping build bundles.
+  # The log palettes go through the real decision-log plugin, and th- screens through their theme plugin,
+  # whatever the shipping build bundles.
   rm -rf "$APP/Contents/Resources/plugins"
-  ./bundle-plugins.sh "$APP/Contents/Resources/plugins" decision-log >/dev/null || exit 1
+  ./bundle-plugins.sh "$APP/Contents/Resources/plugins" decision-log,theme-glass,theme-sigil >/dev/null || exit 1
   codesign --force --sign - "$APP" >/dev/null 2>&1
 fi
 status=0
-for screen in "${@:-ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox nt-07-menu}"; do
+for screen in "${@:-ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox nt-07-menu th-01-glass}"; do
   for s in $screen; do
     tag="$s${HAUNT_INACTIVE:+-inactive}"
     # The palette and the menu bar menu are their own windows; the mockup's crop leaves out their 1 pt border.
     width=""
     inset=0
-    case "$s" in dl-04-palette) width=400; inset=2 ;; nt-07-menu) width=250; inset=2 ;; esac
-    HAUNT_FIXTURE="$s" "$APP/Contents/MacOS/haunt" >"$OUT/$tag-app.log" 2>&1 &
+    case "$s" in dl-04-palette) width=400; inset=2 ;; nt-07-menu) width=250; inset=2 ;; th-02-sigil) width=900; inset=2 ;; esac
+    # Glass shows the card's wallpaper, blurred, instead of the desktop.
+    backdrop=""
+    [ -f "$ROOT/design/reference/$s-backdrop.png" ] && backdrop="$ROOT/design/reference/$s-backdrop.png"
+    HAUNT_FIXTURE="$s" HAUNT_BACKDROP="$backdrop" "$APP/Contents/MacOS/haunt" >"$OUT/$tag-app.log" 2>&1 &
     pid=$!
     win=""
     for _ in $(seq 1 40); do

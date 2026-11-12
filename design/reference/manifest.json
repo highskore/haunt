@@ -7100,5 +7100,137 @@
     "tol": 2
    }
   ]
+ },
+ "th-01-glass": {
+  "file": "haunt-reference/mockups/haunt-themes/index.html",
+  "index": 1,
+  "crop": ".win",
+  "size_pt": [
+   900,
+   560
+  ],
+  "size_px": [
+   1800,
+   1120
+  ],
+  "anchors": [
+   {
+    "name": "pal.sel.bg",
+    "token": "theme",
+    "expect": "#0a84ff",
+    "tol": 0.5,
+    "mode": "point",
+    "x": 1580,
+    "y": 834,
+    "ref": "#0a84ff"
+   },
+   {
+    "name": "bar.fill",
+    "token": "theme",
+    "expect": "#ffffff",
+    "tol": 0.5,
+    "mode": "point",
+    "x": 106,
+    "y": 413,
+    "ref": "#ffffff"
+   },
+   {
+    "name": "row.sel.name",
+    "token": "theme",
+    "expect": "#f4f4f8",
+    "tol": 1.0,
+    "mode": "text",
+    "rect": [
+     86,
+     329,
+     145,
+     359
+    ],
+    "ref": "#f4f4f8"
+   },
+   {
+    "name": "pal.bg",
+    "token": "theme",
+    "expect": "#1b2538",
+    "tol": 1.5,
+    "mode": "point",
+    "x": 1300,
+    "y": 1065,
+    "ref": "#1b2538"
+   }
+  ],
+  "edges": [
+   {
+    "name": "row.sel.top",
+    "x": 261,
+    "y": 320,
+    "dir": "up",
+    "expect": 313,
+    "tol": 2
+   },
+   {
+    "name": "row.sel.bottom",
+    "x": 261,
+    "y": 497,
+    "dir": "down",
+    "expect": 505,
+    "tol": 2
+   },
+   {
+    "name": "bar.fill.right",
+    "x": 90,
+    "y": 413,
+    "dir": "right",
+    "expect": 327,
+    "tol": 2
+   },
+   {
+    "name": "pal.sel.top",
+    "x": 1580,
+    "y": 854,
+    "dir": "up",
+    "expect": 825,
+    "tol": 2
+   },
+   {
+    "name": "pal.sel.bottom",
+    "x": 1580,
+    "y": 854,
+    "dir": "down",
+    "expect": 884,
+    "tol": 2
+   },
+   {
+    "name": "pal.sel.left",
+    "x": 1096,
+    "y": 854,
+    "dir": "left",
+    "expect": 1087,
+    "tol": 2
+   },
+   {
+    "name": "pal.sel.right",
+    "x": 1736,
+    "y": 854,
+    "dir": "right",
+    "expect": 1744,
+    "tol": 2
+   }
+  ]
+ },
+ "th-02-sigil": {
+  "file": "haunt-reference/mockups/haunt-themes/index.html",
+  "index": 2,
+  "crop": ".win",
+  "size_pt": [
+   898,
+   558
+  ],
+  "size_px": [
+   1796,
+   1116
+  ],
+  "anchors": [],
+  "edges": []
  }
 }

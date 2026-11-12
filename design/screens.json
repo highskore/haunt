@@ -3154,6 +3154,127 @@
      "expect": "left"
     }
    ]
+  },
+  "th-01-glass": {
+   "file": "th",
+   "index": 1,
+   "crop": ".win",
+   "backdrop": true,
+   "anchors": [
+    {
+     "name": "pal.sel.bg",
+     "sel": ".pr.sel",
+     "at": [
+      "75%",
+      "top+5"
+     ],
+     "hex": "#0a84ff"
+    },
+    {
+     "name": "bar.fill",
+     "sel": ".row.sel .bar b",
+     "at": [
+      "left+10",
+      "cy"
+     ],
+     "hex": "#ffffff"
+    },
+    {
+     "name": "row.sel.name",
+     "sel": ".row.sel .nm",
+     "text": true,
+     "hex": "#f4f4f8"
+    },
+    {
+     "name": "pal.bg",
+     "sel": ".pal",
+     "at": [
+      "left+112",
+      "bottom-5.5"
+     ],
+     "hex": "#1b2538",
+     "tol": 1.5
+    }
+   ],
+   "edges": [
+    {
+     "name": "row.sel.top",
+     "sel": ".row.sel",
+     "from": [
+      "50%",
+      "top+4"
+     ],
+     "dir": "up",
+     "expect": "top+1"
+    },
+    {
+     "name": "row.sel.bottom",
+     "sel": ".row.sel",
+     "from": [
+      "50%",
+      "bottom-4"
+     ],
+     "dir": "down",
+     "expect": "bottom-1"
+    },
+    {
+     "name": "bar.fill.right",
+     "sel": ".row.sel .bar b",
+     "from": [
+      "left+2",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "right"
+    },
+    {
+     "name": "pal.sel.top",
+     "sel": ".pr.sel",
+     "from": [
+      "75%",
+      "cy"
+     ],
+     "dir": "up",
+     "expect": "top+1"
+    },
+    {
+     "name": "pal.sel.bottom",
+     "sel": ".pr.sel",
+     "from": [
+      "75%",
+      "cy"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    },
+    {
+     "name": "pal.sel.left",
+     "sel": ".pr.sel",
+     "from": [
+      "left+4",
+      "cy"
+     ],
+     "dir": "left",
+     "expect": "left"
+    },
+    {
+     "name": "pal.sel.right",
+     "sel": ".pr.sel",
+     "from": [
+      "right-4",
+      "cy"
+     ],
+     "dir": "right",
+     "expect": "right"
+    }
+   ]
+  },
+  "th-02-sigil": {
+   "file": "th",
+   "index": 2,
+   "crop": ".win",
+   "anchors": [],
+   "edges": []
   }
  }
 }
