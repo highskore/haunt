@@ -452,6 +452,12 @@ do {
     check(key("b", "B", idle, at: 51), "a fresh press there goes through")
     g.sawKeyDown(inTerminal: true)
     check(key("b", "B", repeat: true, idle, at: 51.1), "a terminal's own key keeps its hold")
+
+    // A drop inside the window ends the whole hold, so its repeats after the window stay dropped.
+    check(key("f", "F", idle, at: 60), "typing in F")
+    g.pluginOpen("F", at: 60.1) { _ in true }
+    check(!key("f", "F", repeat: true, needs, at: 60.2), "a repeat inside the window is dropped")
+    check(!key("f", "F", repeat: true, needs, at: 60.6), "and so is the next one, after the window")
 }
 
 print(failures == 0 ? "keys: all passed" : "keys: \(failures) failed")
