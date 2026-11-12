@@ -58,7 +58,8 @@ impl Core {
             | HostRequest::ReleaseNotifications { .. }
             | HostRequest::KeysChanged { .. }
             | HostRequest::ClipboardWrite { .. }
-            | HostRequest::OpenUrl { .. } => None,
+            | HostRequest::OpenUrl { .. }
+            | HostRequest::FocusTab { .. } => None,
         }
     }
 }

@@ -434,6 +434,7 @@ enum HostRequest: Equatable, Hashable {
     case keysChanged(pluginId: String)
     case clipboardWrite(pluginId: String, pluginName: String, text: String)
     case openUrl(pluginId: String, url: String)
+    case focusTab(pluginId: String, surface: String)
 }
 
 struct PluginKey: Equatable, Hashable {

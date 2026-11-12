@@ -177,6 +177,8 @@ pub enum HostRequest {
     ClipboardWrite { plugin_id: String, plugin_name: String, text: String },
     /// An https link the user clicked a panel button for, checked by `plugins::link_ok`.
     OpenUrl { plugin_id: String, url: String },
+    /// Select an open tab, from a button, key or command the user just used (`sidebar.focus`).
+    FocusTab { plugin_id: String, surface: String },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -308,6 +310,8 @@ pub struct HostState {
     copy_ok: bool,
     /// The panel button action the user clicked, while that call runs; `link.open-url` spends it.
     clicked: Option<String>,
+    /// Set while a button, key or command the user just used runs; `sidebar.focus` spends it.
+    focus_ok: bool,
     /// The manifest's `open_url` domains.
     links: Vec<String>,
     /// (id, canonical chord) from `keys.bind`.
@@ -382,6 +386,7 @@ impl HostState {
             user_call: false,
             copy_ok: false,
             clicked: None,
+            focus_ok: false,
             links: caps.open_url.clone(),
             keys: Vec::new(),
             hold_actions: Vec::new(),
@@ -835,6 +840,17 @@ impl wside::Host for HostState {
             core.clear_arrangement(token);
         }
     }
+
+    fn focus(&mut self, surface: String) -> Result<(), String> {
+        self.sidebar.ok_or("not loaded with the sidebar capability")?;
+        if !std::mem::take(&mut self.focus_ok) {
+            return Err("only once per button, key or command the user just used".into());
+        }
+        if !self.core.as_ref().is_some_and(|c| c.has_surface(&surface)) {
+            return Err(format!("no open tab {:?}", visible(&surface).chars().take(64).collect::<String>()));
+        }
+        self.request(HostRequest::FocusTab { plugin_id: self.id.clone(), surface })
+    }
 }
 
 fn tone(t: wrows::Tone) -> Tone {
@@ -1163,15 +1179,15 @@ impl HostState {
         }
     }
 
-    /// The user just did something for this plugin: the call may copy once, and open `clicked` if it is
-    /// the link the button carried.
+    /// The user just did something for this plugin: the call may copy and focus a tab once, and open
+    /// `clicked` if it is the link the button carried.
     fn arm(&mut self, copy: bool, clicked: Option<&str>) {
-        self.copy_ok = copy;
+        (self.copy_ok, self.focus_ok) = (copy, copy);
         self.clicked = clicked.filter(|a| !a.is_empty()).map(str::to_owned);
     }
 
     fn disarm(&mut self) {
-        (self.copy_ok, self.clicked) = (false, None);
+        (self.copy_ok, self.focus_ok, self.clicked) = (false, false, None);
     }
 
     /// The tab hold summary action `action_id` brings forward, while that tab is still open.
@@ -1191,9 +1207,9 @@ impl HostState {
         Ok(())
     }
 
-    /// A call that trapped doesn't get to change the clipboard or open a link.
+    /// A call that trapped doesn't get to change the clipboard, open a link or switch tabs.
     fn drop_user_effects(&mut self) {
-        self.outbox.retain(|r| !matches!(r, HostRequest::ClipboardWrite { .. } | HostRequest::OpenUrl { .. }));
+        self.outbox.retain(|r| !matches!(r, HostRequest::ClipboardWrite { .. } | HostRequest::OpenUrl { .. } | HostRequest::FocusTab { .. }));
     }
 
     /// A disabled plugin's hold ends, so it can't keep notifications away.
@@ -2657,6 +2673,29 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_focus_needs_the_capability_a_user_action_and_an_open_tab() {
+        use wside::Host as _;
+        let core = crate::Core::new(&*tempdir("focus"));
+        let tab = core.register_surface("/a").unwrap().surface_id;
+        let mut bare = HostState::new("dev.x.bare", &Capabilities::default(), None, None, Some(core.handle()));
+        bare.arm(true, None);
+        assert!(bare.focus(tab.clone()).unwrap_err().contains("sidebar capability"));
+
+        let caps = Capabilities { sidebar: true, ..Default::default() };
+        let mut st = HostState::new("dev.x.next", &caps, None, None, Some(core.handle()));
+        assert!(st.focus(tab.clone()).unwrap_err().contains("once per"), "no user action");
+        st.arm(false, None);
+        assert!(st.focus(tab.clone()).is_err(), "a key's release arms nothing");
+        st.arm(true, None);
+        assert!(st.focus("no-such-tab".into()).unwrap_err().contains("no open tab"));
+        assert!(st.focus(tab.clone()).is_err(), "a refused try spends the use");
+        st.arm(true, None);
+        st.focus(tab.clone()).unwrap();
+        assert!(st.focus(tab.clone()).is_err(), "once per use");
+        assert_eq!(st.outbox, [HostRequest::FocusTab { plugin_id: "dev.x.next".into(), surface: tab }]);
+    }
+
+    #[test]
     fn a_hold_summary_action_may_bring_an_open_tab_forward() {
         use whold::Host as _;
         let core = crate::Core::new(&*tempdir("hold-tab"));
@@ -3288,11 +3327,14 @@ mod tests {
     }
 
     /// A whole-world plugin. `on-action(id, _)` does nothing for an `id` starting with "?"; otherwise it copies
-    /// "copied" twice and opens `id` twice, then traps if `id` starts with "!". `on-event` copies and opens
-    /// https://github.com/o/r. Every other export is empty.
+    /// "copied" twice, opens `id` twice and focuses the first sidebar row twice, then traps if `id` starts
+    /// with "!". `on-event` copies, opens https://github.com/o/r and focuses the first row. Every other
+    /// export is empty.
     const ARMING_PLUGIN: &str = r#"(module
         (import "haunt:plugin/clipboard@0.5.0" "write" (func $write (param i32 i32 i32)))
         (import "haunt:plugin/link@0.5.0" "open-url" (func $open (param i32 i32 i32)))
+        (import "haunt:plugin/sidebar@0.5.0" "rows" (func $rows (param i32)))
+        (import "haunt:plugin/sidebar@0.5.0" "focus" (func $focus (param i32 i32 i32)))
         (memory (export "memory") 1)
         (data (i32.const 64) "copied")
         (data (i32.const 80) "https://github.com/o/r")
@@ -3302,11 +3344,18 @@ mod tests {
             (local.set $p (i32.and (i32.add (global.get $heap) (i32.sub (local.get 2) (i32.const 1))) (i32.sub (i32.const 0) (local.get 2))))
             (global.set $heap (i32.add (local.get $p) (local.get 3)))
             (local.get $p))
+        (func $focus_first
+            (local $row i32)
+            (call $rows (i32.const 256))
+            (if (i32.eqz (i32.load (i32.const 260))) (then return))
+            (local.set $row (i32.load (i32.const 256)))
+            (call $focus (i32.load (local.get $row)) (i32.load offset=4 (local.get $row)) (i32.const 16)))
         (func (export "init") (param i32 i32))
         (func (export "on-settings-changed") (param i32 i32))
         (func (export "on-event") (param i32)
             (call $write (i32.const 64) (i32.const 6) (i32.const 16))
-            (call $open (i32.const 80) (i32.const 22) (i32.const 16)))
+            (call $open (i32.const 80) (i32.const 22) (i32.const 16))
+            (call $focus_first))
         (func (export "palette-items") (param i32 i32 i32 i32) (result i32) (i32.const 8))
         (func (export "on-action") (param $id i32) (param $len i32) (param i32 i32)
             (if (i32.and (i32.gt_u (local.get $len) (i32.const 0)) (i32.eq (i32.load8_u (local.get $id)) (i32.const 63)))
@@ -3315,6 +3364,8 @@ mod tests {
             (call $write (i32.const 64) (i32.const 6) (i32.const 16))
             (call $open (local.get $id) (local.get $len) (i32.const 16))
             (call $open (local.get $id) (local.get $len) (i32.const 16))
+            (call $focus_first)
+            (call $focus_first)
             (if (i32.and (i32.gt_u (local.get $len) (i32.const 0)) (i32.eq (i32.load8_u (local.get $id)) (i32.const 33)))
                 (then unreachable)))
         (func (export "row-menu") (param i32 i32) (result i32) (i32.const 8))
@@ -3325,8 +3376,9 @@ mod tests {
         (func (export "on-away-changed") (param i32 i64))
         (func (export "on-hover-hold") (param i32 i32 i32)))"#;
 
-    /// `ARMING_PLUGIN` as a component of the plugin world, loaded with clipboard, open_url and panel.
-    fn arming_plugin() -> LoadedPlugin {
+    /// `ARMING_PLUGIN` as a component of the plugin world, loaded with clipboard, open_url, panel and
+    /// sidebar, on `core`.
+    fn arming_plugin(core: &crate::Core) -> LoadedPlugin {
         let mut resolve = wit_parser::Resolve::default();
         let pkg = resolve.push_path(Path::new(env!("CARGO_MANIFEST_DIR")).join("../wit/haunt-plugin.wit")).unwrap().0;
         let world = resolve.select_world(&[pkg], Some("plugin")).unwrap();
@@ -3335,22 +3387,23 @@ mod tests {
         let bytes = wit_component::ComponentEncoder::default().module(&module).unwrap().validate(true).encode().unwrap();
         let host = PluginHost::new().unwrap();
         let component = Component::new(&host.engine, &bytes).unwrap();
-        let caps = Capabilities { clipboard: Some("write".into()), open_url: vec!["github.com".into()], panel: true, ..Default::default() };
-        let spec = LoadSpec { id: "dev.x.arming".into(), name: "Arming".into(), caps, settings_json: "{}".into(), ..Default::default() };
+        let caps = Capabilities { clipboard: Some("write".into()), open_url: vec!["github.com".into()], panel: true, sidebar: true, ..Default::default() };
+        let spec = LoadSpec { id: "dev.x.arming".into(), name: "Arming".into(), caps, settings_json: "{}".into(), core: Some(core.handle()), ..Default::default() };
         host.instantiate(&component, &spec).unwrap()
     }
 
-    /// The clipboard writes and opened links the last calls queued, taken from the outbox.
-    fn effects(p: &mut LoadedPlugin) -> (Vec<String>, Vec<String>) {
-        let (mut copied, mut opened) = (Vec::new(), Vec::new());
+    /// The clipboard writes, opened links and focused tabs the last calls queued, taken from the outbox.
+    fn effects(p: &mut LoadedPlugin) -> (Vec<String>, Vec<String>, Vec<String>) {
+        let (mut copied, mut opened, mut focused) = (Vec::new(), Vec::new(), Vec::new());
         for r in std::mem::take(&mut p.store.data_mut().outbox) {
             match r {
                 HostRequest::ClipboardWrite { text, .. } => copied.push(text),
                 HostRequest::OpenUrl { url, .. } => opened.push(url),
+                HostRequest::FocusTab { surface, .. } => focused.push(surface),
                 _ => {}
             }
         }
-        (copied, opened)
+        (copied, opened, focused)
     }
 
     fn show_button(p: &mut LoadedPlugin, action: &str) -> u64 {
@@ -3367,25 +3420,28 @@ mod tests {
 
     fn disarmed(p: &LoadedPlugin) -> bool {
         let st = p.store.data();
-        !st.copy_ok && st.clicked.is_none() && st.reads_left == 0 && st.typing_into.is_none() && !st.user_call
+        !st.copy_ok && !st.focus_ok && st.clicked.is_none() && st.reads_left == 0 && st.typing_into.is_none() && !st.user_call
     }
 
     #[test]
-    fn only_the_user_action_itself_may_copy_or_open_a_link() {
+    fn only_the_user_action_itself_may_copy_open_a_link_or_focus_a_tab() {
         let pr = "https://github.com/o/r/pull/1";
-        let mut p = arming_plugin();
+        let dir = tempdir("arming");
+        let core = crate::Core::new(&*dir);
+        let tab = core.register_surface("/a").unwrap().surface_id;
+        let mut p = arming_plugin(&core);
         assert!(disarmed(&p), "init arms nothing");
 
         let g = show_button(&mut p, pr);
         p.panel_action("p", g, pr).unwrap();
-        assert_eq!(effects(&mut p), (vec!["copied".to_string()], vec![pr.to_string()]), "a button press copies once and opens its own url once");
+        assert_eq!(effects(&mut p), (vec!["copied".to_string()], vec![pr.to_string()], vec![tab.clone()]), "a button press copies, opens its own url and focuses a tab, each once");
         assert!(disarmed(&p), "disarmed after the press");
 
         let g2 = show_button(&mut p, pr);
         assert!(p.panel_action("p", g, pr).is_err(), "an older show's button");
-        assert_eq!(effects(&mut p), (vec![], vec![]));
+        assert_eq!(effects(&mut p), (vec![], vec![], vec![]));
         p.panel_action("p", g2, "").unwrap();
-        assert_eq!(effects(&mut p), (vec![], vec![]), "closing the panel is not a press");
+        assert_eq!(effects(&mut p), (vec![], vec![], vec![]), "closing the panel is not a press");
         assert!(disarmed(&p));
 
         let idle = "?https://github.com/o/r";
@@ -3393,27 +3449,33 @@ mod tests {
         p.panel_action("p", g3, idle).unwrap();
         assert!(disarmed(&p), "an unspent press is disarmed when it returns");
         p.on_event(&tapped(EventKind::Stop, true, None)).unwrap();
-        assert_eq!(effects(&mut p), (vec![], vec![]), "an agent event arms nothing, even after a press it didn't use");
+        assert_eq!(effects(&mut p), (vec![], vec![], vec![]), "an agent event arms nothing, even after a press it didn't use");
 
         p.run_command(pr, true).unwrap();
-        assert_eq!(effects(&mut p), (vec!["copied".to_string()], vec![]), "a command may copy once but opens no link");
+        assert_eq!(effects(&mut p), (vec!["copied".to_string()], vec![], vec![tab.clone()]), "a command may copy and focus once but opens no link");
         assert!(disarmed(&p), "run_user_action disarms afterwards");
         p.run_command(idle, true).unwrap();
         assert!(disarmed(&p), "an unspent command is disarmed too");
         p.store.data_mut().keys.push((pr.into(), "cmd+k".into()));
         p.key_action(pr, true, true).unwrap();
-        assert_eq!(effects(&mut p), (vec!["copied".to_string()], vec![]), "a key press may copy once");
+        assert_eq!(effects(&mut p), (vec!["copied".to_string()], vec![], vec![tab.clone()]), "a key press may copy and focus once");
         p.key_action(pr, false, true).unwrap();
-        assert_eq!(effects(&mut p), (vec![], vec![]), "its release may not copy again");
+        assert_eq!(effects(&mut p), (vec![], vec![], vec![]), "its release may not copy again");
         assert!(disarmed(&p));
         p.on_event(&tapped(EventKind::Stop, true, None)).unwrap();
-        assert_eq!(effects(&mut p), (vec![], vec![]));
+        assert_eq!(effects(&mut p), (vec![], vec![], vec![]));
 
         let trap = "!https://github.com/o/r";
         let g4 = show_button(&mut p, trap);
         assert!(p.panel_action("p", g4, trap).is_err());
-        assert_eq!(effects(&mut p), (vec![], vec![]), "a call that traps leaves nothing queued");
+        assert_eq!(effects(&mut p), (vec![], vec![], vec![]), "a call that traps leaves nothing queued");
         assert!(disarmed(&p));
+
+        core.unregister_surface(&tab);
+        let other = core.register_surface("/b").unwrap().surface_id;
+        let mut p = arming_plugin(&core);
+        p.run_command(pr, true).unwrap();
+        assert_eq!(effects(&mut p).2, [other], "only a tab that is open now");
     }
 
     #[test]

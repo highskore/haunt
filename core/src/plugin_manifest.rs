@@ -208,7 +208,7 @@ impl Capabilities {
             out.push(("can read the commands you approved in Haunt more than once and the folders they ran in; these can contain secrets. Can suggest allow rules for them (nothing is written until you accept)".into(), false));
         }
         if self.sidebar {
-            out.push(("can see your tabs' names and states, and reorder, pin, group and colour them (rows needing you stay on top)".into(), false));
+            out.push(("can see your tabs' names and states, and reorder, pin, group and colour them (rows needing you stay on top), and switch to one when you use one of its buttons, keys or commands".into(), false));
         }
         if self.decorate {
             out.push(("can add a label, a bar or a sparkline to your tabs' rows".into(), false));

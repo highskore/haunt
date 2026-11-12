@@ -36,7 +36,7 @@ enum PtyRoute: Equatable {
             self = .press(key, surfaceId: w.surfaceId)
         case .ptyType:
             self = .paste(w)
-        case .notify, .showPanel, .holdNotifications, .holdSummary, .releaseNotifications, .closePanel, .keysChanged, .clipboardWrite, .openUrl:
+        case .notify, .showPanel, .holdNotifications, .holdSummary, .releaseNotifications, .closePanel, .keysChanged, .clipboardWrite, .openUrl, .focusTab:
             return nil
         }
     }

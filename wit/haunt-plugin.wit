@@ -220,6 +220,10 @@ interface sidebar {
   // The first plugin to arrange owns the sidebar until it calls `clear`.
   arrange: func(arrangement: arrangement) -> result<_, string>;
   clear: func();
+
+  // Selects open tab `surface`, as clicking its row would. Only while one of this plugin's buttons,
+  // keys (on key-down) or commands, or a notification action the user chose, runs; once per use.
+  focus: func(surface: string) -> result<_, string>;
 }
 
 // Capability `decorate`. One decoration per row and plugin, set and replaced at any time; the row

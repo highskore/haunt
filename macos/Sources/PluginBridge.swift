@@ -118,6 +118,8 @@ final class PluginBridge {
                 // The core checked it (`link_ok`); https is checked again before it leaves the app.
                 guard let u = URL(string: url), u.scheme == "https" else { continue }
                 NSWorkspace.shared.open(u)
+            case let .focusTab(_, surface):
+                openTab?(surface)
             case .ptyAnswer, .ptyType:
                 guard let w = core.gatePluginRequest(request: req), let route = PtyRoute(req, w) else { continue }
                 write(route)
