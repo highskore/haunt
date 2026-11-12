@@ -81,7 +81,6 @@ impl Stage {
         owners.len() != before
     }
 
-    #[cfg(test)]
     pub(crate) fn owner(&self, slot: Slot) -> Option<String> {
         crate::sync::lock(&self.0).iter().find(|(s, _)| *s == slot).map(|(_, p)| p.clone())
     }
@@ -331,6 +330,10 @@ impl wdock::Host for HostState {
                 return Err(format!("image id {id:?} twice"));
             }
             check_png(png).map_err(|e| format!("image {id:?}: {e}"))?;
+        }
+        // Only the tile's owner, or anyone while it's free, may spend the set's one batch a second.
+        if let Some(owner) = self.stage.owner(Slot::Dock).filter(|o| *o != self.id) {
+            return Err(format!("the Dock tile is taken: plugin {owner} has it"));
         }
         if !self.fx.dock_images_rate.ok() {
             return Err("images at most once a second".into());
@@ -712,6 +715,22 @@ pub(super) mod tests {
         let e = wdock::Host::images(&mut b, vec![("idle".into(), png(8, 8, &[]))]).unwrap_err();
         assert!(e.contains("across all plugins"), "{e}");
         assert_eq!(stage.take_dock().len(), 1, "the main thread decodes one batch a second at most");
+    }
+
+    #[test]
+    fn another_plugin_cant_starve_the_dock_tiles_owner() {
+        let stage = Stage::default();
+        let (mut a, mut b) = (state("dev.haunt.a", &stage), state("dev.haunt.b", &stage));
+        wdock::Host::images(&mut a, vec![("idle".into(), png(8, 8, &[]))]).unwrap();
+        wdock::Host::show(&mut a, Some("idle".into()), None, None).unwrap();
+        stage.take_dock();
+        *crate::sync::lock(&stage.2) = None;
+        a.fx.dock_images_rate = Rate::new(1, DOCK_IMAGES_EVERY);
+        for _ in 0..5 {
+            assert!(wdock::Host::images(&mut b, vec![("x".into(), png(8, 8, &[]))]).unwrap_err().contains("dev.haunt.a has it"));
+        }
+        wdock::Host::images(&mut a, vec![("needs".into(), png(8, 8, &[]))]).unwrap();
+        assert!(matches!(&stage.take_dock()[..], [DockBatch { plugin_id, .. }] if plugin_id == "dev.haunt.a"), "the owner still registers");
     }
 
     #[test]
