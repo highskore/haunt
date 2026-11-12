@@ -39,6 +39,10 @@ enum Fixture: String {
     case tabsTint = "tabs-tint"
     /// No mockup: a selection paste carrying a bracketed paste end, held by Haunt before Ghostty sees it.
     case pasteRisky = "paste-risky"
+    /// The Glass card (haunt-themes 01): ui-06 in the glass plugin's theme, the palette open on "p".
+    case glass = "th-01-glass"
+    /// The Sigilcore card (haunt-themes 02): the same screen in the sigil plugin's theme.
+    case sigil = "th-02-sigil"
 
     static var current: Fixture? {
         ProcessInfo.processInfo.environment["HAUNT_FIXTURE"].flatMap(Fixture.init(rawValue:))
@@ -46,17 +50,22 @@ enum Fixture: String {
 
     var titleAccessory: TitleBarView.Accessory {
         if self == .reviewFiles { return .empty }
-        return self == .iconOnly || self == .zen || self == .reviewSend || isSheet || self == .pasteRisky ? .icons : .kbd
+        return self == .iconOnly || self == .zen || self == .reviewSend || isSheet || self == .pasteRisky || isThemeCard ? .icons : .kbd
     }
 
-    /// Mockup 03 shows ⌕ + ⚙; other fixtures keep the default.
-    var titlebarButtons: [TitlebarButton] { self == .iconOnly ? [.search, .newTab, .settings] : TitlebarButton.defaults }
+    /// Mockup 03 and the Glass card show ⌕ + ⚙; other fixtures keep the default.
+    var titlebarButtons: [TitlebarButton] {
+        self == .sigil ? [] : self == .iconOnly || self == .glass ? [.search, .newTab, .settings] : TitlebarButton.defaults
+    }
+
+    var isThemeCard: Bool { themePlugin != nil }
 
     var isReview: Bool { [.reviewFiles, .reviewSend, .reviewOverview, .reviewInbox].contains(self) }
 
     /// The review mockups' windows: 1100 × 600 (640 for the second set) less the `.win`'s 1 px border.
     var size: NSSize? {
         if self == .reviewInbox { return NSSize(width: Tok.Size.reviewWindowW, height: Tok.Size.inboxWindowH - 2) }
+        if isThemeCard { return NSSize(width: 900, height: 560) }
         return isReview ? NSSize(width: Tok.Size.reviewWindowW, height: Tok.Size.reviewWindowH - 2) : nil
     }
 
@@ -73,10 +82,22 @@ enum Fixture: String {
     var isSheet: Bool { [.pasteConfirm, .setupPicker, .setupChange, .settings].contains(self) }
 
     /// The palette mockup's input: the `log` chip and "push".
-    var paletteQuery: String? { self == .palette ? "log push" : self == .codexLog ? "log " : nil }
+    var paletteQuery: String? { self == .palette ? "log push" : self == .codexLog ? "log " : isThemeCard ? "p" : nil }
+
+    /// The theme cards' palettes list four entries.
+    var paletteRows: Int? { isThemeCard ? 4 : nil }
 
     /// The screens whose palette shows the decision log.
-    var hasLog: Bool { paletteQuery != nil }
+    var hasLog: Bool { self == .palette || self == .codexLog }
+
+    /// The theme plugin a screen is drawn in, installed from the app's bundled plugins.
+    var themePlugin: (id: String, theme: String)? {
+        switch self {
+        case .glass: ("dev.haunt.theme-glass", "glass")
+        case .sigil: ("dev.haunt.theme-sigil", "sigil")
+        default: nil
+        }
+    }
 
     private struct Tab {
         var kind: RowKind, name: String, meta: String, status: String, needs: Bool
@@ -172,7 +193,7 @@ enum Fixture: String {
                 SidebarGroup(id: "running", label: "RUNNING", rows: [rows[2]]),
                 SidebarGroup(id: "idle", label: "IDLE", rows: [rows[3]]),
             ], colorStyle: .dot)
-        case .groupedFlat, .palette, .suspicious, .codex, .codexLog, .statusMenu:
+        case .groupedFlat, .palette, .suspicious, .codex, .codexLog, .statusMenu, .glass, .sigil:
             return SidebarSnapshot(groups: [
                 SidebarGroup(id: "needs-you", label: "NEEDS YOU", rows: [rows[1]]),
                 SidebarGroup(id: "running", label: "RUNNING", rows: [rows[0]]),

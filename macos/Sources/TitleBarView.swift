@@ -33,6 +33,9 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
     var zen = false { didSet { needsDisplay = true; updateToolTips() } }
     /// Mockup 10's "⌘B agents · ⌘K search", with the configured shortcuts.
     var hints: [(Hint, String)] = [] { didSet { needsDisplay = true } }
+    /// `[layout] title_format`, and the selected tab it names; a review crumb takes its place.
+    var titleFormat = "" { didSet { if titleFormat != oldValue { needsDisplay = true } } }
+    var tab: (name: String, meta: String)? { didSet { if tab?.name != oldValue?.name || tab?.meta != oldValue?.meta { needsDisplay = true } } }
     /// The selected agent's progress for the zen line; nil leaves the line out.
     var progress: CGFloat? { didSet { if progress != oldValue { needsDisplay = true } } }
 
@@ -97,7 +100,7 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
     private func drawLights() {
         for i in 0..<3 {
             let r = lightRect(i)
-            (lightsHover ? Tok.Lights.fill[i] : Tok.Color.lights).setFill()
+            (lightsHover || Theme.current.effects.titlebarLights == "color" ? Tok.Lights.fill[i] : Tok.Color.lights).setFill()
             NSBezierPath(ovalIn: r).fill()
             guard lightsHover else { continue }
             Tok.Lights.glyph[i].set()
@@ -195,7 +198,7 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
                 let w = (bounds.width * min(max(p, 0), 1)).rounded()
                 Draw.fill(NSRect(x: 0, y: 0, width: w, height: Tok.Size.zenBar), Tok.Color.barFill)
             }
-        } else {
+        } else if Theme.current.effects.titlebarRule {
             Draw.fill(NSRect(x: 0, y: bounds.height - Tok.App.hairline, width: bounds.width, height: Tok.App.hairline), Tok.Color.hairline)
         }
 
@@ -228,7 +231,31 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
         }
         if let (line, r) = crumbLayout() {
             Draw.text(line, font: Draw.ui(Tok.Size.crumbFont), x: r.minX, top: r.minY, lineHeight: r.height, in: ctx)
+        } else if let (line, r) = titleLayout() {
+            Draw.text(line, font: Draw.ui(Tok.App.titleFont, .semibold), x: r.minX, top: r.minY, lineHeight: r.height, in: ctx)
         }
+    }
+
+    /// Centred on the bar and cut short of the lights and the icons.
+    private func titleLayout() -> (CTLine, NSRect)? {
+        guard crumb.isEmpty, !zen, !titleFormat.isEmpty, let tab else { return nil }
+        let size = Tok.App.titleFont
+        let s = NSMutableAttributedString()
+        for (text, isTab) in TitleFormat.parts(titleFormat, tab: tab.name, meta: tab.meta) {
+            s.append(NSAttributedString(string: text, attributes: [
+                .font: Draw.ui(size, isTab ? .semibold : .medium),
+                .foregroundColor: isTab ? Tok.App.titleFg : Tok.App.titleMeta,
+            ]))
+        }
+        guard s.length > 0 else { return nil }
+        let left = lightRect(2).maxX + Tok.Size.titlebarIconsGap
+        let right = accessory == .icons ? (iconLayout().first?.2.minX ?? bounds.width) - Tok.Size.titlebarIconsGap
+            : bounds.width - Tok.Size.titlebarPadx
+        let half = min(bounds.width / 2 - left, right - bounds.width / 2)
+        guard half > 0 else { return nil }
+        let line = Draw.truncated(CTLineCreateWithAttributedString(s), 2 * half, Draw.ui(size, .medium), Tok.App.titleMeta)
+        let w = Draw.width(line), lh = size * Tok.Font.baseLine
+        return (line, NSRect(x: ((bounds.width - w) / 2).rounded(), y: rowTop + (rowH - lh) / 2, width: w, height: lh))
     }
 
     /// `a › b › c`: parts in the sub grey, separators muted, the last part in the primary ink.

@@ -18,12 +18,32 @@ enum Draw {
         return f
     }
 
+    /// After a theme change: fonts and ellipses are rebuilt from the new tokens.
+    static func flushCaches() {
+        fonts = [:]
+        ellipses = [:]
+    }
+
     static func ui(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
-        cached(.ui, size, weight) { NSFont.systemFont(ofSize: size, weight: weight) }
+        cached(.ui, size, weight) { themeUI(size, weight) ?? NSFont.systemFont(ofSize: size, weight: weight) }
     }
 
     static func uiTabular(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
-        cached(.tabular, size, weight) { NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight) }
+        cached(.tabular, size, weight) {
+            guard let f = themeUI(size, weight) else { return NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight) }
+            let digits: [NSFontDescriptor.FeatureKey: Int] = [.typeIdentifier: kNumberSpacingType, .selectorIdentifier: kMonospacedNumbersSelector]
+            return NSFont(descriptor: f.fontDescriptor.addingAttributes([.featureSettings: [digits]]), size: size) ?? f
+        }
+    }
+
+    /// `font.ui`'s first family, when a theme names one; the default's CSS stack starts with the system font.
+    private static func themeUI(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont? {
+        guard let first = Tok.Font.ui.split(separator: ",").first?.trimmingCharacters(in: CharacterSet(charactersIn: " \"'")),
+              !["-apple-system", "BlinkMacSystemFont", "system-ui"].contains(first) else { return nil }
+        if let f = ThemeFonts.uiFont(family: first, weight: weight, size: size) { return f }
+        // NSFontManager weights: 3 light, 5 regular, 6 medium, 8 semibold, 9 bold.
+        let w = weight >= .bold ? 9 : weight >= .semibold ? 8 : weight >= .medium ? 6 : weight <= .light ? 3 : 5
+        return NSFontManager.shared.font(withFamily: first, traits: [], weight: w, size: size)
     }
 
     static func mono(_ size: CGFloat) -> NSFont {
@@ -79,9 +99,10 @@ enum Draw {
         ctx.restoreGState()
     }
 
+    /// Over what is there, so a theme's see-through colours layer as they do in the mockups.
     static func fill(_ rect: NSRect, _ color: NSColor) {
         color.setFill()
-        rect.fill()
+        rect.fill(using: .sourceOver)
     }
 
     /// The Claude mark from the mockup's 24×24 SVG path, scaled into `rect`.

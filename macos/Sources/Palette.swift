@@ -12,10 +12,14 @@ struct PaletteRow: Equatable {
         case plugin(pluginId: String, itemId: String)
         /// An app command, run through its menu item.
         case command(KeyMap.Action)
+        /// A theme in the `theme` mode: previewed while selected, kept on ↵.
+        case theme(String)
     }
 
     var left = ""
     var mark: Mark?
+    /// The tab's kind, for `[effects] palette.icons`; other rows get the shell glyph.
+    var icon: RowKind?
     var title: String
     var sub: String
     var right = Right.none
@@ -39,11 +43,20 @@ protocol PaletteHost: AnyObject {
     var isFullScreen: Bool { get }
     func paletteRun(_ action: KeyMap.Action)
     func paletteDidClose()
+    var paletteThemes: [HauntConfig.ThemeChoice] { get }
+    /// The theme on screen when no preview runs.
+    var paletteTheme: String { get }
+    /// Shows `id` live; nil goes back to config.toml's theme.
+    func palettePreviewTheme(_ id: String?)
+    func paletteChooseTheme(_ id: String)
 }
 
 /// ⌘K: fuzzy jump to tabs, app commands, and plugin commands and modes (`log` is the decision-log plugin's).
+/// Its own `theme` mode previews the selected theme; ↵ keeps it, anything else puts the old one back.
 final class PaletteController: NSObject, NSWindowDelegate {
-    private static let maxRows = 8
+    /// Entries shown before the list scrolls; a fixture trims it to its mockup's.
+    var maxRows = 8
+    static let themeMode = "theme"
 
     private weak var host: PaletteHost?
     private let panel: PalettePanel
@@ -55,6 +68,9 @@ final class PaletteController: NSObject, NSWindowDelegate {
     /// The start of the day the rows were last built, for their times.
     private var today = Date()
     private var rowsNameTabs = false
+    /// In the `theme` mode: the theme to go back to, and the one on screen now.
+    private var themeBefore: String?
+    private var previewed: String?
     /// Fixture captures keep it open when focus moves to another app mid-capture.
     var sticky = false
 
@@ -68,8 +84,18 @@ final class PaletteController: NSObject, NSWindowDelegate {
         // It closes when it stops being key; hiding on deactivate as well would leave it open but invisible.
         panel.hidesOnDeactivate = false
         panel.colorSpace = .sRGB
-        panel.appearance = NSAppearance(named: .darkAqua)
-        panel.contentView = view
+        panel.appearance = Tok.App.appearance
+        let content = NSView()
+        material.material = .hudWindow
+        material.blendingMode = .behindWindow
+        material.state = .active
+        material.wantsLayer = true
+        for v in [material, view] as [NSView] {
+            v.autoresizingMask = [.width, .height]
+            content.addSubview(v)
+        }
+        panel.contentView = content
+        setMaterial()
         panel.delegate = self
         panel.initialFirstResponder = view
         view.controller = self
@@ -78,6 +104,23 @@ final class PaletteController: NSObject, NSWindowDelegate {
     }
 
     var isOpen: Bool { panel.isVisible }
+
+    func themeDidChange() {
+        panel.appearance = Tok.App.appearance
+        setMaterial()
+        if isOpen { resize() }
+        view.needsDisplay = true
+    }
+
+    /// `[effects] palette.material = "glass"`: the desktop, blurred, inside the palette's rounded shape.
+    private let material = NSVisualEffectView()
+
+    private func setMaterial() {
+        material.isHidden = Theme.current.effects.paletteMaterial != "glass"
+        material.material = Effects.blurs[Theme.current.effects.paletteBlur] ?? .hudWindow
+        material.layer?.cornerRadius = Tok.Size.paletteRadius
+        material.layer?.masksToBounds = true
+    }
 
     /// Opens over `parent`, `top` points below its content top; `text` is typed in as if by the user.
     func open(over parent: NSWindow, top: CGFloat, text: String = "") {
@@ -92,21 +135,41 @@ final class PaletteController: NSObject, NSWindowDelegate {
         panel.makeFirstResponder(view)
     }
 
-    /// Centred on `parent`, `top` points below its top edge; the height follows the rows shown.
-    /// It keeps the same margin below as above, scrolling rows that don't fit.
+    /// `[layout]`'s palette keys; read at the next open or resize.
+    var layout = PaletteLayout() {
+        didSet { view.singleLine = layout.singleLine && !view.plainMode }
+    }
+    /// The cards' bottom-right palette sits this far in from the window's right and bottom edges.
+    static let cornerInset: CGFloat = 22
+    private var top: CGFloat = 0
+
+    /// Centred on `parent`, `top` points below its top edge, or in its bottom-right corner growing upwards; the
+    /// height follows the rows shown. It keeps a margin below, scrolling rows that don't fit.
     func position(over parent: NSWindow, top: CGFloat) {
-        view.heightLimit = parent.frame.height - top - Tok.Size.paletteTop
-        let size = view.fittingSize
-        let x = (parent.frame.midX - size.width / 2).rounded()
-        panel.setFrame(NSRect(x: x, y: parent.frame.maxY - top - size.height, width: size.width, height: size.height), display: true)
+        self.top = top
+        view.panelW = layout.width ?? Tok.Size.paletteW
+        let f = parent.frame
+        switch layout.position {
+        case .centerTop:
+            view.heightLimit = f.height - top - Tok.Size.paletteTop
+            let size = view.fittingSize
+            panel.setFrame(NSRect(x: (f.midX - size.width / 2).rounded(), y: f.maxY - top - size.height,
+                                  width: size.width, height: size.height), display: true)
+        case .bottomRight:
+            view.heightLimit = f.height - top - Self.cornerInset
+            let size = view.fittingSize
+            panel.setFrame(NSRect(x: f.maxX - Self.cornerInset - size.width, y: f.minY + Self.cornerInset,
+                                  width: size.width, height: size.height), display: true)
+        }
     }
 
     private func resize() {
         guard isOpen, let parent = panel.parent else { return }
-        position(over: parent, top: parent.frame.maxY - panel.frame.maxY)
+        position(over: parent, top: top)
     }
 
     func close() {
+        leaveThemeMode()
         guard isOpen else { return }
         panel.parent?.removeChildWindow(panel)
         panel.orderOut(nil)
@@ -130,9 +193,28 @@ final class PaletteController: NSObject, NSWindowDelegate {
         query += s
         if mode == nil, query.hasSuffix(" "), let word = query.split(separator: " ").first.map(String.init),
            query == word + " ", modes().contains(word) {
-            mode = word
-            query = ""
+            enter(mode: word)
         }
+    }
+
+    private func enter(mode word: String) {
+        mode = word
+        query = ""
+        if word == Self.themeMode { themeBefore = host?.paletteTheme }
+    }
+
+    /// Puts the theme from before the mode back unless one was kept.
+    private func leaveThemeMode() {
+        guard themeBefore != nil else { return }
+        themeBefore = nil
+        if previewed != nil { host?.palettePreviewTheme(nil) }
+        previewed = nil
+    }
+
+    private func previewSelection() {
+        guard let before = themeBefore, case let .theme(id)? = view.selectedRow?.action, id != (previewed ?? before) else { return }
+        previewed = id
+        host?.palettePreviewTheme(id)
     }
 
     func edit(_ key: PaletteView.Key) {
@@ -145,6 +227,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
                 query.removeLast()
             } else if let m = mode {
                 // Back into the word, so one more backspace edits it.
+                leaveThemeMode()
                 mode = nil
                 query = m
                 tabFilter = nil
@@ -153,9 +236,11 @@ final class PaletteController: NSObject, NSWindowDelegate {
         case .up:
             view.moveSelection(-1)
             resize()
+            previewSelection()
         case .down:
             view.moveSelection(1)
             resize()
+            previewSelection()
         case .tab:
             guard rowsNameTabs else { return }
             tabFilter = tabFilter == nil ? host?.selectedSurfaceId : nil
@@ -173,8 +258,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
             close()
             host.paletteSelectTab(id)
         case let .enterMode(word):
-            mode = word
-            query = ""
+            enter(mode: word)
             reload()
         case let .plugin(pluginId, itemId):
             close()
@@ -182,11 +266,16 @@ final class PaletteController: NSObject, NSWindowDelegate {
         case let .command(a):
             close()
             host.paletteRun(a)
+        case let .theme(id):
+            themeBefore = nil
+            previewed = nil
+            close()
+            host.paletteChooseTheme(id)
         }
     }
 
     private func modes() -> [String] {
-        host?.palettePlugins?.paletteItems(mode: nil, query: "").filter(\.isMode).map(\.id) ?? []
+        [Self.themeMode] + (host?.palettePlugins?.paletteItems(mode: nil, query: "").filter(\.isMode).map(\.id) ?? [])
     }
 
     // MARK: Rows
@@ -200,6 +289,10 @@ final class PaletteController: NSObject, NSWindowDelegate {
             rows = defaultRows()
             rowsNameTabs = false
             foot = ["↵ open"]
+        case Self.themeMode?:
+            rows = themeRows()
+            rowsNameTabs = false
+            foot = ["↵ use theme", "esc keep the old one"]
         case let m?:
             let items = host?.palettePlugins?.paletteItems(mode: m, query: query) ?? []
             host?.drainPluginRequests()
@@ -209,10 +302,26 @@ final class PaletteController: NSObject, NSWindowDelegate {
                 ? ["↵ jump to tab", tabFilter == nil ? "⇥ filter by tab" : "⇥ all tabs"] : ["↵ run"]
         }
         if rows.isEmpty { foot = [] }
+        view.plainMode = mode != nil && Theme.current.effects.paletteModes == "plain"
+        view.singleLine = layout.singleLine && !view.plainMode
         view.update(chip: mode, query: query, placeholder: mode == nil ? "Jump to a tab or command, or type log" : "",
                     rows: rows.isEmpty ? [PaletteRow(title: "No matches", sub: "", dim: true)] : rows,
-                    foot: foot, maxRows: Self.maxRows)
+                    foot: foot, maxRows: maxRows)
+        if let before = themeBefore, previewed == nil { view.select { $0.action == .theme(before) } }
         resize()
+        previewSelection()
+    }
+
+    private func themeRows() -> [PaletteRow] {
+        guard let host else { return [] }
+        let saved = themeBefore
+        var scored: [(Int, Int, PaletteRow)] = []
+        for t in host.paletteThemes {
+            guard let s = Fuzzy.score(query, t.name) ?? Fuzzy.score(query, t.id).map({ $0 - 50 }) else { continue }
+            let row = PaletteRow(title: t.name, sub: t.id == saved ? "\(t.id) · in use" : t.id, action: .theme(t.id))
+            scored.append((query.isEmpty ? 0 : s, scored.count, row))
+        }
+        return scored.sorted { $0.0 != $1.0 ? $0.0 > $1.0 : $0.1 < $1.1 }.map(\.2)
     }
 
     private func defaultRows() -> [PaletteRow] {
@@ -220,7 +329,9 @@ final class PaletteController: NSObject, NSWindowDelegate {
         var scored: [(Int, Int, PaletteRow)] = []
         for (i, r) in host.paletteTabs.enumerated() {
             guard let s = Fuzzy.score(query, r.name) ?? Fuzzy.score(query, r.meta).map({ $0 - 50 }) else { continue }
-            let row = PaletteRow(left: i < 9 ? "⌘\(i + 1)" : "", mark: nil, title: r.name, sub: r.meta,
+            // A shell has no task, so it keeps its meta.
+            let sub = Theme.current.effects.paletteTabSub == "task" && !r.task.isEmpty ? r.task : r.meta
+            let row = PaletteRow(left: i < 9 ? "⌘\(i + 1)" : "", mark: nil, icon: r.kind, title: r.name, sub: sub,
                                  right: .jump, action: .tab(r.surfaceId))
             scored.append((s, scored.count, row))
         }
@@ -242,6 +353,9 @@ final class PaletteController: NSObject, NSWindowDelegate {
             let row = PaletteRow(title: title, sub: sub, right: host.paletteKeys[a].map { .key($0.display) } ?? .none,
                                  action: .command(a))
             scored.append((s, scored.count, row))
+        }
+        if let s = Fuzzy.score(query, "Pick theme…") {
+            scored.append((s, scored.count, PaletteRow(title: "Pick theme…", sub: host.paletteTheme, action: .enterMode(Self.themeMode))))
         }
         for item in host.palettePlugins?.paletteItems(mode: nil, query: query) ?? [] {
             scored.append((Fuzzy.score(query, item.title) ?? 0, scored.count, pluginRow(item)))
@@ -331,6 +445,13 @@ final class PaletteView: NSView {
     /// The most the panel may be tall; rows past it scroll, but at least `minRows` stay.
     var heightLimit = CGFloat.infinity { didSet { if heightLimit != oldValue { clampScroll(); needsDisplay = true } } }
     private static let minRows = 3
+    var panelW = Tok.Size.paletteW { didSet { needsDisplay = true } }
+    /// A row's sub follows its title on the same line.
+    var singleLine = false { didSet { clampScroll(); needsDisplay = true } }
+    /// `[effects] palette.modes = "plain"` in a plugin mode: the black-and-white rows inside the theme's panel.
+    var plainMode = false
+    /// The entry under the pointer, for `[effects] row.hover`.
+    private var hovered: Int? { didSet { if hovered != oldValue { needsDisplay = true } } }
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -344,9 +465,16 @@ final class PaletteView: NSView {
         self.query = query
         self.placeholder = placeholder
         self.rows = rows
-        self.foot = foot
+        self.foot = Theme.current.effects.paletteFoot || plainMode ? foot : []
         self.maxRows = maxRows
         selected = keep.flatMap { k in rows.firstIndex { $0 == k } } ?? rows.firstIndex { $0.action != .none } ?? 0
+        clampScroll()
+        needsDisplay = true
+    }
+
+    func select(where match: (PaletteRow) -> Bool) {
+        guard let i = rows.firstIndex(where: match) else { return }
+        selected = i
         clampScroll()
         needsDisplay = true
     }
@@ -371,27 +499,36 @@ final class PaletteView: NSView {
 
     /// `maxRows`, cut to what fits in `heightLimit` with every entry at its full (ruled) height.
     private var rowsShown: Int {
-        let fixed = 2 * border + inputH + footH + Tok.Size.paletteListPad[0] * 2
-        let entry = Tok.Size.paletteEntryPad[0] * 2 + textLines + border
+        let fixed = 2 * edge + inputH + footH + Tok.Size.paletteListPad[0] * 2
+        let entry = Tok.Size.paletteEntryPad[0] * 2 + textLines + (pill ? 0 : border)
         let fit = heightLimit.isFinite ? Int(((heightLimit - fixed) / entry).rounded(.down)) : maxRows
         return max(Self.minRows, min(maxRows, fit))
     }
 
     // MARK: Geometry (pt, inside the border); rules are as thick as the border
 
-    private let lh = Tok.Font.baseLine
+    private var lh: CGFloat { Tok.Font.baseLine }
     private var border: CGFloat { Tok.App.hairline }
-    private var width: CGFloat { Tok.Size.paletteW - 2 * border }
+    /// A glass palette's ring is drawn over its content, which starts at its edge; otherwise inside the border.
+    private var glass: Bool { Theme.current.effects.paletteMaterial == "glass" }
+    private var edge: CGFloat { glass ? 0 : border }
+    private var pill: Bool { !plainMode && Theme.current.effects.paletteSelection == "pill" }
+    private var icons: Bool { !plainMode && Theme.current.effects.paletteIcons }
+    private var width: CGFloat { panelW - 2 * edge }
     private var padX: CGFloat { Tok.Size.paletteInputPad[1] }
     private var inputH: CGFloat { Tok.Size.paletteInputPad[0] * 2 + Tok.Size.paletteInputFont * lh + border }
-    private var textLines: CGFloat { Tok.Size.paletteFont * lh + Tok.Size.paletteSmallFont * lh }
+    /// An entry's content height: its text, or its icon when that is taller, as in the mockup's grid.
+    private var textLines: CGFloat {
+        let text = singleLine ? max(Tok.Size.paletteFont, Tok.Size.paletteSmallFont) * lh : Tok.Size.paletteFont * lh + Tok.Size.paletteSmallFont * lh
+        return icons ? max(text, Tok.Size.iconSize) : text
+    }
     private var footH: CGFloat {
         foot.isEmpty ? 0 : border + Tok.Size.paletteFootPad[0] * 2 + Tok.Size.paletteSmallFont * lh
     }
     private var visible: Range<Int> { scroll..<min(rows.count, scroll + rowsShown) }
 
     /// The mockup's last-child rule: the selected entry (alone in its `.sel` wrapper) and the last one have no rule.
-    private func hasRule(_ i: Int) -> Bool { i != selected && i != visible.upperBound - 1 }
+    private func hasRule(_ i: Int) -> Bool { !pill && i != selected && i != visible.upperBound - 1 }
 
     private func entryH(_ i: Int) -> CGFloat {
         Tok.Size.paletteEntryPad[0] * 2 + textLines + (hasRule(i) ? border : 0)
@@ -403,26 +540,36 @@ final class PaletteView: NSView {
 
     /// Content heights are whole points; the mockup's foot ends at a fractional .25 that its crop drops.
     override var fittingSize: NSSize {
-        NSSize(width: Tok.Size.paletteW, height: (inputH + listH + footH).rounded(.down) + 2 * border)
+        NSSize(width: panelW, height: (inputH + listH + footH).rounded(.down) + 2 * edge)
     }
 
     // MARK: Drawing
 
-    private func mono(_ s: CGFloat) -> NSFont { Draw.mono(s) }
+    /// `[effects] palette.font`: the mono face (the mockup's) or the UI one.
+    private func mono(_ s: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
+        Theme.current.effects.paletteFont == "ui" && !plainMode ? Draw.ui(s, weight) : Draw.mono(s)
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let r = Tok.Size.paletteRadius
-        let outer = NSBezierPath(roundedRect: bounds, xRadius: r, yRadius: r)
-        Tok.Color.paletteBorder.setFill()
-        outer.fill()
-        let inner = NSBezierPath(roundedRect: bounds.insetBy(dx: border, dy: border), xRadius: r - border, yRadius: r - border)
-        Tok.Color.paletteBg.setFill()
-        inner.fill()
-        inner.addClip()
+        if glass {
+            let shape = NSBezierPath(roundedRect: bounds, xRadius: r, yRadius: r)
+            Tok.Color.paletteBg.setFill()
+            shape.fill()
+            shape.addClip()
+        } else {
+            let outer = NSBezierPath(roundedRect: bounds, xRadius: r, yRadius: r)
+            Tok.Color.paletteBorder.setFill()
+            outer.fill()
+            let inner = NSBezierPath(roundedRect: bounds.insetBy(dx: border, dy: border), xRadius: r - border, yRadius: r - border)
+            Tok.Color.paletteBg.setFill()
+            inner.fill()
+            inner.addClip()
+        }
 
         ctx.saveGState()
-        ctx.translateBy(x: border, y: border)
+        ctx.translateBy(x: edge, y: edge)
         drawInput(ctx)
         var y = inputH + Tok.Size.paletteListPad[0]
         for i in visible {
@@ -431,6 +578,14 @@ final class PaletteView: NSView {
         }
         if !foot.isEmpty { drawFoot(top: inputH + listH, ctx: ctx) }
         ctx.restoreGState()
+        if glass {
+            let app = Theme.current.app
+            Draw.fill(NSRect(x: 0, y: 0, width: bounds.width, height: border), app.paletteHighlight)
+            let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: border / 2, dy: border / 2), xRadius: r - border / 2, yRadius: r - border / 2)
+            ring.lineWidth = border
+            app.paletteRing.setStroke()
+            ring.stroke()
+        }
     }
 
     private func drawInput(_ ctx: CGContext) {
@@ -438,6 +593,12 @@ final class PaletteView: NSView {
         let lineH = Tok.Size.paletteInputFont * lh
         let mid = padY + lineH / 2
         var x = padX
+        if Theme.current.effects.paletteInputIcon {
+            let f = Draw.ui(Tok.Size.paletteInputFont - 1)
+            let glyph = Draw.line("⌕", f, Tok.Color.paletteMute)
+            Draw.text(glyph, font: f, x: x, top: padY, lineHeight: lineH, in: ctx)
+            x += Draw.width(glyph) + Tok.Size.paletteInputGap
+        }
         if let chip {
             let f = mono(Tok.Size.paletteChipFont)
             let line = Draw.line(chip, f, Tok.Color.paletteChipFg)
@@ -449,11 +610,11 @@ final class PaletteView: NSView {
             Draw.text(line, font: f, x: box.minX + Tok.Size.paletteChipPad[1], top: box.minY, lineHeight: h, in: ctx)
             x = box.maxX + gap
         }
-        let f = mono(Tok.Size.paletteInputFont)
+        let f = mono(Tok.Size.paletteInputFont, Theme.current.effects.paletteInputWeight == "light" ? .light : .regular)
         if !query.isEmpty {
             let line = Draw.line(query, f, Tok.Color.paletteInk)
             Draw.text(line, font: f, x: x, top: padY, lineHeight: lineH, in: ctx)
-            x += Draw.width(line) + gap
+            x += Draw.width(line) + Tok.App.paletteCaretGap
         }
         let ch = Tok.Size.paletteCursorH
         Draw.fill(NSRect(x: x, y: mid - ch / 2, width: Tok.App.caretW, height: ch), Tok.Color.paletteInk)
@@ -468,9 +629,16 @@ final class PaletteView: NSView {
     /// The mockup's `.kbd` (and `.jmp` with its own font and line height), right-aligned at `right`.
     @discardableResult
     private func drawKey(_ label: String, right: CGFloat, mid: CGFloat? = nil, top: CGFloat? = nil, font size: CGFloat,
-                         lineHeight: CGFloat? = nil, ctx: CGContext) -> NSRect {
+                         lineHeight: CGFloat? = nil, color: NSColor? = nil, ctx: CGContext) -> NSRect {
         let f = mono(size)
-        let line = Draw.line(label, f, Tok.Color.paletteMute)
+        if Theme.current.effects.paletteKeys == "plain" && !plainMode {
+            let line = Draw.line(label, f, color ?? Tok.Color.paletteMute)
+            let lineH = lineHeight ?? size * lh, w = Draw.width(line)
+            let box = NSRect(x: right - w, y: top ?? (mid! - lineH / 2), width: w, height: lineH)
+            Draw.text(line, font: f, x: box.minX, top: box.minY, lineHeight: lineH, in: ctx)
+            return box
+        }
+        let line = Draw.line(label, f, color ?? Tok.Color.paletteMute)
         let pad = Tok.Size.paletteKbdPad[1]
         let lineH = lineHeight ?? size * lh
         let w = Draw.width(line) + pad * 2 + border * 2, h = lineH + border * 2
@@ -486,55 +654,110 @@ final class PaletteView: NSView {
 
     private func drawEntry(_ row: PaletteRow, index: Int, top: CGFloat, ctx: CGContext) {
         let h = entryH(index)
-        if index == selected && row.action != .none {
+        let isSel = index == selected && row.action != .none
+        let app = Theme.current.app
+        if !isSel && index == hovered && Theme.current.effects.rowHover && row.action != .none {
+            let inset = pill ? app.palettePillInset : 0, r = pill ? app.palettePillRadius : 0
+            app.rowHover.setFill()
+            NSBezierPath(roundedRect: NSRect(x: inset, y: top, width: width - 2 * inset, height: h), xRadius: r, yRadius: r).fill()
+        }
+        if isSel && pill {
+            let box = NSRect(x: app.palettePillInset, y: top, width: width - 2 * app.palettePillInset, height: h)
+            let shape = NSBezierPath(roundedRect: box, xRadius: app.palettePillRadius, yRadius: app.palettePillRadius)
+            Tok.Color.paletteSel.setFill()
+            shape.fill()
+            NSGraphicsContext.saveGraphicsState()
+            shape.addClip()
+            Draw.fill(NSRect(x: box.minX, y: top, width: box.width, height: border), app.palettePillHighlight)
+            NSGraphicsContext.restoreGraphicsState()
+        } else if isSel && plainMode {
+            Draw.fill(NSRect(x: 0, y: top, width: width, height: h), Tok.Color.paletteInk)
+        } else if isSel {
             Draw.fill(NSRect(x: 0, y: top, width: width, height: h), Tok.Color.paletteSel)
             Draw.fill(NSRect(x: 0, y: top, width: Tok.Size.paletteSelBar, height: h), Tok.Color.paletteInk)
         }
+        // A plain mode's selection is inverted: its row is ink, its text whichever of black or white reads on it.
+        let inverted = isSel && plainMode ? Tok.Color.paletteInk.readable : nil
+        let mute = inverted ?? (isSel && pill ? app.palettePillMute : Tok.Color.paletteMute)
+        let ink = inverted ?? (isSel && pill ? app.palettePillInk : Tok.Color.paletteInk)
         let gap = Tok.Size.paletteEntryGap
         let y = top + Tok.Size.paletteEntryPad[0]
         let small = mono(Tok.Size.paletteSmallFont), smallH = Tok.Size.paletteSmallFont * lh
         let body = mono(Tok.Size.paletteFont), bodyH = Tok.Size.paletteFont * lh
         let timeX = padX
         let markX = timeX + Tok.Size.paletteEntryTimeW + gap
-        let textX = markX + Tok.Size.paletteEntryMarkW + gap
+        let textX = icons ? padX + Tok.Size.iconSize + Tok.Size.rowGap[1] : markX + Tok.Size.paletteEntryMarkW + gap
         let right = width - padX
 
-        if !row.left.isEmpty {
-            Draw.text(Draw.line(row.left, small, Tok.Color.paletteMute), font: small, x: timeX, top: y, lineHeight: smallH, in: ctx)
+        if icons {
+            let s = Tok.Size.iconSize
+            drawIcon(row.icon ?? .shell, in: NSRect(x: padX, y: y + (textLines - s) / 2, width: s, height: s), ctx: ctx)
+        } else if !row.left.isEmpty {
+            Draw.text(Draw.line(row.left, small, mute), font: small, x: timeX, top: y, lineHeight: smallH, in: ctx)
         }
-        if let mark = row.mark {
+        if let mark = row.mark, !icons {
             let s = Tok.Size.paletteMark
             let box = NSRect(x: markX, y: y + Tok.Size.paletteMarkMt, width: s, height: s)
             let path = mark == .round ? NSBezierPath(ovalIn: box.insetBy(dx: border / 2, dy: border / 2))
                 : NSBezierPath(rect: box.insetBy(dx: border / 2, dy: border / 2))
             if mark == .filled {
-                Tok.Color.paletteInk.setFill()
+                ink.setFill()
                 NSBezierPath(rect: box).fill()
             } else {
                 path.lineWidth = border
-                Tok.Color.paletteInk.setStroke()
+                ink.setStroke()
                 path.stroke()
             }
         }
         var textRight = right
-        switch row.right {
+        let keyMid: CGFloat? = singleLine ? y + textLines / 2 : nil
+        switch icons && !row.left.isEmpty ? .key(row.left) : row.right {
         case .none: break
+        case .jump where icons: break
         case .jump:
-            let box = drawKey("↗", right: right, top: y, font: Tok.Size.paletteJmpFont, lineHeight: Tok.Size.paletteJmpLine, ctx: ctx)
+            let box = drawKey("↗", right: right, top: y, font: Tok.Size.paletteJmpFont, lineHeight: Tok.Size.paletteJmpLine, color: inverted, ctx: ctx)
             textRight = box.minX - gap
         case let .key(k):
-            let box = drawKey(k, right: right, top: y, font: Tok.Size.paletteSmallFont, ctx: ctx)
+            let box = drawKey(k, right: right, mid: keyMid, top: keyMid == nil ? y : nil, font: Tok.Size.paletteSmallFont, color: mute, ctx: ctx)
             textRight = box.minX - gap
         }
-        let titleColor = row.dim ? Tok.Color.paletteMute : Tok.Color.paletteInk
+        let titleColor = row.dim ? mute : ink
         let title = Draw.truncated(Draw.line(row.title, body, titleColor), textRight - textX, body, titleColor)
-        Draw.text(title, font: body, x: textX, top: y, lineHeight: bodyH, in: ctx)
-        if !row.sub.isEmpty {
-            let sub = Draw.truncated(Draw.line(row.sub, small, Tok.Color.paletteMute), textRight - textX, small, Tok.Color.paletteMute)
-            Draw.text(sub, font: small, x: textX, top: y + bodyH, lineHeight: smallH, in: ctx)
+        if singleLine {
+            Draw.text(title, font: body, x: textX, top: y + (textLines - bodyH) / 2, lineHeight: bodyH, in: ctx)
+            let subX = textX + Draw.width(title) + gap
+            if !row.sub.isEmpty, textRight - subX > 0 {
+                let sub = Draw.truncated(Draw.line(row.sub, small, mute), textRight - subX, small, mute)
+                Draw.text(sub, font: small, x: subX, top: y + (textLines - smallH) / 2, lineHeight: smallH, in: ctx)
+            }
+        } else {
+            Draw.text(title, font: body, x: textX, top: y, lineHeight: bodyH, in: ctx)
+            if !row.sub.isEmpty {
+                let sub = Draw.truncated(Draw.line(row.sub, small, mute), textRight - textX, small, mute)
+                Draw.text(sub, font: small, x: textX, top: y + bodyH, lineHeight: smallH, in: ctx)
+            }
         }
         if hasRule(index) {
             Draw.fill(NSRect(x: padX, y: top + h - border, width: width - 2 * padX, height: border), Tok.Color.paletteEntryRule)
+        }
+    }
+
+    /// `[effects] palette.icons`: the sidebar's icons, a tab's kind or the shell glyph.
+    private func drawIcon(_ kind: RowKind, in r: NSRect, ctx: CGContext) {
+        switch kind {
+        case .claude:
+            let s = Tok.Size.claudeIcon
+            Draw.claudeMark(in: NSRect(x: r.midX - s / 2, y: r.midY - s / 2, width: s, height: s))
+        case .codex:
+            let s = Draw.openAIMarkSize
+            Draw.codexMark(in: backingAlignedRect(NSRect(x: r.midX - s / 2, y: r.midY - s / 2, width: s, height: s), options: .alignAllEdgesNearest),
+                           color: Tok.Color.paletteInk, ctx: ctx)
+        case .shell:
+            Tok.Color.iconBg.setFill()
+            NSBezierPath(roundedRect: r, xRadius: Tok.Size.iconRadius, yRadius: Tok.Size.iconRadius).fill()
+            let f = Draw.mono(Tok.Size.iconGlyph), glyphH = Tok.Size.iconGlyph * lh
+            let glyph = Draw.line(">_", f, Tok.Color.iconFg)
+            Draw.text(glyph, font: f, x: r.midX - Draw.width(glyph) / 2, top: r.midY - glyphH / 2, lineHeight: glyphH, in: ctx)
         }
     }
 
@@ -590,25 +813,38 @@ final class PaletteView: NSView {
 
     private func send(_ k: Key) { controller?.edit(k) }
 
-    override func mouseDown(with event: NSEvent) {
-        let p = convert(event.locationInWindow, from: nil)
-        var y = border + inputH + Tok.Size.paletteListPad[0]
+    /// The visible entry at `p`, in view coordinates.
+    private func entry(at p: NSPoint) -> Int? {
+        var y = edge + inputH + Tok.Size.paletteListPad[0]
         for i in visible {
             let h = entryH(i)
-            if p.y >= y && p.y < y + h {
-                guard rows[i].action != .none else { return }
-                selected = i
-                needsDisplay = true
-                controller?.activate(rows[i])
-                return
-            }
+            if p.y >= y && p.y < y + h { return i }
             y += h
         }
+        return nil
     }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let i = entry(at: convert(event.locationInWindow, from: nil)), rows[i].action != .none else { return }
+        selected = i
+        needsDisplay = true
+        controller?.activate(rows[i])
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self))
+    }
+
+    override func mouseMoved(with event: NSEvent) { hovered = entry(at: convert(event.locationInWindow, from: nil)) }
+    override func mouseExited(with event: NSEvent) { hovered = nil }
 
     override func scrollWheel(with event: NSEvent) {
         let d = event.scrollingDeltaY > 0 ? -1 : event.scrollingDeltaY < 0 ? 1 : 0
         scroll = max(0, min(scroll + d, max(0, rows.count - rowsShown)))
+        hovered = entry(at: convert(event.locationInWindow, from: nil))
         needsDisplay = true
     }
 }

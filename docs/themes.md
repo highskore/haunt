@@ -1,19 +1,23 @@
-# Themes (design note)
+# Themes
 
-Status: proposal. Nothing here is built yet.
-
-Haunt is black and white. A theme is an optional set of token overrides, picked in `config.toml` and reloaded live. With no `theme` set, Haunt looks exactly as it does today.
+Haunt is black and white. A theme is an optional set of token overrides, picked in `config.toml` and reloaded live. With no `theme` set, Haunt looks exactly as the mockups do. Haunt itself ships only black and white; every other theme is a data-only theme plugin, `haunt-plugins/haunt-theme-<name>` (see `docs/core-api.md`).
 
 ## Picking a theme
 
 ```toml
-theme = "aero"        # top level of ~/.haunt/config.toml; leave it out for the default
+theme = "glass"       # top level of ~/.haunt/config.toml; leave it out for the default
 ```
 
 - **Default:** with no `theme` key, or `theme = "bw"`, you get the built-in tokens: `design/tokens.json` plus `Tok.App`.
-- **Where Haunt looks:** first `~/.haunt/themes/<name>.toml`, then the themes bundled in `haunt.app/Contents/Resources/themes/`. A theme in your folder takes precedence over a bundled one with the same name.
+- **Pickers:** the Themes window and ⌘K ▸ Pick theme… preview a theme live and write `theme = "<id>"` into `config.toml` when you choose one. A symlinked `config.toml` is written through, and stays a symlink.
+- **Where Haunt looks**, first match wins:
+  1. `~/.haunt/themes/<name>.toml`, your own;
+  2. installed theme plugins, by their `[contributes.theme] id`;
+  3. `haunt.app/Contents/Resources/themes/<name>.toml`, empty today.
+
+  A file of yours hides a plugin theme with the same name, and that plugin's fonts are not loaded with it.
 - **Allowed names:** `[a-z0-9-]+`. A name is never treated as a path, so `theme = "../x"` is refused and logged.
-- **When it fails:** an unknown, unreadable or invalid theme is logged and Haunt falls back to the default.
+- **When it fails:** an unknown, unreadable or invalid theme, or a file over 256 KB, is logged and Haunt falls back to the default.
 
 ## A theme file
 
@@ -27,60 +31,82 @@ appearance = "light"      # macOS look for menus, sheets and alerts: "dark" (def
 [color]
 window.bg = "#e9f4fb"
 sidebar.bg = "#d6ecf7"
-row.selected = "#bfe0f2"
-hairline = "#a9cfe3"
 text.primary = "#10324a"
-text.sub = "#3d6a86"
-palette.bg = "#f4fbff"
 
 [size]
 sidebar.w = 248
-palette.radius = 12
 row.pad = [6, 12]
 
 [font]
 ui = "Avenir Next"
-mono.family = "SF Mono"
 
 [app]
 hairline = 1
+
+[layout]
+palette_position = "bottom-right"
+
+[effects]
+window.radius = 12
+
+[ghostty]
+background-opacity = 0.9
 ```
 
 - **Value types:**
   - A colour is `#rrggbb` or `#rrggbbaa`.
-  - A size is a number. An array needs as many numbers as the default has, as in `row.pad` above.
-  - A font is a family name. If it isn't installed, the token keeps its default. `font.ui` is a CSS stack in `tokens.json` today, and `Draw.ui` draws with the system font. A theme's `ui` would make `Draw.ui` use that family.
-- **What gets skipped:** each of these is logged once per save and skipped, and the rest of the theme still applies:
-  - an unknown key;
-  - a value of the wrong type;
-  - a size outside 0–400.
+  - A size is a number from 0 to 400. An array needs as many numbers as the default has, as in `row.pad` above.
+  - A font is a family name, and must be installed or come with the theme's plugin.
+- **What gets skipped:** each of these is logged once per save and skipped, and the rest of the theme still applies: an unknown key; a value of the wrong type; a size out of range; a line break in a value.
 - **`extends`:** applies the parent theme first, then this file. Chains stop at 4 levels, and a cycle is refused.
-- **Terminal colours:** follow the theme. Ghostty's `background` and `foreground` already come from `color.window.bg` and `color.text.terminal`. A theme can add a `[ghostty]` table for `palette = …` and `cursor-color`. It passes through the same refusals as `[ghostty]` in `config.toml`, and anything set under `[ghostty]` in `config.toml` wins over the theme.
+- **`[layout]`:** a theme may set any `[layout]` key from `config.toml` (`palette_position`, `palette_width`, `palette_rows`, `title_format`, `titlebar_buttons`…). Your own `[layout]` keys win.
 - **Claude orange:** `color.claude` stays `#D97757` in every theme.
 
-## How it swaps at runtime
+## What a theme can't do
 
-1. **Generated code.** `gen_tokens.py` emits a `Theme` struct with one field per token, and `Theme.bw` built from `tokens.json`. `Tok.Color.x`, `Tok.Size.x` and `Tok.Font.x` become `static var`s that read `Theme.current`. The roughly 250 call sites don't change. `Tok.App` moves into the same struct.
-2. **Loading.** `Config.reload` reads `theme`, resolves the chain and builds a `Theme` from `Theme.bw` plus the overrides. It returns `themeChanged` next to `ghostty`, `keys` and `layout`.
-3. **Live reload.** The watcher also watches the active theme file and the files it extends, with the same `FileStamp` check and re-arming `config.toml` uses. Saving the theme or changing `theme =` takes effect at once.
-4. **Applying a theme.** In AppDelegate's `config.watch` handler, on `themeChanged`:
-   - set `Theme.current`;
-   - flush `Draw`'s font and ellipsis caches and the sidebar's `RowLines` cache;
-   - reset the colours held outside `draw` (the pane and scrim layer colours, `window.backgroundColor`, `NSAppearance`);
-   - mark every view as needing layout and display;
-   - rewrite the Ghostty config (which reloads it, as a `[ghostty]` edit does today).
+A theme is data. It can change how Haunt looks, never what it runs, types, reads or binds, and it can't hide what Haunt needs you to see.
 
-   That is one relayout per save.
-5. **Cost.** With no theme set, `Theme.current` is `Theme.bw`, and reading a token is one load from a struct. Nothing watches a theme file.
+- **`[ghostty]`:** only appearance keys, from an exact list checked against Ghostty v1.4.0 (`themeKeys` in `Theme.swift`): `palette`, `background`, `foreground`, `bold-color`, `bold-is-bright`, `minimum-contrast`, `background-opacity`, `background-blur` (and `-radius`), `unfocused-split-opacity`/`-fill`, `window-padding-x`/`-y`/`-balance`/`-color`, `font-size`, `font-feature`, `font-thicken` (and `-strength`), `font-synthetic-style`, `font-family`/`-style`/`-variation` with their `-bold`, `-italic` and `-bold-italic` forms, the thirteen `adjust-*` keys, `cursor-color`/`-text`/`-opacity`/`-style`/`-style-blink`/`-invert-fg-bg`, and `selection-foreground`/`-background`/`-invert-fg-bg`. A key must also match `^[a-z0-9-]+$`. Anything else (`command`, `env`, `keybind`, `custom-shader`, `theme`, paths…) is dropped and logged. What's left still passes the same refusals as `[ghostty]` in `config.toml`, and your own `[ghostty]` keys win.
+- **Readable text:** `Theme.readable` lists every text and indicator colour with the backgrounds it's drawn over, and every other colour token is in `Theme.decorative` (a test fails on one in neither). Text and indicators must be opaque, except `text.meta`, `text.sub`, `text.label`, `app.title.meta`, `app.sidebar.foot.fg`, `icon.fg` and `palette.mute`, which may be see-through down to 40%. Content needs 3:1 against each of its backgrounds and guides such as line numbers 1.5:1, judged on the blended colour; a see-through background is laid over black (white for a light theme). A colour under its minimum is drawn in whichever of black or white reads best on all its backgrounds, and logged when the theme set it.
+- **Terminal colours:** the terminal's text needs 3:1 against its background. A `[ghostty]` palette entry, `selection-background`, `selection-foreground` (against the selection) or `cursor-text` under 1.5:1 is dropped and logged, and so is a `bold-color` under 3:1. Black (0) on a dark background and bright white (15) on a light one are exempt: they are meant to sit close to it. Bright black (8) on dark and white (7) on light are secondary text, such as autosuggestions, and need 1.3:1. The generated Ghostty config always has `minimum-contrast` between 1.1 and 21, so no colour can vanish into the background, unless your own `config.toml` sets `minimum-contrast`.
+- **Fonts:** a theme plugin's fonts are used only while its theme is on screen. A plugin bundled in the signed app has its fonts registered for Haunt's process, and they may draw anything, the terminal included. A plugin you installed yourself never has its fonts registered: Haunt reads them from the file and only `font.ui` draws with them, so neither Ghostty nor Core Text's fallback can pick one up. `font.mono.*` and the `[ghostty]` `font-family*` keys can't name such a font, compared case-folded, unquoted and with whitespace collapsed, entry by entry in a CSS stack or list. A font whose family, PostScript or display name matches a font already on the Mac (compared the same way) isn't loaded at all.
 
-Fixture builds always use `bw` (as they ignore the user's `config.toml` today), so `design/check` keeps comparing against the mockups. A bundled theme could add its own reference captures later.
+## Effects
 
-## Not covered by tokens
+Some looks need more than colours and sizes. The `[effects]` table switches on elements Haunt draws itself. It is a fixed schema: each key below takes one value of its type, and anything else (an unknown key, a wrong type, a number out of range, a choice not listed) is logged as a problem and skipped. Their colours and measures come from `[color]`, `[size]` and `[app]` tokens, never from the effect.
 
-The themes the user has asked about (glass, sigilcore, Frutiger Aero, Win95, PS1) need more than colours and sizes. Glass needs a material: an `NSVisualEffectView` behind the sidebar and title bar. Win95 needs bevelled borders and PS1 needs pixel fonts. These could come later as an `[effects]` table of named styles (for example `sidebar.material = "sidebar"` and `border.style = "bevel"`), each drawn by Haunt. Themes stay data only, with no code. Fonts must already be installed; Haunt bundles none for themes.
+| Key | Value | Draws |
+| --- | --- | --- |
+| `window.material` | `"none"`, `"glass"` | the desktop blurred through the window (an `NSVisualEffectView`) |
+| `window.radius` | 0–40 | rounded window corners |
+| `window.ring` | bool | an inner ring and top highlight (`app.window.ring`, `app.window.highlight`) |
+| `titlebar.rule` | bool, default true | the hairline under the title bar |
+| `titlebar.lights` | `"grey"`, `"color"` | the traffic lights at rest |
+| `sidebar.footer` | bool | the live agent count under the sidebar |
+| `label.case`, `label.weight` | `"upper"`, `"sentence"`; `"regular"`, `"medium"`, `"semibold"` | group labels |
+| `row.inset`, `row.radius` | 0–40 | rows as rounded boxes inset from the sidebar's edges |
+| `row.raised` | bool | the selected row lifted: shadow, ring and highlight (`app.row.raised.*`) |
+| `row.hover` | bool | a faint fill (`app.row.hover`) on the sidebar or palette row under the pointer, shaped like the selection |
+| `needs.pill` | bool | a needs-you row's status in a pill (`app.pill.*`) |
+| `bar.radius`, `bar.glow` | 0–10; bool | rounded progress bars, and a glow on the fill (`app.bar.glow`) |
+| `bar.done` | bool | a finished task keeps its full bar (default); off, only work in progress has one |
+| `palette.material` | `"none"`, `"glass"` | the palette's own material, ring and highlight |
+| `palette.blur` | `"hud"`, `"window"`, `"sheet"`, `"menu"`, `"popover"`, `"sidebar"`, `"under-window"`, `"full-screen"` | which macOS blur material a glass palette uses, under its `palette.bg` tint; a glass palette's tint is at least 50% opaque (`#…80`), and a thinner one is raised to it and logged |
+| `palette.tab.sub` | `"meta"`, `"task"` | a tab's entry shows its meta line, or only the agent's task (a shell keeps its meta) |
+| `palette.font` | `"mono"`, `"ui"` | the palette's text |
+| `palette.icons` | bool | the sidebar's icons in place of the shortcut column; shortcuts move right |
+| `palette.selection` | `"bar"`, `"pill"` | the selected row (`app.palette.pill.*`) |
+| `palette.foot`, `palette.scrim` | bool, default true | the hints line, and the dimmed window behind the palette |
+| `palette.keys` | `"box"`, `"plain"` | shortcuts in a box or as text |
+| `palette.modes` | `"styled"`, `"plain"` | a plugin mode's rows (the decision log) styled like the rest, or in the black-and-white layout and mono font with an inverted selection, inside the themed panel |
+| `palette.input.icon`, `palette.input.weight` | bool; `"regular"`, `"light"` | a search glyph before the query, and the query's weight |
 
-## Open questions
+## How it works
 
-- Should `[layout]` keys be allowed in a theme (for example a theme that hides `titlebar_buttons`)? This note says no: a theme only changes looks.
-- Bundled themes: which ones ship first, and do they get fidelity captures?
-- Should plugins be able to read the current theme's colours, so their palette rows and decorations match?
+1. **Tokens.** `gen_tokens.py` emits a `Theme` struct with one field per token from `tokens.json`, plus `AppTokens` (`[app]`) and `Effects`. `Tok.Color.x`, `Tok.Size.x` and `Tok.Font.x` read `Theme.current`.
+2. **Loading.** `HauntConfig.reload` reads `theme`, `LoadedTheme.load` resolves the chain and builds a `Theme` from the defaults plus the overrides, and the theme's `[layout]` and `[ghostty]` go under your own.
+3. **Live reload.** Haunt watches `config.toml`, the themes folder, and the active theme's files (every candidate path, so creating a missing one reloads too). The watches follow the theme on screen, a preview's included. Saving a theme or changing `theme =` takes effect at once. The pickers' list is kept until the themes folder or the installed plugins change.
+4. **Applying.** On a theme change, AppDelegate sets `Theme.current`, flushes the font and row caches, resets the colours held outside `draw`, relays out every view and rewrites the Ghostty config.
+5. **Plugins** read the theme on screen through the `theme` import's `tokens()` (from `Theme.exported()`), so their rows and decorations can match it.
+
+Fixtures use `bw`, as they ignore your `config.toml`, so `design/check` keeps comparing against the mockups. `HAUNT_THEME=<id>` puts a fixture in another theme, found in the bundled themes or `$TMPDIR/haunt-fixture/themes`.

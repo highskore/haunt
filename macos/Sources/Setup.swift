@@ -359,20 +359,24 @@ final class SettingsWindowController: NSWindowController {
     private let configPath: String
     private let openConfig: () -> Void
     private let notifications: () -> NotificationSettings
+    private let themeName: () -> String
+    private let openThemes: () -> Void
     private let stack = NSStackView()
     private var targets: [BlockTarget] = []
     private var plugins: [BundledPlugin] = []
 
     init(sheets: SetupSheets, configPath: String, notifications: @escaping () -> NotificationSettings,
-         openConfig: @escaping () -> Void) {
+         themeName: @escaping () -> String, openThemes: @escaping () -> Void, openConfig: @escaping () -> Void) {
         self.sheets = sheets
         self.configPath = configPath
         self.notifications = notifications
+        self.themeName = themeName
+        self.openThemes = openThemes
         self.openConfig = openConfig
         let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: Tok.App.settingsW, height: Tok.App.settingsH),
                            styleMask: [.titled, .closable], backing: .buffered, defer: false)
         win.title = "Settings"
-        win.appearance = NSAppearance(named: .darkAqua)
+        win.appearance = Tok.App.appearance
         win.backgroundColor = Tok.Color.windowBg
         win.isReleasedWhenClosed = false
         stack.orientation = .vertical
@@ -415,6 +419,7 @@ final class SettingsWindowController: NSWindowController {
             return row(icon: a.icon, name: a.name, status: on ? "Set up" : "Not set up",
                        button: on ? "Remove…" : "Set up…") { [weak self] in self?.change(a, remove: on) }
         })
+        section("Theme", [row(icon: nil, name: themeName(), status: "", button: "Themes…", action: openThemes)])
         // Read-only: the switches live in config.toml's [notifications], which hot-reloads into this section.
         let n = notifications()
         func onOff(_ on: Bool) -> String { on ? "On" : "Off" }
@@ -449,6 +454,12 @@ final class SettingsWindowController: NSWindowController {
         section("Config", [row(icon: nil, name: (configPath as NSString).abbreviatingWithTildeInPath, status: "",
                                button: "Open config.toml", action: openConfig)])
         window?.setContentSize(stack.fittingSize)
+    }
+
+    func themeDidChange() {
+        window?.appearance = Tok.App.appearance
+        window?.backgroundColor = Tok.Color.windowBg
+        rebuild()
     }
 
     private func change(_ a: SetupAgent, remove: Bool) {

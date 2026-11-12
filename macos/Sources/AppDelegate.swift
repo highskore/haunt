@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private let statusMenu = StatusMenu()
     private lazy var setup = SetupSheets(config: config, fixture: fixture != nil)
     private var settings: SettingsWindowController?
+    private var themes: ThemesWindowController?
 
     // Members the vendored wrapper calls on NSApp.delegate.
     let undoManager: UndoManager? = nil
@@ -36,6 +37,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // Fixture screens must not pick up, or overwrite, the user's config.
         config = fixture == nil ? HauntConfig()
             : HauntConfig(dir: FileManager.default.temporaryDirectory.appendingPathComponent("haunt-fixture"))
+        #if HAUNT_FIXTURES
+        if fixture != nil { config.fixtureTheme = ProcessInfo.processInfo.environment["HAUNT_THEME"] ?? fixture?.themePlugin?.theme }
+        #endif
         config.reload(useUserConfig: fixture == nil)
         ghostty = Ghostty.App(configPath: config.ghosttyURL.path)
         core = Self.makeCore(fixture: fixture, configDir: config.dir.path)
@@ -88,6 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             Self.logger.error("core start failed: \(String(describing: error), privacy: .public)")
         }
         c.bridge.plugins = Self.startPlugins(fixture: fixture, core: core, dir: config.dir, configToml: config.text)
+        config.pluginThemes = Dictionary((c.bridge.plugins?.themes() ?? []).map {
+            ($0.id, PluginTheme(file: URL(fileURLWithPath: $0.file), fonts: $0.fonts.map { URL(fileURLWithPath: $0) }, bundled: $0.bundled))
+        }, uniquingKeysWith: { a, _ in a })
+        shareTheme()
         applyPluginKeys()
         Ghostty.App.desktopNotificationHook = { [weak c, weak self] view, title, body in
             guard let self, let tab = c?.tab(for: view) else { return false }
@@ -121,30 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
 
         if fixture == nil {
-            config.watch { [weak self] ghosttyChanged, keysChanged, layoutChanged, notificationsChanged, textChanged in
-                guard let self else { return }
-                var (ghosttyChanged, keysChanged) = (ghosttyChanged, keysChanged)
-                if textChanged, let plugins = self.controller?.bridge.plugins {
-                    let applied = plugins.setConfig(configToml: self.config.text)
-                    Self.logSettingsProblems(applied.problems)
-                    // A plugin may register or drop commands as its settings change.
-                    if applied.changed {
-                        ghosttyChanged = self.rebuildPluginKeys() || ghosttyChanged
-                        keysChanged = true
-                    }
-                }
-                if keysChanged {
-                    self.buildMenu()
-                    self.controller?.updateKeys(self.config.keys)
-                }
-                if notificationsChanged {
-                    self.notifier?.settings = self.config.notifications
-                    self.settings?.rebuild()
-                }
-                if keysChanged || notificationsChanged { self.controller?.refresh() }
-                if ghosttyChanged { self.ghostty.reloadConfig() }
-                if layoutChanged { self.controller?.updateTitlebarButtons(self.config.titlebarButtons) }
-            }
+            config.watch { [weak self] in self?.apply($0) }
             c.drainPluginRequests()
         }
         #if HAUNT_FIXTURES
@@ -287,13 +272,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     @objc func openSettings(_ sender: Any?) {
         let s = settings ?? SettingsWindowController(sheets: setup, configPath: config.tomlURL.path,
-                                                     notifications: { [config] in config.notifications }) { [weak self] in
+                                                     notifications: { [config] in config.notifications },
+                                                     themeName: { [weak self] in self?.themeDisplayName ?? "" },
+                                                     openThemes: { [weak self] in self?.openThemes(nil) }) { [weak self] in
             self?.openConfig(nil)
         }
         settings = s
         s.refresh()
         if s.window?.isVisible != true { s.window?.center() }
         s.showWindow(nil)
+    }
+
+    @objc func openThemes(_ sender: Any?) {
+        let t = themes ?? ThemesWindowController(host: self)
+        themes = t
+        t.open()
+    }
+
+    private var themeDisplayName: String {
+        let saved = config.themeName
+        return config.themeChoices().first { $0.id == saved }?.name ?? saved
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
@@ -381,17 +379,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     /// Re-reads the plugins' commands into the key map, from the config.toml text already read; says
     /// whether the Ghostty file changed.
-    private func rebuildPluginKeys() -> Bool {
+    private func rebuildPluginKeys() -> HauntConfig.Changes {
         pluginCommands = controller?.bridge.plugins?.paletteItems(mode: nil, query: "").filter { !$0.isMode } ?? []
         config.pluginKeyDefaults = Dictionary(pluginCommands.compactMap { i in i.defaultKey.map { (KeyMap.pluginName(i.pluginId, i.id), $0) } },
                                               uniquingKeysWith: { a, _ in a })
-        return config.rebuildKeys().ghostty
+        return config.rebuildKeys()
     }
 
     private func applyPluginKeys() {
-        if rebuildPluginKeys() { ghostty.reloadConfig() }
+        let changes = rebuildPluginKeys()
+        if changes.ghostty { ghostty.reloadConfig() }
+        // A plugin theme's [layout] arrives with the plugins.
+        if changes.layout {
+            controller?.updateTitlebarButtons(config.titlebarButtons)
+            controller?.updateTitleFormat(config.titleFormat)
+        }
+        if changes.theme { applyTheme() }
         buildMenu()
         controller?.updateKeys(config.keys)
+    }
+
+    private func apply(_ changes: HauntConfig.Changes) {
+        var c = changes
+        if c.text, let plugins = controller?.bridge.plugins {
+            let applied = plugins.setConfig(configToml: config.text)
+            Self.logSettingsProblems(applied.problems)
+            // A plugin may register or drop commands as its settings change.
+            if applied.changed {
+                let r = rebuildPluginKeys()
+                c.ghostty = c.ghostty || r.ghostty
+                c.theme = c.theme || r.theme
+                c.keys = true
+            }
+        }
+        if c.keys {
+            buildMenu()
+            controller?.updateKeys(config.keys)
+        }
+        if c.notifications {
+            notifier?.settings = config.notifications
+            settings?.rebuild()
+        }
+        if c.keys || c.notifications { controller?.refresh() }
+        if c.ghostty { ghostty.reloadConfig() }
+        if c.layout {
+            controller?.updateTitlebarButtons(config.titlebarButtons)
+            controller?.updateTitleFormat(config.titleFormat)
+        }
+        if c.theme { applyTheme() }
+    }
+
+    private func applyTheme() {
+        Draw.flushCaches()
+        controller?.themeDidChange()
+        themes?.themeDidChange()
+        settings?.themeDidChange()
+        shareTheme()
+    }
+
+    /// Plugins read the colour tokens only; previews count as a switch.
+    private func shareTheme() {
+        guard let plugins = controller?.bridge.plugins else { return }
+        let tokens = Theme.current.exported().filter { $0.key.hasPrefix("color.") }.sorted { $0.key < $1.key }
+            .map { ThemeToken(name: $0.key, value: $0.value) }
+        do {
+            try plugins.setTheme(name: config.themeName, tokens: tokens)
+        } catch {
+            Self.logger.error("plugin theme update failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// The theme pickers: preview `name` live, nil to go back to config.toml's, or keep it in config.toml.
+    func previewTheme(_ name: String?) { apply(config.preview(name)) }
+
+    func chooseTheme(_ name: String) {
+        apply(config.choose(name))
     }
 
     private func buildMenu() {
@@ -435,6 +497,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             item(Self.sidebarTitle(hidden: sidebarHidden), #selector(toggleHauntSidebar(_:)), .toggleSidebar),
             item("Agents Only", #selector(toggleAgentsOnlyView(_:)), .agentsView),
             item("Review Changes", #selector(toggleReviewScreen(_:)), .review),
+            item("Themes…", #selector(openThemes(_:))),
             .separator(),
             item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), .fullScreen),
         ])
@@ -469,4 +532,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         NSApp.mainMenu = main
         NSApp.windowsMenu = main.items.last?.submenu
     }
+}
+
+extension AppDelegate: ThemesHost {
+    var themeChoices: [HauntConfig.ThemeChoice] { config.themeChoices() }
+    var savedTheme: String { config.themeName }
+    func loadTheme(_ id: String) -> Theme { config.theme(id) }
 }

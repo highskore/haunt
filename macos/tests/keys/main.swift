@@ -85,6 +85,26 @@ let tb = TOML.parse("[layout]\ntitlebar_buttons = [\"sidebar\", \"bogus\", \"sea
 check(TitlebarButton.parse(tb) { tbLogs.append($0) } == [.sidebar, .search], "titlebar_buttons keeps order, drops unknown and repeats")
 check(tbLogs.count == 2 && tbLogs[0].contains("bogus") && tbLogs[1].contains("twice"), "titlebar_buttons problems logged")
 check(TitlebarButton.parse(.array([])) { _ in } == [], "empty titlebar_buttons leaves the bar bare")
+
+// [layout] palette_position, palette_width, palette_rows
+var palLogs: [String] = []
+check(PaletteLayout.parse(nil) { palLogs.append($0) } == PaletteLayout() && palLogs.isEmpty, "palette layout default")
+let pal = PaletteLayout.parse(TOML.parse("[layout]\npalette_position = \"bottom-right\"\npalette_width = 340\npalette_rows = \"single-line\"")["layout"]) { palLogs.append($0) }
+check(pal == PaletteLayout(position: .bottomRight, width: 340, singleLine: true) && palLogs.isEmpty, "palette layout parsed: \(pal)")
+let badPal = PaletteLayout.parse(TOML.parse("[layout]\npalette_position = \"left\"\npalette_width = 100\npalette_rows = [\"single-line\"]")["layout"]) { palLogs.append($0) }
+check(badPal == PaletteLayout() && palLogs.count == 3, "bad palette layout keeps the defaults: \(palLogs)")
+
+// [layout] title_format
+var titleLogs: [String] = []
+check(TitleFormat.parse(nil) { titleLogs.append($0) } == "" && titleLogs.isEmpty, "no title by default")
+check(TitleFormat.parse(.scalar("a\nb")) { titleLogs.append($0) } == "" && TitleFormat.parse(.scalar(String(repeating: "x", count: 81))) { titleLogs.append($0) } == "" && titleLogs.count == 2, "a multi-line or long format shows nothing")
+func title(_ f: String, _ tab: String, _ meta: String) -> String { TitleFormat.parts(f, tab: tab, meta: meta).map { $0.isTab ? "[\($0.text)]" : $0.text }.joined() }
+titleLogs = []
+check(TitleFormat.parse(.scalar("{tab}\u{202E}gpj.exe")) { titleLogs.append($0) } == "" && titleLogs.count == 1, "a bidi override in the format shows nothing")
+check(title("{tab} — {meta}", "a\u{202E}b\u{200B}c\u{7}", "m\u{2028}x · y") == "[abc] — mx", "hidden characters in a tab's name or meta are dropped")
+check(title("{tab} — {meta}", "pawr", "agent-sidebar · Writing tests") == "[pawr] — agent-sidebar", "name and the meta's first part")
+check(title("{tab} — {meta}", "vibes", "") == "[vibes]", "an empty meta takes its separator with it")
+check(title("~ {meta} {x} {tab}", "a", "b") == "~ b {x} [a]", "unknown braces stay text")
 let old = try! JSONDecoder().decode(HauntConfig.State.self, from: Data(#"{"sidebar_hidden":true}"#.utf8))
 check(old.sidebarHidden && !old.agentsView, "older state.json keeps sidebar_hidden")
 var st = HauntConfig.State()
@@ -219,6 +239,58 @@ let viaAlias = KeyMap(table: [:], pluginDefaults: aliased) { _ in }
 check(viaAlias.plugin.isEmpty, "reserved chords are refused under any spelling: \(viaAlias.plugin.keys.sorted())")
 let pg = HauntConfig.ghosttyConfig([:], defaultSize: 11, keys: withPlugins)
 check(pg.contains("keybind = alt+super+arrow_up=unbind\n"), "plugin chords are unbound in Ghostty")
+
+// Arrays may run over several lines, with comments and a trailing comma; brackets in strings don't count.
+let multi = TOML.parse("""
+[layout]
+titlebar_buttons = [
+  "search",   # first
+  "new_tab",
+]
+after = "x"
+[ghostty]
+palette = ["0=#000000",
+           "1=#ff0000"]
+keybind = "cmd+[=text:]"
+""")
+check(multi["layout"]?["titlebar_buttons"] == .array(["search", "new_tab"]) && multi["layout"]?["after"] == .scalar("x"), "a multi-line array: \(multi)")
+check(multi["ghostty"]?["palette"] == .array(["0=#000000", "1=#ff0000"]) && multi["ghostty"]?["keybind"] == .scalar("cmd+[=text:]"),
+      "a continued array, and a bracket inside a string")
+
+// An escaped quote doesn't end a string, so its bracket opens nothing.
+var tomlProblems: [String] = []
+let escaped = TOML.parse("""
+[layout]
+title_format = "\\"[x"
+[ghostty]
+palette = ["a\\",b", "c"]
+""") { tomlProblems.append($0) }
+check(escaped["layout"]?["title_format"] == .scalar("\"[x") && escaped["ghostty"]?["palette"] == .array(["a\",b", "c"]) && tomlProblems.isEmpty,
+      "escaped quotes: \(escaped) \(tomlProblems)")
+
+// An array never closed ends at the next table, which keeps its keys.
+let unclosed = TOML.parse("[layout]\ntitlebar_buttons = [\n  \"search\",\n[ghostty]\nfont-size = 13\n") { tomlProblems.append($0) }
+check(unclosed["layout"]?["titlebar_buttons"] == nil && unclosed["ghostty"]?["font-size"] == .scalar("13")
+      && tomlProblems == ["layout.titlebar_buttons: array not closed, ignored"], "an unclosed array: \(unclosed) \(tomlProblems)")
+tomlProblems = []
+_ = TOML.parse("a = [\n\"x\",\n") { tomlProblems.append($0) }
+check(tomlProblems == ["a: array not closed, ignored"], "one unclosed at the end: \(tomlProblems)")
+
+// Past the caps a value is dropped, and what follows it still parses.
+tomlProblems = []
+let long = TOML.parse("[ghostty]\npalette = [\n" + String(repeating: "\"1=#000000\",\n", count: 600) + "]\nafter = 1\n") { tomlProblems.append($0) }
+check(long["ghostty"]?["palette"] == nil && long["ghostty"]?["after"] == .scalar("1") && tomlProblems.count == 1, "over 512 lines: \(tomlProblems)")
+
+// Hostile input stays linear: 256 KB of unclosed brackets, quotes and escapes, in one line and in many.
+let hostile = [String(repeating: "a = [[[\"\\\"[\n", count: 256 << 10 / 12), "a = " + String(repeating: "[", count: 256 << 10),
+               String(repeating: "x = [ # [[[[[[[\n", count: 256 << 10 / 16)]
+for h in hostile {
+    let start = Date()
+    _ = TOML.parse(h)
+    _ = TOML.keyOrder(h, table: "")
+    let ms = Date().timeIntervalSince(start) * 1000
+    check(ms < 100, "256 KB of hostile TOML parsed in \(Int(ms)) ms")
+}
 
 print(failures == 0 ? "keys: all passed" : "keys: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -40,6 +40,11 @@ final class ReviewCoordinator {
 
     var isOpen: Bool { view != nil || inbox != nil }
 
+    func themeDidChange() {
+        for v in [view as NSView?, inbox] { v?.layer?.backgroundColor = Tok.Color.windowBg.cgColor }
+        view?.reload()
+    }
+
     func toggle() {
         if isOpen { close() } else { open() }
     }

@@ -65,7 +65,7 @@ macos/make-app.sh --plugins tabs-plus,allowlist   # also bundles those plugins (
 open build/haunt.app
 ```
 
-`make-app.sh` needs the Claude adapter checked out (see below). It also bundles the Codex adapter if `../haunt-plugins/haunt-codex` is there (or `HAUNT_CODEX_ADAPTER`), the `haunt` CLI as `haunt.app/Contents/Helpers/haunt`, and the first-party plugins you name with `--plugins` (or `HAUNT_PLUGINS`): a name is the repo `../haunt-plugins/haunt-<name>` (`HAUNT_PLUGINS_DIR`), today `allowlist`, `commands`, `decision-log` or `tabs-plus`, and `all` is every plugin repo there. The default is none, and an unknown name fails the build. They're built for `wasm32-wasip2`; `HAUNT_FIRST_PARTY_PLUGINS` adds repos by path (each built once, and only with a real id). A bundled plugin is only offered: nothing is installed until you choose it in `haunt setup`.
+`make-app.sh` needs the Claude adapter checked out (see below). It also bundles the Codex adapter if `../haunt-plugins/haunt-codex` is there (or `HAUNT_CODEX_ADAPTER`), the `haunt` CLI as `haunt.app/Contents/Helpers/haunt`, and the first-party plugins you name with `--plugins` (or `HAUNT_PLUGINS`): a name is the repo `../haunt-plugins/haunt-<name>` (`HAUNT_PLUGINS_DIR`), today `allowlist`, `commands`, `decision-log`, `tabs-plus` or `theme-<name>`, and `all` is every plugin repo there. The default is none, and an unknown name fails the build. Code plugins are built for `wasm32-wasip2`; a data-only theme plugin is copied as its manifest and the files it names. `HAUNT_FIRST_PARTY_PLUGINS` adds repos by path (each built once, and only with a real id). Every repo is checked before any is built. A bundled plugin is only offered: nothing is installed until you choose it in `haunt setup`.
 
 Signing: set `HAUNT_SIGN_ID`, or put your identity in a `.sign-id` file (gitignored). Without either, the app is signed ad hoc.
 
@@ -107,6 +107,9 @@ font_size = 11
 [layout]
 agents_view = "narrow-list"                           # the default, and the only view so far
 titlebar_buttons = ["search", "new_tab", "sidebar"]   # the default
+palette_position = "center-top"                       # or "bottom-right"
+palette_rows = "two-line"                             # or "single-line": the sub beside the title
+title_format = ""                                     # e.g. "{tab} — {meta}"; empty shows no title
 
 [notifications]      # all on by default
 enabled = true       # every agent notification
@@ -118,7 +121,7 @@ menu_bar = true      # the menu bar item
 cursor-style = "bar"
 ```
 
-`agents_view` is the view ⌘⇧A shows. `titlebar_buttons` lists the title bar's icons, left to right, from `search`, `new_tab`, `settings` and `sidebar`. Unknown names are skipped and logged; `[]` leaves the bar empty. Each icon's tooltip shows its shortcut from `[keys]`.
+`agents_view` is the view ⌘⇧A shows. `titlebar_buttons` lists the title bar's icons, left to right, from `search`, `new_tab`, `settings` and `sidebar`. Unknown names are skipped and logged; `[]` leaves the bar empty. Each icon's tooltip shows its shortcut from `[keys]`. `palette_position` puts ⌘K at the top centre or in the bottom-right corner, `palette_width` (240–600) sets its width, and `palette_rows` lays out its rows. `title_format` centres a title in the title bar: `{tab}` is the selected tab's name and `{meta}` the first part of its meta line. A theme's `[layout]` can set these too, and yours win.
 
 `[keys]` sets shortcuts by action name (the generated `config.toml` lists them with their defaults). A plugin's palette command is named `"<plugin id>/<item id>"`, for example `"dev.haunt.tabs-plus/move-up" = "alt+cmd+up"`; a plugin's default key must include cmd and never takes one of Haunt's or a chord the terminal or macOS uses (a chord set here has no such limit), and bound plugin commands appear in the Window menu.
 
@@ -171,6 +174,8 @@ macos/tests/keys.sh      # [keys], [layout], the generated Ghostty config and it
 macos/tests/paste.sh     # the paste preview and what needs confirming
 macos/tests/review.sh    # the review screen's git runner, diff parser, checks and send-back
 macos/tests/sidebar.sh   # sidebar drop targets, the agents view's restored frame
+macos/tests/theme.sh     # theme files: lookup, extends, validation, the user over the theme
+macos/tests/themepicker.sh   # the theme pickers (⌘K and the Themes window): preview, keep, revert
 macos/tests/loginpath.sh # the login-shell PATH lookup
 macos/tests/bundle-plugins.sh # make-app's --plugins: none by default, exactly the names given
 macos/tests/notify.sh    # notifications: when Allow shows, answer routing, toggles, the menu bar menu

@@ -30,6 +30,14 @@ for y in stride(from: CGFloat(0), to: 600, by: 1) {
 check(seen == ["none", "pinned:p1", "pinned:p2", "pinned:end", "idle:i", "idle:end"], "drop targets top to bottom: \(seen)")
 check(!seen.contains { $0.hasPrefix("needs-you") }, "nothing lands in NEEDS YOU")
 
+// The footer counts agent tabs, not shells.
+var agent = row("a")
+agent.kind = .claude
+var codex = row("c")
+codex.kind = .codex
+check(SidebarView.agentCount(SidebarSnapshot(groups: [SidebarGroup(id: "g", label: "", rows: [agent, row("s"), codex])], colorStyle: .dot)) == 2,
+      "two agents beside a shell")
+
 // Leaving the agents view: the old frame comes back only if a screen still shows it.
 let main = NSRect(x: 0, y: 0, width: 1440, height: 875), gone = NSRect(x: 1440, y: 0, width: 1200, height: 800)
 check(AgentsView.restoredFrame(NSRect(x: 100, y: 100, width: 900, height: 600), screens: [main], current: main)

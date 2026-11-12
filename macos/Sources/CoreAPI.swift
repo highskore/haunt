@@ -24,12 +24,14 @@ protocol CoreAPI: AnyObject {
 /// `HauntPlugins` as the UI uses it.
 protocol PluginsAPI: AnyObject {
     func loadErrors() -> [String]
+    func themes() -> [ThemeContribution]
     func paletteItems(mode: String?, query: String) -> [PaletteItem]
     func invokePaletteItem(pluginId: String, itemId: String, terminalShown: Bool) throws
     func takeRequests() -> [HostRequest]
     func rowMenuItems(surfaceId: String) -> [RowMenuItem]
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?)
+    func setTheme(name: String, tokens: [ThemeToken]) throws
     func settingsProblems() -> [String]
     func setConfig(configToml: String) -> ConfigApplied
 }
@@ -50,7 +52,7 @@ private var fixtureCore: HauntCore?
 /// The log palettes in the real build: the bundled decision-log plugin over a throwaway core that holds
 /// the fixture's decisions, so the rows come through the real plugin host.
 func fixturePlugins(_ fixture: Fixture, bundledDir: String?) throws -> PluginsAPI? {
-    guard fixture.hasLog else { return nil }
+    guard fixture.hasLog || fixture.themePlugin != nil else { return nil }
     let fm = FileManager.default
     let dir = fm.temporaryDirectory.appendingPathComponent("haunt-fixture-plugins-\(getpid())")
     try? fm.removeItem(at: dir)
@@ -91,7 +93,11 @@ func fixturePlugins(_ fixture: Fixture, bundledDir: String?) throws -> PluginsAP
     try core.start()
     fixtureCore = core
     // Launches only update bundled plugins, so the fixture installs its one itself.
-    if let bundledDir { try installBundledPlugin(hauntDir: dir.path, bundledDir: bundledDir, id: "dev.haunt.decision-log") }
+    if let bundledDir {
+        for id in (fixture.hasLog ? ["dev.haunt.decision-log"] : []) + [fixture.themePlugin?.id].compactMap({ $0 }) {
+            try installBundledPlugin(hauntDir: dir.path, bundledDir: bundledDir, id: id)
+        }
+    }
     return try HauntPlugins.load(hauntDir: dir.path, core: core, bundledDir: bundledDir, configToml: "")
 }
 #endif
@@ -102,14 +108,29 @@ func fixturePlugins(_ fixture: Fixture, bundledDir: String?) throws -> PluginsAP
     fixture.hasLog ? FixturePlugins(fixture: fixture) : nil
 }
 
+struct ThemeToken: Equatable {
+    var name: String
+    var value: String
+}
+
+struct ThemeContribution: Equatable {
+    var pluginId: String
+    var id: String
+    var file: String
+    var fonts: [String]
+    var bundled: Bool
+}
+
 final class NoPlugins: PluginsAPI {
     func loadErrors() -> [String] { [] }
+    func themes() -> [ThemeContribution] { [] }
     func paletteItems(mode: String?, query: String) -> [PaletteItem] { [] }
     func invokePaletteItem(pluginId: String, itemId: String, terminalShown: Bool) throws {}
     func takeRequests() -> [HostRequest] { [] }
     func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?) {}
+    func setTheme(name: String, tokens: [ThemeToken]) throws {}
     func settingsProblems() -> [String] { [] }
     func setConfig(configToml: String) -> ConfigApplied { ConfigApplied(changed: false, problems: []) }
 }
@@ -124,11 +145,13 @@ final class FixturePlugins: PluginsAPI {
     }
 
     func loadErrors() -> [String] { [] }
+    func themes() -> [ThemeContribution] { [] }
     func invokePaletteItem(pluginId: String, itemId: String, terminalShown: Bool) throws {}
     func takeRequests() -> [HostRequest] { [] }
     func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?) {}
+    func setTheme(name: String, tokens: [ThemeToken]) throws {}
     func settingsProblems() -> [String] { [] }
     func setConfig(configToml: String) -> ConfigApplied { ConfigApplied(changed: false, problems: []) }
 

@@ -2,6 +2,27 @@ import AppKit
 import Combine
 import GhosttyKit
 
+/// `[effects] window.ring` (and the palette's): a light ring inside a rounded edge and a highlight along its top.
+final class RingView: NSView {
+    var radius: CGFloat = 0 { didSet { needsDisplay = true } }
+    var ring = NSColor.clear { didSet { needsDisplay = true } }
+    var highlight = NSColor.clear { didSet { needsDisplay = true } }
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let hl = Tok.App.hairline
+        let shape = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
+        shape.addClip()
+        Draw.fill(NSRect(x: 0, y: 0, width: bounds.width, height: hl), highlight)
+        let edge = NSBezierPath(roundedRect: bounds.insetBy(dx: hl / 2, dy: hl / 2), xRadius: max(radius - hl / 2, 0), yRadius: max(radius - hl / 2, 0))
+        edge.lineWidth = hl
+        ring.setStroke()
+        edge.stroke()
+    }
+}
+
 /// Lays out title bar, sidebar and pane at fixed mockup sizes; without the sidebar, mockup 10's.
 private final class RootView: NSView {
     let titleBar = TitleBarView()
@@ -12,6 +33,17 @@ private final class RootView: NSView {
     let agents = AgentsView()
     /// What Haunt refused on the user's behalf, at the sidebar's foot so it never covers the terminal.
     let toast = ToastView()
+    /// `[effects] window.material = "glass"`: the desktop, blurred, behind everything.
+    let material = NSVisualEffectView()
+    let ring = RingView()
+    /// A fixture's stand-in for the desktop behind glass (HAUNT_BACKDROP), so captures don't depend on the wallpaper.
+    var backdrop: NSImageView? {
+        didSet {
+            guard let backdrop else { return }
+            addSubview(backdrop, positioned: .below, relativeTo: material)
+            setLayerColors()
+        }
+    }
     var sidebarW = Tok.Size.sidebarW
     /// The review inbox covers the sidebar too; a tab's review only the pane.
     var reviewCoversSidebar = false
@@ -49,19 +81,37 @@ private final class RootView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         pane.wantsLayer = true
-        pane.layer?.backgroundColor = Tok.Color.windowBg.cgColor
         scrim.wantsLayer = true
-        scrim.layer?.backgroundColor = Tok.App.scrim.withAlphaComponent(Tok.Size.paletteScrimAlpha).cgColor
+        setLayerColors()
         scrim.isHidden = true
         agents.isHidden = true
-        for v in [titleBar, sidebar, pane, scrim, agents, toast] { addSubview(v) }
+        material.material = .hudWindow
+        material.blendingMode = .behindWindow
+        material.state = .active
+        for v in [material, titleBar, sidebar, pane, scrim, agents, toast, ring] { addSubview(v) }
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
+    func setLayerColors() {
+        pane.layer?.backgroundColor = Tok.Color.windowBg.cgColor
+        scrim.layer?.backgroundColor = Tok.App.scrim.withAlphaComponent(Tok.Size.paletteScrimAlpha).cgColor
+        let fx = Theme.current.effects
+        material.isHidden = fx.windowMaterial != "glass" || backdrop != nil
+        ring.isHidden = !fx.windowRing
+        ring.radius = fx.windowRadius
+        ring.ring = Theme.current.app.windowRing
+        ring.highlight = Theme.current.app.windowHighlight
+        layer?.cornerRadius = fx.windowRadius
+        layer?.masksToBounds = fx.windowRadius > 0
+    }
+
     override func layout() {
         super.layout()
         agents.frame = bounds
+        material.frame = bounds
+        backdrop?.frame = bounds
+        ring.frame = bounds
         if agentsOn {
             toast.frame = toast.frame(in: bounds)
             return
@@ -95,6 +145,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private lazy var palette: PaletteController = {
         let p = PaletteController(host: self)
         p.sticky = fixture != nil
+        #if HAUNT_FIXTURES
+        if let n = fixture?.paletteRows { p.maxRows = n }
+        #endif
         return p
     }()
     private let root = RootView()
@@ -141,8 +194,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         win.titleVisibility = .hidden
         win.titlebarAppearsTransparent = true
         win.colorSpace = .sRGB
-        win.appearance = NSAppearance(named: .darkAqua)
-        win.backgroundColor = Tok.Color.windowBg
+        win.appearance = Tok.App.appearance
+        Self.setBackground(win)
         win.minSize = NSSize(width: Tok.Size.sidebarW + Tok.App.minPaneW, height: Tok.App.minWindowH)
         win.tabbingMode = .disallowed
         for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
@@ -152,6 +205,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: win)
         win.delegate = self
 
+        #if HAUNT_FIXTURES
+        if fixture != nil, let path = ProcessInfo.processInfo.environment["HAUNT_BACKDROP"], let image = NSImage(contentsOfFile: path) {
+            let v = NSImageView()
+            v.image = image
+            v.imageScaling = .scaleAxesIndependently
+            root.backdrop = v
+        }
+        #endif
         root.titleBar.accessory = fixture?.titleAccessory ?? .icons
         root.sidebarW = fixture?.sidebarWidth ?? Tok.Size.sidebarW
         root.titleBar.onIcon = { [weak self] icon in self?.titleIcon(icon) }
@@ -166,6 +227,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         agentsViewAtLaunch = fixture?.agentsView ?? config.state.agentsView
         updateKeys(config.keys)
         root.titleBar.buttons = fixture?.titlebarButtons ?? config.titlebarButtons
+        root.titleBar.titleFormat = config.titleFormat
         root.sidebar.onSelect = { [weak self] id in self?.select(id) }
         root.sidebar.onClose = { [weak self] id in self?.closeTab(id) }
         root.agents.list.onSelect = { [weak self] id in self?.expandAgentsView(to: id) }
@@ -402,6 +464,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         if root.agentsOn { root.agents.update(snap) }
         let sel = snap.groups.lazy.flatMap(\.rows).first { $0.selected }
         root.titleBar.progress = sel?.progress.map { $0.total == 0 ? 0 : CGFloat($0.done) / CGFloat($0.total) }
+        root.titleBar.tab = sel.map { ($0.name, $0.meta) }
         onSnapshot?(snap)
     }
 
@@ -466,7 +529,39 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func updateTitlebarButtons(_ buttons: [TitlebarButton]) {
-        root.titleBar.buttons = buttons
+        root.titleBar.buttons = fixture?.titlebarButtons ?? buttons
+    }
+
+    func updateTitleFormat(_ format: String) {
+        root.titleBar.titleFormat = format
+    }
+
+    /// A glass or rounded theme needs a see-through window, its shape drawn by the root view.
+    private static func setBackground(_ win: NSWindow) {
+        let fx = Theme.current.effects
+        let clear = fx.windowMaterial == "glass" || fx.windowRadius > 0
+        win.isOpaque = !clear
+        win.backgroundColor = clear ? .clear : Tok.Color.windowBg
+        win.invalidateShadow()
+    }
+
+    /// Everything drawn from tokens draws again; colours held outside `draw` are set again.
+    func themeDidChange() {
+        guard let window else { return }
+        window.appearance = Tok.App.appearance
+        Self.setBackground(window)
+        root.setLayerColors()
+        root.sidebarW = fixture?.sidebarWidth ?? Tok.Size.sidebarW
+        root.sidebar.themeDidChange()
+        palette.themeDidChange()
+        reviewer.themeDidChange()
+        Self.redraw(root)
+    }
+
+    private static func redraw(_ v: NSView) {
+        v.needsLayout = true
+        v.needsDisplay = true
+        v.subviews.forEach(redraw)
     }
 
     func togglePalette() {
@@ -478,7 +573,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     func openPalette(text: String = "") {
         guard let window else { return }
-        root.scrim.isHidden = false
+        root.scrim.isHidden = !Theme.current.effects.paletteScrim
+        palette.layout = config.paletteLayout
         palette.open(over: window, top: TitleBarView.height(zen: root.sidebarHidden) + Tok.Size.paletteTop, text: text)
     }
 
@@ -626,6 +722,14 @@ extension MainWindowController: PaletteHost {
     var isFullScreen: Bool { window?.styleMask.contains(.fullScreen) ?? false }
 
     func paletteRun(_ action: KeyMap.Action) { (NSApp.delegate as? AppDelegate)?.performMenuItem(action) }
+
+    var paletteThemes: [HauntConfig.ThemeChoice] { config.themeChoices() }
+
+    var paletteTheme: String { config.themeName }
+
+    func palettePreviewTheme(_ id: String?) { (NSApp.delegate as? AppDelegate)?.previewTheme(id) }
+
+    func paletteChooseTheme(_ id: String) { (NSApp.delegate as? AppDelegate)?.chooseTheme(id) }
 
     func paletteDidClose() {
         root.scrim.isHidden = true

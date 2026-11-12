@@ -1,18 +1,127 @@
 import AppKit
 
+/// Haunt's own visual measures, which no mockup has; a theme's `[app]` table overrides them.
+struct AppTokens: Equatable {
+    /// Every rule and border; a stroked outline insets by half of it to land on whole pixels.
+    var hairline: CGFloat = 1
+    var caretW: CGFloat = 1
+    /// Between the palette's query and its caret.
+    var paletteCaretGap: CGFloat = 6
+    /// The sidebar's drop indicator while a row is dragged.
+    var dropLine: CGFloat = 2
+    /// Darkens the window behind the palette, at `Tok.Size.paletteScrimAlpha`.
+    var scrim = NSColor.black
+    /// The row ×, which stands in the status slot while the row is hovered.
+    var closeSize: CGFloat = 8
+    var closeStroke: CGFloat = 1.2
+    var sidebarGlyphRadius: CGFloat = 2
+    /// Space above the first group label.
+    var sidebarPadtop: CGFloat = 0
+    /// `[effects] sidebar.footer`'s agent count: its colour, type size, and padding (top, sides, bottom).
+    var sidebarFootFg = NSColor(white: 1, alpha: 0.4)
+    var sidebarFootFont: CGFloat = 11
+    var sidebarFootPad: [CGFloat] = [10, 16, 12]
+    /// `[effects] window.ring`: the ring inside the window's edge and the highlight along its top; the palette's.
+    var windowRing = NSColor(white: 1, alpha: 0.14)
+    var windowHighlight = NSColor(white: 1, alpha: 0.32)
+    var paletteRing = NSColor(white: 1, alpha: 0.18)
+    var paletteHighlight = NSColor(white: 1, alpha: 0.3)
+    /// `[effects] row.raised`: the selected row's ring, top highlight, and shadow with its blur and drop.
+    var rowRaisedRing = NSColor(white: 1, alpha: 0.22)
+    var rowRaisedHighlight = NSColor(white: 1, alpha: 0.2)
+    var rowRaisedShadow = NSColor(white: 0, alpha: 0.18)
+    var rowRaisedBlur: CGFloat = 14
+    var rowRaisedDrop: CGFloat = 4
+    /// `[effects] row.hover`'s fill.
+    var rowHover = NSColor(white: 1, alpha: 0.06)
+    /// `[effects] needs.pill`: fill, ring, text, corner radius and padding (vertical, horizontal).
+    var pillBg = NSColor(white: 1, alpha: 0.2)
+    var pillRing = NSColor(white: 1, alpha: 0.3)
+    var pillFg = NSColor.white
+    var pillRadius: CGFloat = 10
+    var pillPad: [CGFloat] = [1, 8]
+    /// `[effects] bar.glow`'s blur.
+    var barGlow: CGFloat = 10
+    /// `[effects] palette.selection = "pill"`: how far it stands in from the sides, and its corner radius.
+    var palettePillInset: CGFloat = 6
+    var palettePillRadius: CGFloat = 8
+    /// The pill's top highlight, its text, and the sub line and keys on it.
+    var palettePillHighlight = NSColor(white: 1, alpha: 0.25)
+    var palettePillInk = NSColor.white
+    var palettePillMute = NSColor(white: 1, alpha: 0.8)
+    /// `[layout] title_format`'s title: the tab name's colour, the rest's, and their type size.
+    var titleFg = NSColor(white: 1, alpha: 0.88)
+    var titleMeta = NSColor(white: 1, alpha: 0.45)
+    var titleFont: CGFloat = 13
+    /// macOS's look for menus, sheets and alerts: "dark" or "light".
+    var appearance = "dark"
+
+    static let keys: [String: Theme.Key] = [
+        "app.hairline": .number(\.app.hairline),
+        "app.caret.w": .number(\.app.caretW),
+        "app.palette.caret.gap": .number(\.app.paletteCaretGap),
+        "app.drop.line": .number(\.app.dropLine),
+        "app.scrim": .color(\.app.scrim),
+        "app.close.size": .number(\.app.closeSize),
+        "app.close.stroke": .number(\.app.closeStroke),
+        "app.sidebar.glyph.radius": .number(\.app.sidebarGlyphRadius),
+        "app.sidebar.padtop": .number(\.app.sidebarPadtop),
+        "app.sidebar.foot.fg": .color(\.app.sidebarFootFg),
+        "app.sidebar.foot.font": .number(\.app.sidebarFootFont),
+        "app.sidebar.foot.pad": .numbers(\.app.sidebarFootPad),
+        "app.window.ring": .color(\.app.windowRing),
+        "app.window.highlight": .color(\.app.windowHighlight),
+        "app.palette.ring": .color(\.app.paletteRing),
+        "app.palette.highlight": .color(\.app.paletteHighlight),
+        "app.row.raised.ring": .color(\.app.rowRaisedRing),
+        "app.row.raised.highlight": .color(\.app.rowRaisedHighlight),
+        "app.row.raised.shadow": .color(\.app.rowRaisedShadow),
+        "app.row.raised.blur": .number(\.app.rowRaisedBlur),
+        "app.row.raised.drop": .number(\.app.rowRaisedDrop),
+        "app.row.hover": .color(\.app.rowHover),
+        "app.pill.bg": .color(\.app.pillBg),
+        "app.pill.ring": .color(\.app.pillRing),
+        "app.pill.fg": .color(\.app.pillFg),
+        "app.pill.radius": .number(\.app.pillRadius),
+        "app.pill.pad": .numbers(\.app.pillPad),
+        "app.bar.glow": .number(\.app.barGlow),
+        "app.palette.pill.inset": .number(\.app.palettePillInset),
+        "app.palette.pill.radius": .number(\.app.palettePillRadius),
+        "app.palette.pill.highlight": .color(\.app.palettePillHighlight),
+        "app.palette.pill.ink": .color(\.app.palettePillInk),
+        "app.palette.pill.mute": .color(\.app.palettePillMute),
+        "app.title.fg": .color(\.app.titleFg),
+        "app.title.meta": .color(\.app.titleMeta),
+        "app.title.font": .number(\.app.titleFont),
+    ]
+}
+
 /// Haunt's own measures, which no mockup has. Tokens.swift is generated from the mockups; these are not.
 extension Tok {
     enum App {
-        /// Every rule and border; a stroked outline insets by half of it to land on whole pixels.
-        static let hairline: CGFloat = 1
-        static let caretW: CGFloat = 1
-        /// The sidebar's drop indicator while a row is dragged, and how far the pointer moves before a drag starts.
-        static let dropLine: CGFloat = 2
+        static var hairline: CGFloat { Theme.current.app.hairline }
+        static var caretW: CGFloat { Theme.current.app.caretW }
+        static var paletteCaretGap: CGFloat { Theme.current.app.paletteCaretGap }
+        static var dropLine: CGFloat { Theme.current.app.dropLine }
+        static var scrim: NSColor { Theme.current.app.scrim }
+        static var closeSize: CGFloat { Theme.current.app.closeSize }
+        static var closeStroke: CGFloat { Theme.current.app.closeStroke }
+        static var sidebarGlyphRadius: CGFloat { Theme.current.app.sidebarGlyphRadius }
+        static var sidebarPadtop: CGFloat { Theme.current.app.sidebarPadtop }
+        static var sidebarFootFg: NSColor { Theme.current.app.sidebarFootFg }
+        static var sidebarFootFont: CGFloat { Theme.current.app.sidebarFootFont }
+        static var sidebarFootPad: [CGFloat] { Theme.current.app.sidebarFootPad }
+        static var titleFg: NSColor { Theme.current.app.titleFg }
+        static var titleMeta: NSColor { Theme.current.app.titleMeta }
+        static var titleFont: CGFloat { Theme.current.app.titleFont }
+        static var appearance: NSAppearance? {
+            NSAppearance(named: Theme.current.app.appearance == "light" ? .aqua : .darkAqua)
+        }
+
+        /// How far the pointer moves before a row drag starts.
         static let dragSlop: CGFloat = 4
         /// NSTextField's cell insets its text this far, so the rename field sits that much left of the name.
         static let fieldInset: CGFloat = 2
-        /// Darkens the window behind the palette, at `Tok.Size.paletteScrimAlpha`.
-        static let scrim = NSColor.black
         /// The OpenAI mark's size if its image failed to load.
         static let openAIMarkFallback: CGFloat = 18
 
@@ -27,14 +136,9 @@ extension Tok {
         /// The traffic lights' slop, smaller since they sit close together.
         static let lightsSlop: CGFloat = 2
 
-        /// The row ×, which stands in the status slot while the row is hovered.
-        static let closeSize: CGFloat = 8
-        static let closeStroke: CGFloat = 1.2
-
         /// The title bar's sidebar glyph: a window outline with its left column split off,
         /// about the ⚙ glyph's size at the icons' font size.
         static let sidebarGlyph = NSSize(width: 12, height: 10)
-        static let sidebarGlyphRadius: CGFloat = 2
         static let sidebarGlyphColumn: CGFloat = 4
 
         /// The paste sheet's preview: its width and the lines it shows before scrolling.
