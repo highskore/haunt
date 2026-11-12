@@ -156,10 +156,13 @@ final class PluginGlow {
     /// longer needs you becomes the count.
     func needYou(_ surfaces: Set<String>) {
         guard surfaces != needing else { return }
+        let was = needing
         needing = surfaces
         switch shown {
         case let .row(surface, _, _) where !surfaces.contains(surface):
             shown = .needs
+            apply()
+        case .needs where was.isEmpty != surfaces.isEmpty:
             apply()
         case .needs where enabled && showsLabel:
             panel?.glow.setLabel(text)
@@ -170,6 +173,12 @@ final class PluginGlow {
     func hide() {
         shown = nil
         apply()
+    }
+
+    /// Whether the glow is wanted, `enabled` aside: a count label with nobody needing you draws nothing.
+    var wanted: Bool {
+        if case .needs = shown { return !needing.isEmpty }
+        return shown != nil
     }
 
     /// Haunt's words, never the plugin's, cut to 32 characters.
@@ -206,7 +215,7 @@ final class PluginGlow {
     private func apply() {
         ticker?.invalidate()
         ticker = nil
-        guard enabled, shown != nil, let screen = anchor?.screen ?? NSScreen.main else {
+        guard enabled, wanted, let screen = anchor?.screen ?? NSScreen.main else {
             panel?.orderOut(nil)
             return
         }

@@ -181,6 +181,16 @@ do {
 check(PluginGlow.label(count: 0) == nil && PluginGlow.label(count: 1) == "1 needs you" && PluginGlow.label(count: 3) == "3 need you"
       && PluginGlow.label(count: 120) == "99+ need you", "counts")
 check(PluginGlow.label(head: "api · git push?", waited: 72) == "api · git push? · 1m12s", PluginGlow.label(head: "api · git push?", waited: 72))
+let glow = PluginGlow()
+glow.enabled = false // never puts the panel on screen
+glow.show(.needs)
+check(!glow.wanted, "a count with nobody needing you hides the glow")
+glow.needYou(["a"])
+check(glow.wanted, "one tab needing you shows it")
+glow.needYou([])
+check(!glow.wanted, "and it goes when nobody does")
+glow.show(.noLabel)
+check(glow.wanted, "no label still glows")
 check(PluginGlow.elapsed(0) == "0s" && PluginGlow.elapsed(3599) == "59m59s" && PluginGlow.elapsed(7500) == "2h05m" && PluginGlow.elapsed(-5) == "0s", "elapsed")
 let longest = PluginGlow.label(head: String(repeating: "x", count: 23), waited: 3599)
 check(longest.count == 32 && longest.hasSuffix(" · 59m59s"), "a full head still shows its time: \(longest)")
