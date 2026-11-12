@@ -909,7 +909,8 @@ fn status_same(w: &[Glyph], p: &[char]) -> bool {
 /// `status_separator`) are matched whole: refused when one word, or a run of adjacent words read
 /// together, is a phrase run together ("done", "Do.ne", "d o n e", "needs you", "WaitingForYou"). So
 /// "ok-done-ok" is refused, and "abandoned", "idler", "undone·x" and "allowlist ok" are not. Words are
-/// split twice: with symbols kept as wildcards (`don℮`) and with symbols as breaks (`done✓`).
+/// split twice: with symbols kept as wildcards (`don℮`) and with every non-ASCII character or symbol
+/// as a break (`done✓`, `doneꓸ`, `doneː`), so a word in another script touching one is refused too.
 pub(crate) fn says_status(text: &str) -> bool {
     static PHRASES: std::sync::LazyLock<Vec<Vec<char>>> = std::sync::LazyLock::new(|| {
         let waiting = crate::layout::WAITING.split(' ').next();
@@ -928,7 +929,7 @@ pub(crate) fn says_status(text: &str) -> bool {
             })
         })
     };
-    says(&|g| !status_kept(g)) || says(&|g| !status_kept(g) || g.sym)
+    says(&|g| !status_kept(g)) || says(&|g| !status_kept(g) || g.wild || g.sym)
 }
 
 /// Whether a suffix or ticker says what a row needing you says, "needs you" or "waiting for you", anywhere
@@ -3030,6 +3031,8 @@ mod tests {
             "done\u{2800}", "\u{2800}done", "do\u{2800}ne", "d\u{2800}o\u{2800}n\u{2800}e", "Allow\u{2800}", "needs\u{2800}you",
             "done\u{1D159}", "idle\u{3000}", "ok\u{A0}deny", "fail\u{3164}ed", "do\u{115F}ne",
             "done✓", "✔done", "done★", "done™", "done\u{2804}", "done∙", "idle💤", "Allow✓", "needs you❗", "✓✓done✓✓",
+            "done\u{A4F8}", "done\u{02D0}", "\u{02BB}done\u{02BC}", "done\u{30FC}", "done\u{06F0}", "done\u{0660}", "done\u{1427}",
+            "done\u{A4FD}", "idle\u{A4FC}", "Allow\u{02D0}", "needs you\u{A4FD}",
         ] {
             assert!(decoration(d(bad, wrows::Tone::Dim)).is_err(), "{bad:?}");
         }
@@ -3037,7 +3040,7 @@ mod tests {
         assert!(says_status("done\u{2800}") && says_needs_you("needs\u{2800}you"));
         for ok in [
             "CI 7/9", "spec 11/18", "3 edits", "✓", "wait 2m", "allowlist", "allowlist ok", "🚀🚀🚀🚀", "dev ✓", "denylisted",
-            "abandoned", "idler", "undone·x", "redone", "doneness", "rerunning", "x—undone", "abandoned✓", "idler💤", "✓allowlist",
+            "abandoned", "idler", "undone·x", "redone", "doneness", "rerunning", "x—undone", "abandoned✓", "idler💤", "✓allowlist", "abandoned\u{A4F8}", "idler\u{30FC}", "redone\u{02D0}", "café", "naïve",
         ] {
             let dec = decoration(d(ok, wrows::Tone::Warn)).unwrap();
             assert_eq!(dec.spark.unwrap().tone, Tone::Text, "the sparkline may keep text");
