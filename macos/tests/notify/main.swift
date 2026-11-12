@@ -397,24 +397,26 @@ do {
     let inner = Center()
     let held = HoldingNoteCenter(inner, hold: hold)
     let note = { (id: String, title: String) in AgentNote(id: id, title: title, body: "", kind: .open, surfaceId: "s", requestKey: nil) }
-    hold.start(pluginId: "dev.haunt.focus-block", name: "Focus block", minutes: 25)
-    hold.start(pluginId: "dev.x.other", name: "Other", minutes: 5)
-    check(hold.owner?.id == "dev.haunt.focus-block", "a second hold doesn't take over")
+    hold.start(pluginId: "dev.haunt.focus-block", minutes: 25)
+    hold.start(pluginId: "dev.x.other", minutes: 5)
+    check(hold.owner == "dev.haunt.focus-block", "a second hold doesn't take over")
     held.post(note(AgentNotifier.doneId("a"), "api finished"))
     held.post(note(AgentNotifier.doneId("b"), "docs finished"))
     held.post(note(AgentNotifier.needsId("c"), "web needs you"))
     check(inner.posts.map(\.id) == [AgentNotifier.needsId("c")], "only the needs note shows during a hold")
     check(hold.keeps(id: "p1", title: "CI red", from: "dev.x.other"), "another plugin's note waits")
+    check(hold.keeps(id: "p3", title: "x\nweb finished", from: "dev.x.other"), "a forged line waits too")
     check(!hold.keeps(id: "p2", title: "Block ends", from: "dev.haunt.focus-block"), "the holder's own note shows")
     held.remove(ids: [AgentNotifier.doneId("b")])
     hold.release(pluginId: "dev.x.other")
     check(summaries.isEmpty && hold.owner != nil, "only the holder releases")
     hold.release(pluginId: "dev.haunt.focus-block")
-    check(summaries.count == 1 && summaries[0].0 == "Focus block" && summaries[0].1 == ["api finished", "CI red"],
-          "one summary, without notes taken back meanwhile")
+    check(summaries.count == 1 && summaries[0].0 == "dev.haunt.focus-block"
+          && summaries[0].1 == ["api finished", "dev.x.other: CI red", "dev.x.other: x⏎web finished"],
+          "one summary naming each plugin by id, without notes taken back meanwhile")
     held.post(note(AgentNotifier.doneId("a"), "api finished"))
     check(inner.posts.count == 2, "nothing waits after the hold")
-    hold.start(pluginId: "dev.x.other", name: "Other", minutes: 5)
+    hold.start(pluginId: "dev.x.other", minutes: 5)
     hold.release()
     check(summaries.count == 1 && hold.owner == nil, "an empty hold ends without a summary")
 }

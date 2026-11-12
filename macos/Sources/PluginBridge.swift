@@ -67,8 +67,8 @@ final class PluginBridge {
                 let id = UUID().uuidString
                 if hold.keeps(id: id, title: title, from: pluginId) { continue }
                 Self.notify(id: id, pluginId: pluginId, title: title, body: body, actions: actions, binding: binding)
-            case let .holdNotifications(pluginId, pluginName, minutes):
-                hold.start(pluginId: pluginId, name: pluginName, minutes: minutes)
+            case let .holdNotifications(pluginId, _, minutes):
+                hold.start(pluginId: pluginId, minutes: minutes)
             case let .releaseNotifications(pluginId):
                 hold.release(pluginId: pluginId)
             case let .showPanel(pluginId, pluginName, panel):

@@ -4,16 +4,16 @@ import UserNotifications
 /// A plugin's hold on notifications (`HostRequest.holdNotifications`): Haunt's "done" notes and other
 /// plugins' notes wait, and one summary shows when it ends. A note about an agent that needs you is never held.
 final class NotificationHold {
-    private(set) var owner: (id: String, name: String)?
-    private var held: [(id: String, title: String)] = []
+    private(set) var owner: String?
+    private var held: [(id: String, title: String, from: String?)] = []
     private var timer: Timer?
-    /// The owner's name and the titles of what waited, oldest first.
+    /// The owner's id and one line per note that waited, oldest first.
     var onRelease: ((String, [String]) -> Void)?
 
     /// The core already refused a second plugin's hold; the app ends it itself after `minutes`.
-    func start(pluginId: String, name: String, minutes: UInt32) {
-        if let o = owner, o.id != pluginId { return }
-        owner = (pluginId, name)
+    func start(pluginId: String, minutes: UInt32) {
+        if let o = owner, o != pluginId { return }
+        owner = pluginId
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(minutes) * 60, repeats: false) { [weak self] _ in
             self?.release(pluginId: pluginId)
@@ -22,20 +22,21 @@ final class NotificationHold {
 
     /// Ends the hold if `pluginId` (nil: anyone) has it.
     func release(pluginId: String? = nil) {
-        guard let o = owner, pluginId == nil || pluginId == o.id else { return }
+        guard let o = owner, pluginId == nil || pluginId == o else { return }
         owner = nil
         timer?.invalidate()
         timer = nil
-        let titles = held.map(\.title)
+        // Ids, not display names, so a plugin can't pass its lines off as Haunt's or another plugin's.
+        let lines = held.map { n in AgentNotifier.visible(n.from.map { "\($0): \(n.title)" } ?? n.title) }
         held = []
-        if !titles.isEmpty { onRelease?(o.name, titles) }
+        if !lines.isEmpty { onRelease?(o, lines) }
     }
 
     /// Whether note `id` waits instead of showing. `plugin`: who posts it, nil for Haunt; the owner's own show.
     func keeps(id: String, title: String, from plugin: String?) -> Bool {
-        guard let o = owner, plugin != o.id else { return false }
+        guard let o = owner, plugin != o else { return false }
         held.removeAll { $0.id == id }
-        held.append((id, title))
+        held.append((id, title, plugin))
         return true
     }
 
