@@ -168,50 +168,58 @@ enum Draw {
     /// The haunt-themes card's sigil, `size` across with its top-left at `origin`: rings, ticks, a seven-point
     /// star, a triangle, a hub and nodes, stroked in the current colour.
     static func sigil(at origin: NSPoint, size: CGFloat, stroke: CGFloat) {
-        let c = NSPoint(x: origin.x + size / 2, y: origin.y + size / 2)
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let paths = sigilPaths(size)
+        ctx.saveGState()
+        ctx.translateBy(x: origin.x, y: origin.y)
+        ctx.setLineWidth(stroke)
+        ctx.addPath(paths.solid)
+        ctx.strokePath()
+        ctx.setLineDash(phase: 0, lengths: [1, 4])
+        ctx.addPath(paths.dashed)
+        ctx.strokePath()
+        ctx.restoreGState()
+    }
+
+    /// Unit directions for `n` points around a circle from `rot` degrees.
+    private static func spokes(_ n: Int, _ rot: CGFloat = -90) -> [CGVector] {
+        (0..<n).map { i in
+            let a = (rot + CGFloat(i) * 360 / CGFloat(n)) * .pi / 180
+            return CGVector(dx: cos(a), dy: sin(a))
+        }
+    }
+
+    private static let spokes72 = spokes(72), spokes7 = spokes(7), spokes3 = spokes(3, 90)
+    private static var sigilCache: [CGFloat: (solid: CGPath, dashed: CGPath)] = [:]
+
+    /// The sigil's strokes at `size`, its top-left at the origin; built once a size.
+    private static func sigilPaths(_ size: CGFloat) -> (solid: CGPath, dashed: CGPath) {
+        if let p = sigilCache[size] { return p }
+        let c = CGPoint(x: size / 2, y: size / 2)
         let big = size * 0.46, mid = size * 0.41, tri = size * 0.28
-        func pts(_ n: Int, _ r: CGFloat, _ rot: CGFloat = -90) -> [NSPoint] {
-            (0..<n).map { i in
-                let a = (rot + CGFloat(i) * 360 / CGFloat(n)) * .pi / 180
-                return NSPoint(x: c.x + r * cos(a), y: c.y + r * sin(a))
-            }
+        func at(_ v: CGVector, _ r: CGFloat) -> CGPoint { CGPoint(x: c.x + r * v.dx, y: c.y + r * v.dy) }
+        func circle(_ r: CGFloat) -> CGRect { CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r) }
+        let solid = CGMutablePath()
+        solid.addEllipse(in: circle(big))
+        solid.addEllipse(in: circle(mid))
+        for (i, v) in spokes72.enumerated() {
+            solid.move(to: at(v, big))
+            solid.addLine(to: at(v, big - (i % 6 == 0 ? 8 : 3)))
         }
-        func circle(_ r: CGFloat, dash: [CGFloat]? = nil) {
-            let p = NSBezierPath(ovalIn: NSRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
-            p.lineWidth = stroke
-            if let dash { p.setLineDash(dash, count: dash.count, phase: 0) }
-            p.stroke()
-        }
-        func poly(_ q: [NSPoint]) {
-            let p = NSBezierPath()
-            for (i, x) in q.enumerated() { if i == 0 { p.move(to: x) } else { p.line(to: x) } }
-            p.close()
-            p.lineWidth = stroke
-            p.stroke()
-        }
-        func line(_ a: NSPoint, _ b: NSPoint) {
-            let p = NSBezierPath()
-            p.move(to: a); p.line(to: b)
-            p.lineWidth = stroke
-            p.stroke()
-        }
-        circle(big)
-        circle(big - 10, dash: [1, 4])
-        circle(mid)
-        let outer = pts(72, big)
-        for i in 0..<72 { line(outer[i], pts(72, big - (i % 6 == 0 ? 8 : 3))[i]) }
-        let seven = pts(7, mid)
-        poly((0..<7).map { seven[($0 * 3) % 7] })
-        poly(pts(3, tri, 90))
-        circle(size * 0.07)
-        line(NSPoint(x: c.x, y: c.y - mid), NSPoint(x: c.x, y: c.y + mid))
-        line(NSPoint(x: c.x - size * 0.1, y: c.y + size * 0.12), NSPoint(x: c.x + size * 0.1, y: c.y + size * 0.12))
-        for p in seven {
-            let r = size * 0.016
-            let dot = NSBezierPath(ovalIn: NSRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r))
-            dot.lineWidth = stroke
-            dot.stroke()
-        }
+        let seven = spokes7.map { at($0, mid) }
+        solid.addLines(between: (0..<7).map { seven[($0 * 3) % 7] })
+        solid.closeSubpath()
+        solid.addLines(between: spokes3.map { at($0, tri) })
+        solid.closeSubpath()
+        solid.addEllipse(in: circle(size * 0.07))
+        solid.move(to: CGPoint(x: c.x, y: c.y - mid)); solid.addLine(to: CGPoint(x: c.x, y: c.y + mid))
+        solid.move(to: CGPoint(x: c.x - size * 0.1, y: c.y + size * 0.12)); solid.addLine(to: CGPoint(x: c.x + size * 0.1, y: c.y + size * 0.12))
+        let r = size * 0.016
+        for p in seven { solid.addEllipse(in: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)) }
+        let dashed = CGMutablePath()
+        dashed.addEllipse(in: circle(big - 10))
+        sigilCache[size] = (solid, dashed)
+        return (solid, dashed)
     }
 
     /// The card's 46 pt corner ornament for the top-left corner at `origin`, turned by `quarterTurns` × 90°
