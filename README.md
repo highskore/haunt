@@ -171,6 +171,7 @@ Each plugin lives in its own repo. `haunt plugin new my-plugin [--dir <path>] [-
 cargo test --workspace                   # the adapter e2e tests skip if an adapter or jq is missing
 HAUNT_REQUIRE_ADAPTERS=1 cargo test --workspace   # ...and fail instead
 cargo check -p haunt-cli --no-default-features    # the slim CLI, without plugins or wasmtime
+cargo test -p haunt-core --no-default-features --features replay   # what haunt-replay builds, without wasmtime
 ../haunt-plugins/haunt-claude/tests/run.sh
 ../haunt-plugins/haunt-codex/tests/run.sh
 macos/tests/keys.sh      # [keys], [layout], the generated Ghostty config and its refusals

@@ -146,41 +146,7 @@ pub struct RowMenuItem {
     pub parent: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
-pub struct NotifyAction {
-    pub id: String,
-    pub title: String,
-}
-
-/// Side effects a plugin asked for; the app drains and performs them. A `PtyAnswer` or `PtyType`
-/// becomes bytes only through `Core::gate_plugin_request` (`ptygate`).
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
-pub enum HostRequest {
-    Notify { plugin_id: String, title: String, body: String, actions: Vec<NotifyAction>, binding: Option<String> },
-    PtyAnswer { plugin_id: String, surface: String, allow: bool, request_id: u64 },
-    PtyType { plugin_id: String, surface: String, text: String, enter: bool },
-    /// Show `panel`, or replace the one this plugin showed with its id.
-    ShowPanel { plugin_id: String, plugin_name: String, panel: Panel },
-    /// Hold haunt's and other plugins' notifications (never a permission prompt's) for `minutes`, then
-    /// show one summary; the app releases it then itself.
-    HoldNotifications { plugin_id: String, minutes: u32 },
-    /// What the holder adds to the summary; replaces its earlier one.
-    HoldSummary { plugin_id: String, headline: Option<String>, actions: Vec<NotifyAction> },
-    ReleaseNotifications { plugin_id: String },
-    ClosePanel { plugin_id: String, id: String },
-    /// The plugin bound or unbound a key: the app rebuilds its key map from `PluginSet::keys`.
-    KeysChanged { plugin_id: String },
-    /// Plain text for the clipboard, from a button, key or command the user just used.
-    /// The app tags the pasteboard item with the plugin id (`dev.haunt.plugin-copy`) and says
-    /// "<plugin_name> copied N lines".
-    ClipboardWrite { plugin_id: String, plugin_name: String, text: String },
-    /// An https link the user clicked a panel button for, checked by `plugins::link_ok`.
-    OpenUrl { plugin_id: String, url: String },
-    /// Select an open tab, from a button, key or command the user just used (`sidebar.focus`).
-    FocusTab { plugin_id: String, surface: String },
-}
+pub use crate::host_request::{HostRequest, NotifyAction};
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]

@@ -2,7 +2,7 @@
 
 use crate::event::is_hidden;
 use crate::model::Core;
-use crate::plugins::HostRequest;
+use crate::host_request::HostRequest;
 
 /// The most a plugin may type at once.
 pub const MAX_TYPED: usize = 4096;
@@ -50,8 +50,9 @@ impl Core {
                 }
                 Some(PtyWrite { surface_id: surface.clone(), bytes: text.as_bytes().to_vec(), enter: *enter })
             }
+            #[cfg(feature = "plugins")]
+            HostRequest::ShowPanel { .. } => None,
             HostRequest::Notify { .. }
-            | HostRequest::ShowPanel { .. }
             | HostRequest::ClosePanel { .. }
             | HostRequest::HoldNotifications { .. }
             | HostRequest::HoldSummary { .. }

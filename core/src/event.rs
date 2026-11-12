@@ -445,14 +445,18 @@ mod tests {
                 assert!(is_hidden(c), "{:x}", c as u32);
                 assert_eq!(clean(&s), "ls", "{:x}", c as u32);
                 assert_eq!(visible(&s), format!("l\\u{{{:x}}}s", c as u32));
-                assert!(!crate::plugin_manifest::plain_line(&s, 10), "{:x}", c as u32);
-                assert_eq!(crate::plugin_manifest::escape_hidden(&s), format!("l\\u{{{:x}}}s", c as u32));
+                #[cfg(feature = "plugins")]
+                {
+                    assert!(!crate::plugin_manifest::plain_line(&s, 10), "{:x}", c as u32);
+                    assert_eq!(crate::plugin_manifest::escape_hidden(&s), format!("l\\u{{{:x}}}s", c as u32));
+                }
             }
         }
         for v in table["shown"].as_array().unwrap() {
             let c = char::from_u32(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap()).unwrap();
             let s = format!("l{c}s");
             assert!(!is_hidden(c) && clean(&s) == s && visible(&s) == s, "{:x}", c as u32);
+            #[cfg(feature = "plugins")]
             assert!(crate::plugin_manifest::plain_line(&s, 10) && crate::plugin_manifest::escape_hidden(&s) == s, "{:x}", c as u32);
         }
     }

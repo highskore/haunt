@@ -724,7 +724,6 @@ impl Core {
 
     /// A plugin may type into `surface_id` only while it is still the selected tab and no prompt, live
     /// or possibly still on screen, is there.
-    #[cfg(feature = "plugins")]
     pub(crate) fn may_type_into(&self, surface_id: &str) -> bool {
         let st = lock(&self.state);
         st.selected.as_deref() == Some(surface_id)

@@ -79,6 +79,7 @@ pub struct ExecDone {
 #[derive(Debug, Clone)]
 pub enum JobOutcome {
     Exec(Result<ExecOutput, String>),
+    #[cfg(feature = "plugins")]
     Tree(Result<crate::plugin_fs::Tree, String>),
 }
 

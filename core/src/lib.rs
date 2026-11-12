@@ -9,6 +9,7 @@ pub mod decorate;
 pub mod event;
 mod wire;
 pub mod git;
+pub mod host_request;
 mod ids;
 #[cfg(test)]
 mod testdir;
@@ -35,7 +36,6 @@ pub mod plugin_theme;
 #[cfg(feature = "plugins")]
 pub mod plugins;
 pub mod progress;
-#[cfg(feature = "plugins")]
 pub mod ptygate;
 mod serve;
 pub mod session;
