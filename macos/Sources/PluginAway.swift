@@ -7,8 +7,14 @@ final class Presence {
     static let every: TimeInterval = 5
     /// (locked or asleep, seconds since the last input)
     var report: ((Bool, UInt64) -> Void)?
-    /// Haunt became the active app: a sheet a plugin asked for on the user's return may show now.
+    /// Haunt became the active app: a sheet a plugin asked for on the user's return is due a second later.
     var activated: (() -> Void)?
+    /// That second later, with whether the user typed into Haunt meanwhile (then the sheet is dropped).
+    var returnSheetsDue: ((Bool) -> Void)?
+    static let returnSheetDelay: TimeInterval = 1
+    private var typedMonitor: Any?
+    private var due: DispatchWorkItem?
+    private var typed = false
     private var locked = false, asleep = false
     private var timer: Timer?
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
@@ -29,7 +35,7 @@ final class Presence {
             on(ws, NSWorkspace.screensDidSleepNotification.rawValue) { $0.asleep = true },
             on(ws, NSWorkspace.screensDidWakeNotification.rawValue) { $0.asleep = false },
             (NotificationCenter.default, NotificationCenter.default.addObserver(
-                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.activated?() }),
+                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.becameActive() }),
         ]
         timer = Timer.scheduledTimer(withTimeInterval: Self.every, repeats: true) { [weak self] _ in self?.tick() }
     }
@@ -37,8 +43,35 @@ final class Presence {
     func stop() {
         timer?.invalidate()
         timer = nil
+        endDue()
         for (c, o) in observers { c.removeObserver(o) }
         observers = []
+    }
+
+    private func becameActive() {
+        activated?()
+        endDue()
+        typed = false
+        // Watches only: the keys still reach whatever has focus.
+        typedMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            self?.typed = true
+            return e
+        }
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let typed = self.typed
+            self.endDue()
+            self.returnSheetsDue?(typed)
+        }
+        due = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.returnSheetDelay, execute: item)
+    }
+
+    private func endDue() {
+        due?.cancel()
+        due = nil
+        if let m = typedMonitor { NSEvent.removeMonitor(m) }
+        typedMonitor = nil
     }
 
     private func tick() {

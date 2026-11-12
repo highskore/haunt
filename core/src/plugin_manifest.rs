@@ -560,6 +560,34 @@ mod tests {
     }
 
     #[test]
+    fn every_capability_on_its_own_has_a_consent_line() {
+        // No `..` in the literal or the destructure: a new capability doesn't build until it is listed here.
+        let all = Capabilities {
+            events: vec!["agent.tool".into()], event_details: true, pty_write: true, pty_type: true, notifications: true,
+            decisions_read: true, allowlist_suggest: true, sidebar: true, decorate: true, timer: true, panel: true,
+            notify_hold: true, sidebar_top: true, keys: true, away: true, fs_read: vec!["${cwd}/a".into()],
+            fs_write: vec!["${cwd}/a".into()], net: vec!["a.example".into()], hid: vec![1.into()], exec: vec!["git-status".into()],
+            terminal_read: true, clipboard: Some("read".into()), theme: true,
+        };
+        macro_rules! alone {
+            ($($f:ident),*) => {{
+                let Capabilities { $($f: _),* } = &all;
+                vec![$((stringify!($f), Capabilities { $f: all.$f.clone(), ..Default::default() })),*]
+            }};
+        }
+        let each = alone!(events, event_details, pty_write, pty_type, notifications, decisions_read, allowlist_suggest, sidebar, decorate,
+            timer, panel, notify_hold, sidebar_top, keys, away, fs_read, fs_write, net, hid, exec, terminal_read, clipboard, theme);
+        for (name, caps) in each {
+            // Refused at parse, so never shown.
+            if ["net", "hid", "clipboard"].contains(&name) {
+                continue;
+            }
+            assert!(!caps.describe().is_empty(), "{name} has no consent line");
+            assert!(!caps.added_since(&Capabilities::default()).is_empty(), "{name} gained by an update asks nothing");
+        }
+    }
+
+    #[test]
     fn growth_lists_only_new_capabilities() {
         let old = Capabilities { events: vec!["agent.tool".into()], ..Default::default() };
         let new = Capabilities { events: vec!["agent.tool".into(), "agent.task".into()], pty_write: true, ..Default::default() };

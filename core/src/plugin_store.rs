@@ -996,11 +996,20 @@ impl PluginSet {
         Some((back_ms.is_none(), back_ms.unwrap_or(0)))
     }
 
-    /// Haunt became the active app: sheets held from the user's return show now.
-    pub fn app_activated(&mut self) {
+    /// Haunt became the active app: sheets held from the user's return are due `RETURN_SHEET_DELAY` later.
+    pub fn app_activated(&mut self, now: std::time::Instant) {
         for (caps, p) in &mut self.plugins {
             if caps.away && p.disabled().is_none() {
-                let _ = p.app_activated();
+                p.app_activated(now);
+            }
+        }
+    }
+
+    /// Shows the held return sheets now due, or drops them if the user `typed` into Haunt since it became active.
+    pub fn return_sheets_due(&mut self, typed: bool, now: std::time::Instant) {
+        for (caps, p) in &mut self.plugins {
+            if caps.away && p.disabled().is_none() {
+                let _ = p.return_sheet_due(now, typed);
             }
         }
     }

@@ -295,9 +295,14 @@ impl HauntPlugins {
         haunt_core::sync::lock(&self.set).presence(locked, idle_secs, std::time::Instant::now());
     }
 
-    /// Haunt became the active app (`NSApplication.didBecomeActive`).
+    /// Haunt became the active app (`NSApplication.didBecomeActive`); call `return_sheets_due` a second later.
     pub fn app_activated(&self) {
-        haunt_core::sync::lock(&self.set).app_activated();
+        haunt_core::sync::lock(&self.set).app_activated(std::time::Instant::now());
+    }
+
+    /// A second after `app_activated`: held return sheets show, or go if the user `typed` into Haunt since.
+    pub fn return_sheets_due(&self, typed: bool) {
+        haunt_core::sync::lock(&self.set).return_sheets_due(typed, std::time::Instant::now());
     }
 
     /// The plugin that has `keys.hover-hold`, if any.

@@ -514,7 +514,8 @@ world plugin {
   export on-exec: func(job: u64, outcome: result<output, string>);
   // Capability `away`. The user stepped away (screen locked or asleep, or no input for config.toml's
   // `[presence] away_after` minutes, 10 by default) or came back; `away-ms` is how long since their last input,
-  // set when `away` is false. A sheet shown on the return waits until the user switches to haunt.
+  // set when `away` is false. A sheet shown on the return waits until the user switches to haunt,
+  // and is dropped if they type first or don't come within 10 minutes.
   export on-away-changed: func(away: bool, away-ms: u64);
   // See `keys.hover-hold`. Only the plugin holding it gets it.
   export on-hover-hold: func(held: bool, surface: string);

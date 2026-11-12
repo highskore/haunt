@@ -263,8 +263,10 @@ pub struct HostState {
     read_only: Option<String>,
     /// Set while the plugin hears that the user came back.
     returning: bool,
-    /// The sheet it asked for then, until the user switches to Haunt.
-    return_sheet: Option<Panel>,
+    /// The sheet it asked for then and when, until the user switches to Haunt.
+    return_sheet: Option<(Panel, Instant)>,
+    /// When Haunt became active with a sheet held: it shows `RETURN_SHEET_DELAY` later.
+    activated_at: Option<Instant>,
     /// Set while this plugin has `keys.hover-hold`.
     hover_hold: bool,
     /// Action ids of this plugin's latest hold summary: the only `"hold"` replies `notify_action` takes.
@@ -324,6 +326,7 @@ impl HostState {
             hover_hold: false,
             returning: false,
             return_sheet: None,
+            activated_at: None,
             reads_left: 0,
             read_only: None,
             exec: caps.exec.clone(),
@@ -505,6 +508,11 @@ impl wtyping::Host for HostState {
 }
 
 const READS_PER_ACTION: u32 = 8;
+/// A held return sheet shows this long after Haunt becomes active, so it doesn't take the first keys
+/// typed after switching.
+pub const RETURN_SHEET_DELAY: Duration = Duration::from_secs(1);
+/// A held return sheet the user never switched to Haunt for is dropped after this.
+const RETURN_SHEET_TTL: Duration = Duration::from_secs(10 * 60);
 const READ_LINES_MAX: u32 = 50;
 const READ_LINE_CHARS: usize = 512;
 
@@ -840,10 +848,11 @@ impl wpanel::Host for HostState {
             return Err("too many pending requests".into());
         }
         // Unasked, a sheet would take the keys the user is typing; it comes up as a card instead. One
-        // asked for as the user comes back waits for them to switch to Haunt (`show_return_sheet`).
+        // asked for as the user comes back waits for them to switch to Haunt (`return_sheet_due`).
         if panel.placement == PanelPlacement::Sheet && !self.user_call {
             if self.returning {
-                self.return_sheet = Some(panel);
+                self.return_sheet = Some((panel, Instant::now()));
+                self.activated_at = None;
                 return Ok(());
             }
             panel.placement = PanelPlacement::Card;
@@ -852,8 +861,8 @@ impl wpanel::Host for HostState {
     }
 
     fn close(&mut self, id: String) {
-        if self.return_sheet.as_ref().is_some_and(|p| p.id == id) {
-            self.return_sheet = None;
+        if self.return_sheet.as_ref().is_some_and(|(p, _)| p.id == id) {
+            self.drop_return_sheet();
         }
         self.release_sheet(&id);
         if self.panels.close(&id) {
@@ -881,10 +890,40 @@ impl HostState {
         self.request(HostRequest::ShowPanel { plugin_id: self.id.clone(), plugin_name, panel })
     }
 
-    /// The user switched to Haunt: the sheet the plugin asked for as they came back shows now.
-    fn show_return_sheet(&mut self) -> Result<(), String> {
+    fn drop_return_sheet(&mut self) {
+        self.return_sheet = None;
+        self.activated_at = None;
+    }
+
+    /// Haunt became active: a held sheet is due `RETURN_SHEET_DELAY` later.
+    fn return_activated(&mut self, now: Instant) {
+        self.expire_return_sheet(now);
+        if self.return_sheet.is_some() {
+            self.activated_at = Some(now);
+        }
+    }
+
+    fn expire_return_sheet(&mut self, now: Instant) {
+        if self.return_sheet.as_ref().is_some_and(|(_, held)| now.saturating_duration_since(*held) >= RETURN_SHEET_TTL) {
+            self.drop_return_sheet();
+        }
+    }
+
+    /// The held sheet shows once its delay has passed, unless the user `typed` into Haunt meanwhile,
+    /// which drops it.
+    fn return_sheet_due(&mut self, now: Instant, typed: bool) -> Result<(), String> {
+        self.expire_return_sheet(now);
+        let Some(at) = self.activated_at else { return Ok(()) };
+        if typed {
+            self.drop_return_sheet();
+            return Ok(());
+        }
+        if now.saturating_duration_since(at) < RETURN_SHEET_DELAY {
+            return Ok(());
+        }
+        self.activated_at = None;
         match self.return_sheet.take() {
-            Some(p) => self.show_panel(p),
+            Some((p, _)) => self.show_panel(p),
             None => Ok(()),
         }
     }
@@ -1365,7 +1404,7 @@ impl LoadedPlugin {
     /// for `app_activated`.
     pub fn away_changed(&mut self, back_ms: Option<u64>) -> Result<(), PluginError> {
         let Some(ms) = back_ms else {
-            self.store.data_mut().return_sheet = None;
+            self.store.data_mut().drop_return_sheet();
             return self.call(|b, s| b.call_on_away_changed(s, true, 0));
         };
         self.store.data_mut().returning = true;
@@ -1374,9 +1413,15 @@ impl LoadedPlugin {
         res
     }
 
-    /// The user switched to Haunt, a gesture of theirs: a sheet held from their return shows.
-    pub fn app_activated(&mut self) -> Result<(), PluginError> {
-        self.store.data_mut().show_return_sheet().map_err(PluginError)
+    /// The user switched to Haunt at `now`, a gesture of theirs: a sheet held from their return is due
+    /// `RETURN_SHEET_DELAY` later (`return_sheet_due`).
+    pub fn app_activated(&mut self, now: Instant) {
+        self.store.data_mut().return_activated(now);
+    }
+
+    /// Shows a held sheet whose delay has passed, or drops it if the user `typed` into Haunt meanwhile.
+    pub fn return_sheet_due(&mut self, now: Instant, typed: bool) -> Result<(), PluginError> {
+        self.store.data_mut().return_sheet_due(now, typed).map_err(PluginError)
     }
 
     /// A job this instance started finished: `on-exec(job, outcome)`. Another instance's job is dropped.
@@ -2502,21 +2547,48 @@ mod tests {
         use wpanel::Host as _;
         let core = crate::Core::new(&*tempdir("return"));
         let mut a = HostState::new("dev.x.welcome", &Capabilities { panel: true, away: true, ..Default::default() }, None, None, Some(core.handle()));
-        a.returning = true;
-        a.show("hi".into(), wpanel::Placement::Sheet, "Welcome back".into(), vec![]).unwrap();
+        let held = |a: &mut HostState, title: &str| {
+            a.returning = true;
+            a.show("hi".into(), wpanel::Placement::Sheet, title.into(), vec![]).unwrap();
+            a.returning = false;
+        };
+        let shown = |a: &HostState, title: &str| {
+            a.outbox.iter().any(|r| matches!(r, HostRequest::ShowPanel { panel, .. } if panel.title == title && panel.placement == PanelPlacement::Sheet))
+        };
+        held(&mut a, "Welcome back");
         a.show("note".into(), wpanel::Placement::Card, "Note".into(), vec![]).unwrap();
-        a.returning = false;
         assert!(matches!(&a.outbox[..], [HostRequest::ShowPanel { panel, .. }] if panel.id == "note"), "no sheet while they may be typing elsewhere");
-        a.show_return_sheet().unwrap();
-        assert!(matches!(a.outbox.last(), Some(HostRequest::ShowPanel { panel, .. }) if panel.id == "hi" && panel.placement == PanelPlacement::Sheet));
-        a.show_return_sheet().unwrap();
+        let t = Instant::now();
+        a.return_sheet_due(t + RETURN_SHEET_DELAY, false).unwrap();
+        assert!(!shown(&a, "Welcome back"), "not before Haunt is active");
+        a.return_activated(t);
+        a.return_sheet_due(t + RETURN_SHEET_DELAY / 2, false).unwrap();
+        assert!(!shown(&a, "Welcome back"), "not in the first second");
+        a.return_sheet_due(t + RETURN_SHEET_DELAY, false).unwrap();
+        assert!(shown(&a, "Welcome back"));
+        a.return_sheet_due(t + RETURN_SHEET_DELAY * 2, false).unwrap();
         assert_eq!(a.outbox.len(), 2, "once");
-        a.returning = true;
-        a.show("hi".into(), wpanel::Placement::Sheet, "Again".into(), vec![]).unwrap();
-        a.returning = false;
+
+        held(&mut a, "Typed over");
+        let t = Instant::now();
+        a.return_activated(t);
+        a.return_sheet_due(t + RETURN_SHEET_DELAY, true).unwrap();
+        a.return_activated(t + RETURN_SHEET_DELAY);
+        a.return_sheet_due(t + RETURN_SHEET_DELAY * 2, false).unwrap();
+        assert!(!shown(&a, "Typed over"), "typing into Haunt in that second drops it");
+
+        held(&mut a, "Stale");
+        let t = Instant::now() + RETURN_SHEET_TTL;
+        a.return_activated(t);
+        a.return_sheet_due(t + RETURN_SHEET_DELAY, false).unwrap();
+        assert!(!shown(&a, "Stale"), "held ten minutes, it expires");
+
+        held(&mut a, "Again");
         a.close("hi".into());
-        a.show_return_sheet().unwrap();
-        assert!(!a.outbox.iter().any(|r| matches!(r, HostRequest::ShowPanel { panel, .. } if panel.title == "Again")), "closed before it showed");
+        let t = Instant::now();
+        a.return_activated(t);
+        a.return_sheet_due(t + RETURN_SHEET_DELAY, false).unwrap();
+        assert!(!shown(&a, "Again"), "closed before it showed");
     }
 
     #[test]
