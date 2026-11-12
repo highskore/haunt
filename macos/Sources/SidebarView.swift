@@ -644,8 +644,9 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             let ink = fx.needsPill ? Layers.Run(rect: run, ink: Theme.current.app.pillFg, on: Theme.current.app.pillBg) : Layers.Run(rect: run, ink: Tok.Color.needs)
             Layers.draw("status.needs", run, within: bounds, textRun: run, text: [ink], base: base, state: state, in: ctx)
         }
-        // After the row's last layer: the icon's glyph is text. Its layers stay left of the name, on line 1.
-        drawIcon(row.kind, in: icon, band: NSRect(x: box.minX, y: y, width: col2 - box.minX, height: rowLine1).intersection(rowClip), ctx: ctx)
+        // After the row's last layer: the icon's glyph is text. Its layers stay in the row, left of column 2, where
+        // no text is: every line but the icon starts at col2.
+        drawIcon(row.kind, in: icon, band: NSRect(x: box.minX, y: box.minY, width: col2 - box.minX, height: box.height).intersection(rowClip), ctx: ctx)
 
         if l.hovered {
             let r = closeRect(top: top)

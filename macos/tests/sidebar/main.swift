@@ -107,7 +107,8 @@ do {
     let lh = Tok.Font.baseLine, gapY = Tok.Size.rowGap[0], line1 = max(Tok.Size.iconSize, Tok.Size.rowName * lh, Tok.Size.rowRight * lh)
     if let box = clips["row"]?.first, let icon = clips["icon"]?.first, let bar = clips["bar.fill"]?.first {
         let col2 = Theme.current.effects.rowInset + Tok.Size.rowPad[1] + Tok.Size.iconSize + Tok.Size.rowGap[1], top = box.minY + Tok.Size.rowPad[0]
-        check(icon.maxX <= col2 + 0.01 && icon.minY >= top - 0.01 && icon.maxY <= top + line1 + 0.01, "the icon's layers stay left of the name on line 1: \(icon)")
+        check(icon.maxX <= col2 + 0.01 && icon.minY >= box.minY - 0.01 && icon.maxY <= box.maxY + 0.01, "the icon's layers stay in the row, left of column 2: \(icon)")
+        check(icon.height > Tok.Size.iconSize, "with room for a ring past the icon: \(icon)")
         check(bar.minY >= top + line1 + gapY + Tok.Size.rowMeta * lh - 0.01 && bar.maxY <= box.maxY + 0.01, "the bar's stay under the meta line, in the row: \(bar)")
     } else {
         check(false, "drew the row, icon and bar: \(clips.keys.sorted())")

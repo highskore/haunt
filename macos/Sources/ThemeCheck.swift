@@ -72,7 +72,7 @@ enum ThemeCheck {
                 }
                 let icon = CGRect(x: inset + pad[1], y: y + pad[0], width: Tok.Size.iconSize, height: Tok.Size.iconSize)
                 let col2 = icon.maxX + Tok.Size.rowGap[1]
-                Layers.draw("icon", icon, within: CGRect(x: box.minX, y: line1.minY, width: col2 - box.minX, height: line1.height).intersection(box),
+                Layers.draw("icon", icon, within: CGRect(x: box.minX, y: box.minY, width: col2 - box.minX, height: box.height),
                             state: state, index: r, in: ctx)
                 let run = CGRect(x: cw - inset - pad[1] - 50, y: y + pad[0], width: 50, height: Tok.Size.rowRight * Tok.Font.baseLine)
                 let needs = fx.needsPill ? [Layers.Run(rect: run, ink: app.pillFg, on: app.pillBg)] : runs(run, Tok.Color.needs)
