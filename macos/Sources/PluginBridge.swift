@@ -42,6 +42,7 @@ final class PluginBridge {
             hold.release()
             hover.owner = nil
             if plugins == nil { presence.stop() } else { presence.start() }
+            // The old set never lets go of its Dock, glow and title spots: this reset is what clears them.
             slots = PluginSlots()
             dock.reset()
             glow.hide()
