@@ -442,6 +442,14 @@ enum HostRequest: Equatable, Hashable {
     case glowShow(pluginId: String, label: String?)
     case glowHide(pluginId: String)
     case titleSet(pluginId: String, text: String?)
+    case soundPlay(pluginId: String, sound: SoundName, pitch: Int32, volume: Float)
+    case soundAmbient(pluginId: String, sound: SoundName, level: Float)
+    case say(pluginId: String, text: String)
+    case sayStop(pluginId: String)
+}
+
+enum SoundName: Equatable, Hashable {
+    case chime, bell, rain
 }
 
 struct PluginKey: Equatable, Hashable {

@@ -1,4 +1,4 @@
-//! The `dock`, `glow` and `title` imports: checks, rate limits and the one-owner rule. A child of `plugins`, so it implements
+//! The `dock`, `glow`, `title`, `sound` and `speech` imports: checks, rate limits and the one-owner rule. A child of `plugins`, so it implements
 //! the WIT host traits on `HostState`.
 
 use std::collections::VecDeque;
@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 pub(super) use super::bindings::haunt::plugin::dock as wdock;
 pub(super) use super::bindings::haunt::plugin::glow as wglow;
 pub(super) use super::bindings::haunt::plugin::title as wtitle;
+pub(super) use super::bindings::haunt::plugin::sound as wsound;
+pub(super) use super::bindings::haunt::plugin::speech as wspeech;
 use super::{HostRequest, HostState};
 
 /// The app-wide spots one plugin at a time may own: the first to set one keeps it until it clears it,
@@ -92,6 +94,12 @@ pub(crate) struct Fx {
     dock_rate: Rate,
     glow_rate: Rate,
     title_rate: Rate,
+    sound_rate: Rate,
+    ambient_rate: Rate,
+    say_rate: Rate,
+    /// Whether this plugin has a loop playing, or may still be speaking, for `release_fx` to stop.
+    ambient_on: bool,
+    spoke: bool,
 }
 
 impl Default for Fx {
@@ -102,6 +110,11 @@ impl Default for Fx {
             dock_rate: Rate::new(SHOWS_PER_SEC, Duration::from_secs(1)),
             glow_rate: Rate::new(SHOWS_PER_SEC, Duration::from_secs(1)),
             title_rate: Rate::new(SHOWS_PER_SEC, Duration::from_secs(1)),
+            sound_rate: Rate::new(SOUNDS_PER_SEC, Duration::from_secs(1)),
+            ambient_rate: Rate::new(SOUNDS_PER_SEC, Duration::from_secs(1)),
+            say_rate: Rate::new(1, SAY_EVERY),
+            ambient_on: false,
+            spoke: false,
         }
     }
 }
@@ -171,6 +184,12 @@ impl HostState {
         }
         if self.stage.release(Slot::Title, &self.id) {
             self.outbox.push(HostRequest::TitleSet { plugin_id: self.id.clone(), text: None });
+        }
+        if std::mem::take(&mut self.fx.ambient_on) {
+            self.outbox.push(HostRequest::SoundAmbient { plugin_id: self.id.clone(), sound: SoundName::Rain, level: 0.0 });
+        }
+        if std::mem::take(&mut self.fx.spoke) {
+            self.outbox.push(HostRequest::SayStop { plugin_id: self.id.clone() });
         }
     }
 
@@ -255,6 +274,79 @@ impl wglow::Host for HostState {
     fn hide(&mut self) {
         if self.stage.release(Slot::Glow, &self.id) {
             self.outbox.push(HostRequest::GlowHide { plugin_id: self.id.clone() });
+        }
+    }
+}
+
+pub const SOUNDS_PER_SEC: usize = 4;
+pub const PITCH_MAX: i32 = 12;
+pub const SAY_MAX: usize = 200;
+const SAY_EVERY: Duration = Duration::from_secs(2);
+
+/// Haunt's bundled sounds, which the app synthesises; a plugin never plays audio of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
+pub enum SoundName {
+    Chime,
+    Bell,
+    Rain,
+}
+
+fn sound_name(n: wsound::Name) -> SoundName {
+    match n {
+        wsound::Name::Chime => SoundName::Chime,
+        wsound::Name::Bell => SoundName::Bell,
+        wsound::Name::Rain => SoundName::Rain,
+    }
+}
+
+/// 0 to 1; NaN, infinities and anything outside are refused, not clamped.
+fn unit(what: &str, v: f32) -> Result<f32, String> {
+    if v.is_finite() && (0.0..=1.0).contains(&v) { Ok(v) } else { Err(format!("{what} must be 0 to 1")) }
+}
+
+impl wsound::Host for HostState {
+    fn play(&mut self, sound: wsound::Name, pitch: i32, volume: f32) -> Result<(), String> {
+        if !(-PITCH_MAX..=PITCH_MAX).contains(&pitch) {
+            return Err(format!("pitch must be -{PITCH_MAX} to {PITCH_MAX} semitones"));
+        }
+        let volume = unit("volume", volume)?;
+        if !self.fx.sound_rate.ok() {
+            return Err(format!("at most {SOUNDS_PER_SEC} sounds a second"));
+        }
+        self.request(HostRequest::SoundPlay { plugin_id: self.id.clone(), sound: sound_name(sound), pitch, volume })
+    }
+
+    fn ambient(&mut self, sound: wsound::Name, level: f32) -> Result<(), String> {
+        let level = unit("level", level)?;
+        if !self.fx.ambient_rate.ok() {
+            return Err(format!("at most {SOUNDS_PER_SEC} ambient changes a second"));
+        }
+        self.request(HostRequest::SoundAmbient { plugin_id: self.id.clone(), sound: sound_name(sound), level })?;
+        self.fx.ambient_on = level > 0.0;
+        Ok(())
+    }
+}
+
+impl wspeech::Host for HostState {
+    fn say(&mut self, text: String) -> Result<(), String> {
+        // `[[` opens an embedded speech command (rate, voice, volume) in the system synthesiser.
+        let mut text: String = text.chars().take(SAY_MAX * 4).collect();
+        while text.contains("[[") {
+            text = text.replace("[[", "[ [");
+        }
+        let text = super::plain_opt(Some(text), SAY_MAX).ok_or("nothing to say")?;
+        if !self.fx.say_rate.ok() {
+            return Err("at most one utterance every 2 seconds".into());
+        }
+        self.request(HostRequest::Say { plugin_id: self.id.clone(), text })?;
+        self.fx.spoke = true;
+        Ok(())
+    }
+
+    fn stop(&mut self) {
+        if std::mem::take(&mut self.fx.spoke) {
+            let _ = self.request(HostRequest::SayStop { plugin_id: self.id.clone() });
         }
     }
 }
@@ -512,5 +604,84 @@ mod title_tests {
             wtitle::Host::set(&mut a, Some(format!("{i}"))).unwrap();
         }
         assert!(wtitle::Host::set(&mut a, Some("x".into())).unwrap_err().contains("times a second"));
+    }
+}
+
+#[cfg(test)]
+mod sound_tests {
+    use super::super::{Capabilities, PluginHost};
+    use super::tests::state;
+    use super::*;
+    use wasmtime::component::Component;
+
+    const STOP_IMPORT: &str = r#"(component (import "haunt:plugin/speech@0.5.0" (instance (export "stop" (func)))))"#;
+    const AMBIENT_IMPORT: &str = r#"(component (import "haunt:plugin/sound@0.5.0" (instance
+        (type $n (enum "chime" "bell" "rain"))
+        (export "name" (type $ne (eq $n)))
+        (export "ambient" (func (param "sound" $ne) (param "level" f32) (result (result (error string))))))))"#;
+
+    #[test]
+    fn sound_and_speech_are_separate_capabilities() {
+        let host = PluginHost::new().unwrap();
+        let (speech, sound) = (Component::new(&host.engine, STOP_IMPORT).unwrap(), Component::new(&host.engine, AMBIENT_IMPORT).unwrap());
+        let e = host.check_links(&speech, &Capabilities { sound: true, notifications: true, ..Default::default() }).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/speech"), "{e}");
+        let e = host.check_links(&sound, &Capabilities { speech: true, notifications: true, ..Default::default() }).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/sound"), "{e}");
+        host.check_links(&speech, &Capabilities { speech: true, ..Default::default() }).unwrap();
+        host.check_links(&sound, &Capabilities { sound: true, ..Default::default() }).unwrap();
+    }
+
+    #[test]
+    fn sounds_refuse_bad_numbers_and_are_rate_limited() {
+        let mut a = state("dev.haunt.a", &Stage::default());
+        for (pitch, volume) in [(13, 0.5), (-13, 0.5), (0, f32::NAN), (0, f32::INFINITY), (0, -0.1), (0, 1.01)] {
+            assert!(wsound::Host::play(&mut a, wsound::Name::Chime, pitch, volume).is_err(), "{pitch} {volume}");
+        }
+        assert!(a.outbox.is_empty());
+        for _ in 0..SOUNDS_PER_SEC {
+            wsound::Host::play(&mut a, wsound::Name::Bell, -12, 1.0).unwrap();
+        }
+        assert!(wsound::Host::play(&mut a, wsound::Name::Bell, 0, 0.2).unwrap_err().contains("a second"));
+        assert!(matches!(&a.outbox[0], HostRequest::SoundPlay { sound: SoundName::Bell, pitch: -12, .. }));
+        for level in [f32::NAN, 2.0, -1.0] {
+            assert!(wsound::Host::ambient(&mut a, wsound::Name::Rain, level).is_err(), "{level}");
+        }
+    }
+
+    #[test]
+    fn a_disabled_plugin_stops_its_loop_and_its_voice() {
+        let mut a = state("dev.haunt.a", &Stage::default());
+        wsound::Host::ambient(&mut a, wsound::Name::Rain, 0.3).unwrap();
+        wspeech::Host::say(&mut a, "build done".into()).unwrap();
+        a.outbox.clear();
+        a.release_fx();
+        assert!(matches!(&a.outbox[..], [HostRequest::SoundAmbient { level, .. }, HostRequest::SayStop { .. }] if *level == 0.0), "{:?}", a.outbox);
+        a.outbox.clear();
+        a.release_fx();
+        assert!(a.outbox.is_empty(), "nothing left to stop");
+        wsound::Host::ambient(&mut a, wsound::Name::Rain, 0.0).unwrap();
+        a.outbox.clear();
+        a.release_fx();
+        assert!(a.outbox.is_empty(), "a loop set to 0 is already off");
+    }
+
+    #[test]
+    fn speech_is_plain_capped_and_one_every_two_seconds() {
+        let mut a = state("dev.haunt.a", &Stage::default());
+        assert!(wspeech::Host::say(&mut a, " \u{200b}\u{202e}\n".into()).unwrap_err().contains("nothing"));
+        wspeech::Host::say(&mut a, format!("tests\u{202e} passed\u{1b}]0;x\u{7}\n{}", "z".repeat(300))).unwrap();
+        let [HostRequest::Say { text, .. }] = &a.outbox[..] else { panic!("{:?}", a.outbox) };
+        assert_eq!(text.chars().count(), SAY_MAX);
+        assert!(text.starts_with("tests passed]0;x z"), "{text}");
+        assert!(wspeech::Host::say(&mut a, "again".into()).unwrap_err().contains("2 seconds"));
+        a.fx.say_rate = Rate::new(1, SAY_EVERY);
+        a.outbox.clear();
+        wspeech::Host::say(&mut a, "[[[rate 900]][[volm 1]]hi".into()).unwrap();
+        assert!(matches!(&a.outbox[..], [HostRequest::Say { text, .. }] if !text.contains("[[")), "{:?}", a.outbox);
+        assert!(matches!(&a.outbox[..], [HostRequest::Say { text, .. }] if text == "[ [ [rate 900]][ [volm 1]]hi"), "{:?}", a.outbox);
+        wspeech::Host::stop(&mut a);
+        wspeech::Host::stop(&mut a);
+        assert_eq!(a.outbox.iter().filter(|r| matches!(r, HostRequest::SayStop { .. })).count(), 1);
     }
 }

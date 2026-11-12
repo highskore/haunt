@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -202,5 +203,217 @@ private final class GlowView: NSView {
             a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             l.add(a, forKey: "breathe")
         }
+    }
+}
+
+/// Haunt's own sounds for plugins (`HostRequest.soundPlay`, `.soundAmbient`), synthesised here, never a file:
+/// a soft sine chime and bell, and rain made from filtered noise. One loop per plugin. The engine plays to the
+/// system output and follows it when that changes, and pauses when nothing has played for a while.
+final class PluginSound {
+    private static let rate = 44_100.0
+    /// A plugin's full volume is still a quiet sound.
+    private static let gain: Float = 0.25
+    private static let voices = 4
+    private static let loopSeconds = 4.0
+
+    var enabled = true {
+        didSet { if !enabled { stopAll() } }
+    }
+    private let engine = AVAudioEngine()
+    private let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
+    private var shots: [AVAudioPlayerNode] = []
+    private var nextShot = 0
+    private var loops: [String: (node: AVAudioPlayerNode, sound: SoundName)] = [:]
+    private var buffers: [String: AVAudioPCMBuffer] = [:]
+    private var idle: Timer?
+    private var observer: NSObjectProtocol?
+
+    init() {
+        observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) {
+            [weak self] _ in self?.outputChanged()
+        }
+    }
+
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    func play(_ sound: SoundName, pitch: Int32, volume: Float) {
+        guard enabled, volume > 0 else { return }
+        if shots.isEmpty {
+            shots = (0..<Self.voices).map { _ in attachNode() }
+        }
+        guard start() else { return }
+        let node = shots[nextShot]
+        nextShot = (nextShot + 1) % shots.count
+        node.stop()
+        node.volume = volume * Self.gain
+        node.scheduleBuffer(buffer(sound, pitch: Int(pitch), loop: false))
+        node.play()
+        armIdle()
+    }
+
+    func ambient(pluginId: String, _ sound: SoundName, level: Float) {
+        guard enabled, level > 0 else {
+            stopLoop(pluginId)
+            return
+        }
+        let loop = loops[pluginId] ?? (attachNode(), sound)
+        guard start() else { return }
+        if loops[pluginId] == nil || loop.sound != sound || !loop.node.isPlaying {
+            loop.node.stop()
+            loop.node.scheduleBuffer(buffer(sound, pitch: 0, loop: true), at: nil, options: .loops)
+        }
+        loop.node.volume = level * Self.gain
+        loop.node.play()
+        loops[pluginId] = (loop.node, sound)
+        idle?.invalidate()
+    }
+
+    func stopAll() {
+        for id in Array(loops.keys) { stopLoop(id) }
+        for node in shots { node.stop() }
+        armIdle()
+    }
+
+    private func stopLoop(_ pluginId: String) {
+        guard let loop = loops.removeValue(forKey: pluginId) else { return }
+        loop.node.stop()
+        engine.detach(loop.node)
+        armIdle()
+    }
+
+    private func attachNode() -> AVAudioPlayerNode {
+        let node = AVAudioPlayerNode()
+        engine.attach(node)
+        engine.connect(node, to: engine.mainMixerNode, format: format)
+        return node
+    }
+
+    private func start() -> Bool {
+        if engine.isRunning { return true }
+        do {
+            engine.prepare()
+            try engine.start()
+            return true
+        } catch {
+            AppDelegate.logger.error("plugin sound: \(String(describing: error), privacy: .public)")
+            return false
+        }
+    }
+
+    /// The output device changed and the engine stopped: start again on the new one, loops and all.
+    private func outputChanged() {
+        guard !loops.isEmpty, start() else { return }
+        for (_, loop) in loops {
+            loop.node.stop()
+            loop.node.scheduleBuffer(buffer(loop.sound, pitch: 0, loop: true), at: nil, options: .loops)
+            loop.node.play()
+        }
+    }
+
+    /// Pauses the engine once no loop plays and the last one-shot (at most 3 s) is over.
+    private func armIdle() {
+        idle?.invalidate()
+        guard loops.isEmpty else { return }
+        idle = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+            guard let self, self.loops.isEmpty else { return }
+            self.engine.pause()
+        }
+    }
+
+    private func buffer(_ sound: SoundName, pitch: Int, loop: Bool) -> AVAudioPCMBuffer {
+        let key = "\(sound)/\(pitch)/\(loop)"
+        if let b = buffers[key] { return b }
+        let samples = Self.synth(sound, ratio: pow(2, Double(pitch) / 12), loop: loop)
+        let b = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))!
+        b.frameLength = b.frameCapacity
+        samples.withUnsafeBufferPointer { b.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
+        buffers[key] = b
+        return b
+    }
+
+    /// Soft sines with a 5 ms attack and an exponential fade; a loop of chime or bell repeats every 4 s.
+    private static func synth(_ sound: SoundName, ratio: Double, loop: Bool) -> [Float] {
+        func tone(_ base: Double, _ partials: [(ratio: Double, amp: Double, decay: Double)], seconds: Double) -> [Float] {
+            let n = Int(seconds * rate)
+            return (0..<n).map { i in
+                let t = Double(i) / rate
+                let attack = min(1, t / 0.005)
+                let s = partials.reduce(0.0) { $0 + $1.amp * exp(-t * $1.decay) * sin(2 * .pi * base * $1.ratio * t) }
+                return Float(attack * s * 0.5)
+            }
+        }
+        var out: [Float]
+        switch sound {
+        case .chime:
+            out = tone(1046.5 * ratio, [(1, 1, 3.5), (2, 0.3, 6), (3, 0.08, 9)], seconds: 1.6)
+        case .bell:
+            out = tone(523.25 * ratio, [(1, 1, 1.6), (2, 0.5, 2.4), (2.76, 0.3, 3.2), (5.4, 0.12, 6)], seconds: 3)
+        case .rain:
+            out = rain(seconds: loop ? loopSeconds : 2)
+        }
+        if loop, sound != .rain {
+            out += [Float](repeating: 0, count: max(0, Int(loopSeconds * rate) - out.count))
+        }
+        if !loop {
+            // Rain as a one-shot fades in and out.
+            let fade = min(out.count / 4, Int(0.3 * rate))
+            for i in 0..<fade {
+                let g = Float(i) / Float(fade)
+                out[i] *= g
+                out[out.count - 1 - i] *= g
+            }
+        }
+        return out
+    }
+
+    /// Low-passed noise with a few soft drops, its ends crossfaded so it loops without a click.
+    private static func rain(seconds: Double) -> [Float] {
+        var rng = SystemRandomNumberGenerator()
+        let fade = Int(0.2 * rate)
+        let n = Int(seconds * rate)
+        var lp: Double = 0
+        var drop: Double = 0
+        var out = (0..<(n + fade)).map { _ -> Float in
+            let white = Double.random(in: -1...1, using: &rng)
+            lp += 0.12 * (white - lp)
+            if Int.random(in: 0..<9000, using: &rng) == 0 { drop = Double.random(in: 0.2...0.5, using: &rng) }
+            drop *= 0.996
+            return Float((lp * 0.8 + white * drop * 0.3) * 0.5)
+        }
+        for i in 0..<fade {
+            let g = Float(i) / Float(fade)
+            out[i] = out[i] * g + out[n + i] * (1 - g)
+        }
+        out.removeLast(fade)
+        return out
+    }
+}
+
+/// A plugin's `speech.say` in the system voice (`HostRequest.say`): one utterance at a time, a new one cutting
+/// off the last. A plugin's `stop` only stops its own.
+final class PluginSpeech {
+    var enabled = true {
+        didSet { if !enabled { stopAll() } }
+    }
+    private let synth = AVSpeechSynthesizer()
+    private var speaker: String?
+
+    func say(pluginId: String, text: String) {
+        guard enabled else { return }
+        synth.stopSpeaking(at: .immediate)
+        speaker = pluginId
+        synth.speak(AVSpeechUtterance(string: text))
+    }
+
+    func stop(pluginId: String) {
+        guard speaker == pluginId else { return }
+        stopAll()
+    }
+
+    func stopAll() {
+        synth.stopSpeaking(at: .immediate)
+        speaker = nil
     }
 }

@@ -27,7 +27,7 @@ mod bindings {
 
 #[path = "plugin_fx.rs"]
 mod fx;
-pub use fx::{DockImage, Stage};
+pub use fx::{DockImage, Stage, SoundName};
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
@@ -2173,6 +2173,12 @@ impl PluginHost {
         }
         if caps.title {
             fx::wtitle::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if caps.sound {
+            fx::wsound::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if caps.speech {
+            fx::wspeech::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.fs_read_granted() || caps.fs_write_granted() {
             let mut fs = l.instance("haunt:plugin/fs@0.5.0")?;

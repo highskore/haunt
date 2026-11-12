@@ -16,6 +16,8 @@ final class PluginBridge {
     var onKeysChanged: (() -> Void)?
     let dock = PluginDock()
     let glow = PluginGlow()
+    let sound = PluginSound()
+    let speech = PluginSpeech()
     /// Shows the owning plugin's title-bar line; nil clears it.
     var onTitle: ((String?) -> Void)?
     private var title: String?
@@ -25,6 +27,8 @@ final class PluginBridge {
             dock.enabled = effects.dock
             glow.enabled = effects.glow
             glow.showsLabel = effects.glowLabel
+            sound.enabled = effects.sound
+            speech.enabled = effects.sound && effects.speech
             onTitle?(effects.title ? title : nil)
         }
     }
@@ -40,6 +44,8 @@ final class PluginBridge {
             dock.reset()
             glow.hide()
             setTitle(nil)
+            sound.stopAll()
+            speech.stopAll()
         }
     }
     private let core: CoreAPI
@@ -152,6 +158,14 @@ final class PluginBridge {
                 glow.hide()
             case let .titleSet(_, text):
                 setTitle(text)
+            case let .soundPlay(_, name, pitch, volume):
+                sound.play(name, pitch: pitch, volume: volume)
+            case let .soundAmbient(pluginId, name, level):
+                sound.ambient(pluginId: pluginId, name, level: level)
+            case let .say(pluginId, text):
+                speech.say(pluginId: pluginId, text: text)
+            case let .sayStop(pluginId):
+                speech.stop(pluginId: pluginId)
             case .ptyAnswer, .ptyType:
                 guard let w = core.gatePluginRequest(request: req), let route = PtyRoute(req, w) else { continue }
                 write(route)

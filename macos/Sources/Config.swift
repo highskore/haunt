@@ -814,8 +814,11 @@ struct PluginEffects: Equatable {
     var glow = true
     var glowLabel = true
     var title = true
+    /// Off mutes every plugin sound and speech.
+    var sound = true
+    var speech = true
 
-    static let keys: [String: WritableKeyPath<PluginEffects, Bool>] = ["dock": \.dock, "glow": \.glow, "glow_label": \.glowLabel, "title": \.title]
+    static let keys: [String: WritableKeyPath<PluginEffects, Bool>] = ["dock": \.dock, "glow": \.glow, "glow_label": \.glowLabel, "title": \.title, "sound": \.sound, "speech": \.speech]
 
     init() {}
 

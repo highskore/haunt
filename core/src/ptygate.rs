@@ -62,7 +62,14 @@ impl Core {
             | HostRequest::OpenUrl { .. }
             | HostRequest::FocusTab { .. } => None,
             #[cfg(feature = "plugins")]
-            HostRequest::DockShow { .. } | HostRequest::GlowShow { .. } | HostRequest::GlowHide { .. } | HostRequest::TitleSet { .. } => None,
+            HostRequest::DockShow { .. }
+            | HostRequest::GlowShow { .. }
+            | HostRequest::GlowHide { .. }
+            | HostRequest::TitleSet { .. }
+            | HostRequest::SoundPlay { .. }
+            | HostRequest::SoundAmbient { .. }
+            | HostRequest::Say { .. }
+            | HostRequest::SayStop { .. } => None,
         }
     }
 }

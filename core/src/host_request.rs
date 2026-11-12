@@ -47,4 +47,16 @@ pub enum HostRequest {
     /// One line of dim mono text in the title bar, next to its buttons; none clears it. Only from its owner.
     #[cfg(feature = "plugins")]
     TitleSet { plugin_id: String, text: Option<String> },
+    /// One of haunt's sounds, `pitch` semitones off, at `volume` 0 to 1.
+    #[cfg(feature = "plugins")]
+    SoundPlay { plugin_id: String, sound: crate::plugins::SoundName, pitch: i32, volume: f32 },
+    /// The plugin's one loop: `sound` at `level`, 0 to 1; 0 stops it.
+    #[cfg(feature = "plugins")]
+    SoundAmbient { plugin_id: String, sound: crate::plugins::SoundName, level: f32 },
+    /// Speak plain `text` in the system voice, cutting off whatever was being said.
+    #[cfg(feature = "plugins")]
+    Say { plugin_id: String, text: String },
+    /// Stop this plugin's utterance, if it is the one being spoken.
+    #[cfg(feature = "plugins")]
+    SayStop { plugin_id: String },
 }
