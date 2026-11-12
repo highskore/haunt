@@ -76,10 +76,12 @@ interface kv {
   delete: func(key: string);
 }
 
-// Always linked.
+// Always linked. `remove` and `retitle` act on this plugin's own commands and modes with that id.
 interface palette {
   mode: func(word: string, title: string);
   command: func(id: string, title: string, default-key: option<string>);
+  remove: func(id: string);
+  retitle: func(id: string, title: string) -> result<_, string>;
 }
 
 // Always linked. The app's colour tokens, read only; `on-theme-changed` follows a switch.

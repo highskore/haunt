@@ -496,11 +496,10 @@ impl HostState {
     /// An id with a hidden character is refused, and a title loses its hidden characters and is cut to
     /// `MAX_TITLE` characters, so no plugin can disguise a command or push the palette around.
     fn register(&mut self, id: String, title: String, default_key: Option<String>, is_mode: bool) {
-        let title: String = title.chars().filter(|&c| !is_hidden(c)).take(MAX_TITLE).collect();
-        if id.is_empty() || id.chars().any(is_hidden) || title.trim().is_empty() {
+        let Some(title) = palette_title(&title).filter(|_| !id.is_empty() && !id.chars().any(is_hidden)) else {
             self.push_log(format!("warn palette: {:?} refused: an empty or hidden-character id, or an empty title", visible(&id)));
             return;
-        }
+        };
         self.palette.retain(|p| !(p.id == id && p.is_mode == is_mode));
         if self.palette.len() >= MAX_PALETTE {
             self.push_log(format!("warn palette: more than {MAX_PALETTE} entries, {id} dropped"));
@@ -571,6 +570,40 @@ impl wpal::Host for HostState {
     fn command(&mut self, id: String, title: String, default_key: Option<String>) {
         self.register(id, title, default_key, false);
     }
+    fn remove(&mut self, id: String) {
+        let keyed = self.palette.iter().any(|p| p.id == id && p.default_key.is_some());
+        self.palette.retain(|p| p.id != id);
+        if keyed {
+            self.menu_changed();
+        }
+    }
+    fn retitle(&mut self, id: String, title: String) -> Result<(), String> {
+        let title = palette_title(&title).ok_or("a title needs a visible character")?;
+        let (mut found, mut keyed) = (false, false);
+        for p in self.palette.iter_mut().filter(|p| p.id == id) {
+            (p.title, found, keyed) = (title.clone(), true, keyed || p.default_key.is_some());
+        }
+        if keyed {
+            self.menu_changed();
+        }
+        found.then_some(()).ok_or_else(|| format!("no palette entry {:?}", visible(&id).chars().take(40).collect::<String>()))
+    }
+}
+
+impl HostState {
+    /// A command with a key is in the Window menu and the key map: one `keysChanged` rebuilds both,
+    /// however many changes queue before the app drains.
+    fn menu_changed(&mut self) {
+        if !self.outbox.iter().any(|r| matches!(r, HostRequest::KeysChanged { .. })) {
+            let _ = self.request(HostRequest::KeysChanged { plugin_id: self.id.clone() });
+        }
+    }
+}
+
+/// `title` without hidden characters, cut to `MAX_TITLE`; none if nothing visible is left.
+fn palette_title(title: &str) -> Option<String> {
+    let title: String = title.chars().filter(|&c| !is_hidden(c)).take(MAX_TITLE).collect();
+    (!title.trim().is_empty()).then_some(title)
 }
 
 impl wtheme::Host for HostState {
@@ -2109,6 +2142,30 @@ mod tests {
         assert_eq!(text.len(), CLIPBOARD_MAX);
         st.drop_clipboard();
         assert!(st.outbox.is_empty(), "a trapped call's writes are dropped");
+    }
+
+    #[test]
+    fn palette_entries_are_removed_and_retitled_by_their_own_plugin() {
+        use wpal::Host as _;
+        let mut st = HostState::new("dev.x.p", &Capabilities::default(), None, None, None);
+        st.command("api".into(), "Start with api".into(), None);
+        st.mode("api".into(), "api mode".into());
+        st.command("web".into(), "Start with web".into(), None);
+        st.retitle("web".into(), "Web".into()).unwrap();
+        assert!(st.outbox.is_empty(), "no key, no menu entry to rebuild");
+        st.command("keyed".into(), "Keyed".into(), Some("cmd+shift+k".into()));
+        st.retitle("keyed".into(), "Keyed 2".into()).unwrap();
+        st.remove("keyed".into());
+        assert_eq!(st.outbox, [HostRequest::KeysChanged { plugin_id: "dev.x.p".into() }], "one rebuild for both");
+        st.retitle("web".into(), "Back to \u{202e}web".into()).unwrap();
+        assert!(st.retitle("web".into(), "\u{200b} ".into()).is_err(), "a title needs a visible character");
+        assert!(st.retitle("nope".into(), "x".into()).unwrap_err().contains("no palette entry"));
+        assert_eq!(st.palette.iter().find(|p| p.id == "web").unwrap().title, "Back to web");
+        st.retitle("api".into(), "a".repeat(200)).unwrap();
+        assert!(st.palette.iter().filter(|p| p.id == "api").all(|p| p.title.len() == MAX_TITLE));
+        st.remove("api".into());
+        st.remove("never-there".into());
+        assert_eq!(st.palette.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["web"]);
     }
 
     fn tapped(kind: EventKind, verified: bool, request_key: Option<u64>) -> Tapped {
