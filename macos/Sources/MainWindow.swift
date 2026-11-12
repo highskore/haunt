@@ -222,8 +222,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
         win.delegate = self
         bridge.panels.host = self
         bridge.openTab = { [weak self] id in
-            KeyGuard.shared.pluginSwitched(to: id, at: ProcessInfo.processInfo.systemUptime)
-            self?.open(id)
+            KeyGuard.shared.pluginOpen(id, at: ProcessInfo.processInfo.systemUptime) { self?.open($0) ?? false }
         }
         bridge.onNote = { [weak self] line in self?.root.toast.show(line) }
         root.topRow.onClick = { [weak self] plugin in self?.bridge.topRowClicked(pluginId: plugin) }
@@ -502,12 +501,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
     var sidebarOrder: [String] { root.sidebar.orderedIds }
 
     /// Brings the window forward on that tab: a notification's Open tab, a menu bar row.
-    func open(_ surfaceId: String) {
-        guard tabs.contains(where: { $0.env.surfaceId == surfaceId }), let window else { return }
+    /// False when there is no such tab or window, so nothing was brought forward.
+    @discardableResult
+    func open(_ surfaceId: String) -> Bool {
+        guard tabs.contains(where: { $0.env.surfaceId == surfaceId }), let window else { return false }
         NSApp.activate(ignoringOtherApps: true)
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
         expandAgentsView(to: surfaceId)
+        return true
     }
 
     /// The tab the user is looking at: selected, in the frontmost app, in a window on screen, its terminal

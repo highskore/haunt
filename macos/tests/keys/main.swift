@@ -412,24 +412,36 @@ do {
     var asked = 0
     let needs = { () -> Bool in asked += 1; return true }
     let idle = { () -> Bool in false }
-    check(g.allows(view: "a", surfaceId: "A", isRepeat: false, isReturn: true, awaitsAnswer: idle, now: 0), "a press goes through")
-    check(g.allows(view: "a", surfaceId: "A", isRepeat: true, isReturn: true, awaitsAnswer: idle, now: 0.5), "its repeats in the same terminal too")
-    check(!g.allows(view: "b", surfaceId: "B", isRepeat: true, isReturn: true, awaitsAnswer: idle, now: 0.6), "a repeat Return to a terminal that didn't get the press is dropped")
+    func key(_ view: String, _ s: String, repeat r: Bool = false, _ wait: () -> Bool, at t: TimeInterval) -> Bool {
+        g.allows(view: view, surfaceId: s, isRepeat: r, awaitsAnswer: wait, now: t)
+    }
+    check(key("a", "A", idle, at: 0), "a press goes through")
+    check(key("a", "A", repeat: true, idle, at: 0.5), "its repeats in the same terminal too")
+    check(!key("b", "B", repeat: true, idle, at: 0.6), "a repeat Return to a terminal that didn't get the press is dropped")
     g.focusMoved()
-    check(!g.allows(view: "a", surfaceId: "A", isRepeat: true, isReturn: true, awaitsAnswer: idle, now: 0.7), "after focus moves, even the first terminal's repeats are dropped")
+    check(!key("a", "A", repeat: true, idle, at: 0.7), "after focus moves, even the first terminal's repeats are dropped")
 
-    g.pluginSwitched(to: "B", at: 10)
+    g.pluginOpen("B", at: 10) { _ in true }
     g.focusMoved()
-    check(!g.allows(view: "b", surfaceId: "B", isRepeat: false, isReturn: true, awaitsAnswer: needs, now: 10.3), "a Return within 400 ms of a plugin switch into a needs-you tab is dropped")
-    check(!g.allows(view: "b", surfaceId: "B", isRepeat: true, isReturn: true, awaitsAnswer: needs, now: 10.5), "and the rest of that hold with it")
-    check(g.allows(view: "b", surfaceId: "B", isRepeat: false, isReturn: false, awaitsAnswer: needs, now: 10.1), "other keys go through")
-    check(g.allows(view: "b", surfaceId: "B", isRepeat: false, isReturn: true, awaitsAnswer: needs, now: 10.45), "a normal Return after 400 ms passes")
-    check(g.allows(view: "b", surfaceId: "B", isRepeat: true, isReturn: true, awaitsAnswer: needs, now: 10.6), "and so does its own repeat")
-    g.pluginSwitched(to: "C", at: 20)
-    check(g.allows(view: "c", surfaceId: "C", isRepeat: false, isReturn: true, awaitsAnswer: idle, now: 20.1), "a tab with nothing to answer takes Return at once")
-    check(g.allows(view: "d", surfaceId: "D", isRepeat: false, isReturn: true, awaitsAnswer: needs, now: 20.1), "only the tab the plugin switched to waits")
-    check(asked == 1, "the core is asked only inside the window (\(asked))")
-    check(KeyGuard.isReturn(keyCode: 36) && KeyGuard.isReturn(keyCode: 76) && !KeyGuard.isReturn(keyCode: 49), "Return and keypad Enter")
+    check(!key("b", "B", needs, at: 10.3), "a Return within 400 ms of a plugin switch into a needs-you tab is dropped")
+    check(!key("b", "B", needs, at: 10.31), "so is a '1', or any other key that could answer")
+    check(!key("b", "B", repeat: true, needs, at: 10.5), "and the rest of that hold with it")
+    check(key("b", "B", needs, at: 10.45), "a normal Return after 400 ms passes")
+    check(key("b", "B", repeat: true, needs, at: 10.6), "and so does its own repeat")
+
+    g.pluginOpen("C", at: 20) { _ in true }
+    check(key("c", "C", idle, at: 20.1), "a tab with nothing to answer takes keys at once")
+    check(key("d", "D", needs, at: 20.1), "only the tab the plugin switched to waits")
+
+    var tried: [String] = []
+    g.pluginOpen("E", at: 30) { tried.append($0); return false }
+    check(tried == ["E"] && key("e", "E", needs, at: 30.1), "a failed open records nothing")
+
+    g.pluginOpen("A", at: 40) { _ in true }
+    g.pluginOpen("B", at: 40.1) { _ in true }
+    check(!key("a", "A", needs, at: 40.2), "A then B keeps A's window")
+    check(!key("b", "B", needs, at: 40.3), "and B's")
+    check(asked == 4, "the core is asked only inside a window (\(asked))")
 }
 
 print(failures == 0 ? "keys: all passed" : "keys: \(failures) failed")

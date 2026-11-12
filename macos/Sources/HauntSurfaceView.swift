@@ -47,8 +47,7 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
         // Neither this view nor Ghostty's filters isARepeat: a Return still held from the palette or
         // another tab would otherwise type into whatever tab took focus.
         guard KeyGuard.shared.allows(view: ObjectIdentifier(self), surfaceId: surfaceId, isRepeat: event.isARepeat,
-                                     isReturn: KeyGuard.isReturn(keyCode: event.keyCode), awaitsAnswer: awaitsAnswer,
-                                     now: ProcessInfo.processInfo.systemUptime) else { return }
+                                     awaitsAnswer: awaitsAnswer, now: ProcessInfo.processInfo.systemUptime) else { return }
         onInput?()
         super.keyDown(with: event)
     }
