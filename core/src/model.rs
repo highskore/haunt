@@ -88,9 +88,20 @@ pub struct LineResult {
     /// Why the line was rejected whole, if it was.
     pub error: Option<String>,
 }
-/// Sees every event for a registered surface, with whether it was verified; called outside the lock.
-/// Returns whether host requests are waiting, so the UI is told to drain them.
-pub type EventTap = Arc<dyn Fn(&AgentEvent, bool) -> bool + Send + Sync>;
+
+/// One event for a registered surface, as the plugins hear it.
+#[derive(Debug, Clone)]
+pub struct Tapped {
+    pub surface: String,
+    pub event: AgentEvent,
+    pub verified: bool,
+    /// The surface's answerable request key, on a verified `permission_seen` that made one.
+    pub request_key: Option<u64>,
+}
+
+/// Sees every event for a registered surface; called outside the lock. Returns whether host
+/// requests are waiting, so the UI is told to drain them.
+pub type EventTap = Arc<dyn Fn(&Tapped) -> bool + Send + Sync>;
 
 struct Surface {
     id: String,
@@ -158,6 +169,12 @@ impl State {
 
     fn surface(&mut self, id: &str) -> Option<&mut Surface> {
         self.surfaces.iter_mut().find(|s| s.id == id)
+    }
+
+    /// The key haunt would answer for `surface` now, if its live request is answerable.
+    fn answerable_key(&self, surface: &str) -> Option<u64> {
+        let s = &self.surfaces.iter().find(|s| s.id == surface)?.session;
+        s.live_permission().filter(|p| p.agent.answer_bytes(true).is_some() && !s.terminal_only(p)).map(|p| p.key())
     }
 
     fn tap_for(&self, surface_id: &str) -> Option<EventTap> {
@@ -345,7 +362,7 @@ fn starts_turn(d: &Delivery) -> bool {
 struct Offload {
     /// Surface, event cwd, and the turn number when the event started a turn (its start commit is read too).
     branch: SyncSender<(String, Option<String>, Option<u32>)>,
-    tap: SyncSender<(EventTap, AgentEvent, bool)>,
+    tap: SyncSender<(EventTap, Tapped)>,
 }
 
 impl Offload {
@@ -372,8 +389,8 @@ impl Offload {
                 branches.forget(&surface);
             }
         })?;
-        let tap = worker("haunt-tap", move |(tap, event, verified): (EventTap, AgentEvent, bool)| {
-            if tap(&event, verified) {
+        let tap = worker("haunt-tap", move |(tap, t): (EventTap, Tapped)| {
+            if tap(&t) {
                 requests_queued(&tap_state);
             }
         })?;
@@ -402,18 +419,22 @@ fn worker<T: Send + 'static>(name: &str, mut f: impl FnMut(T) + Send + 'static) 
 fn deliver(state: &Mutex<State>, offload: &Offload, d: Delivery) -> bool {
     let mut tap = None;
     let mut turn = None;
+    let mut request_key = None;
     let changed = update_state(state, |st, now| {
         tap = st.tap_for(&d.surface_id);
         let changed = st.deliver(&d, now);
         turn = st.started_turn(&d);
+        if d.verified && d.event.as_ref().is_some_and(|e| matches!(e.kind, crate::event::EventKind::PermissionSeen { .. })) {
+            request_key = st.answerable_key(&d.surface_id);
+        }
         changed
     });
     if let Some(event) = d.event {
         if d.verified {
-            let _ = offload.branch.try_send((d.surface_id, event.cwd.clone(), turn));
+            let _ = offload.branch.try_send((d.surface_id.clone(), event.cwd.clone(), turn));
         }
         if let Some(tap) = tap {
-            let _ = offload.tap.try_send((tap, event, d.verified));
+            let _ = offload.tap.try_send((tap, Tapped { surface: d.surface_id, event, verified: d.verified, request_key }));
         }
     }
     changed
@@ -611,7 +632,8 @@ impl Core {
             tap = st.tap_for(surface_id);
             st.apply_unverified(surface_id, &event, now)
         });
-        if tap.is_some_and(|tap| tap(&event, false)) {
+        let t = Tapped { surface: surface_id.to_owned(), event, verified: false, request_key: None };
+        if tap.is_some_and(|tap| tap(&t)) {
             requests_queued(&self.state);
         }
     }
@@ -1228,7 +1250,7 @@ mod tests {
         let env = c.register_surface("/w").unwrap();
         let (release, wait) = std::sync::mpsc::channel::<()>();
         let wait = Mutex::new(wait);
-        c.set_event_tap(Some(Arc::new(move |_: &AgentEvent, _| {
+        c.set_event_tap(Some(Arc::new(move |_: &Tapped| {
             let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(3));
             false
         })));
@@ -1256,7 +1278,7 @@ mod tests {
         }));
         let queue = Arc::new(AtomicBool::new(false));
         let q = queue.clone();
-        c.set_event_tap(Some(Arc::new(move |_: &AgentEvent, _| q.swap(false, Ordering::SeqCst))));
+        c.set_event_tap(Some(Arc::new(move |_: &Tapped| q.swap(false, Ordering::SeqCst))));
         let st = c.state.clone();
         let offload = Offload::spawn(st.clone(), c.branches.clone()).unwrap();
         let nonces = lock(&st).nonces.clone();
@@ -1309,8 +1331,8 @@ mod tests {
         let env = c.register_surface("/w").unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let s = seen.clone();
-        c.set_event_tap(Some(Arc::new(move |e: &AgentEvent, verified| {
-            s.lock().unwrap().push((e.kind.name().to_owned(), verified));
+        c.set_event_tap(Some(Arc::new(move |t: &Tapped| {
+            s.lock().unwrap().push((t.event.kind.name().to_owned(), t.verified));
             false
         })));
         let st = c.state.clone();
@@ -1328,6 +1350,31 @@ mod tests {
         }
         c.on_osc_notification(&env.surface_id, "haunt://cli-agent", r#"{"v":1,"event":"stop"}"#);
         assert_eq!(*seen.lock().unwrap(), [("stop".to_owned(), true), ("stop".to_owned(), false), ("stop".to_owned(), false)]);
+    }
+
+    #[test]
+    fn a_tapped_permission_carries_its_key_only_when_verified() {
+        let c = core();
+        let env = c.register_surface("/w").unwrap();
+        let keys = Arc::new(Mutex::new(Vec::new()));
+        let k = keys.clone();
+        c.set_event_tap(Some(Arc::new(move |t: &Tapped| {
+            k.lock().unwrap().push(t.request_key);
+            false
+        })));
+        let st = c.state.clone();
+        let offload = Offload::spawn(st.clone(), c.branches.clone()).unwrap();
+        let nonces = lock(&st).nonces.clone();
+        for nonce in [None, Some(env.nonce.as_str())] {
+            deliver(&st, &offload, crate::intake::decode(&line(&env, nonce, PERM), &nonces).unwrap());
+        }
+        let t = Instant::now();
+        while keys.lock().unwrap().len() < 2 && t.elapsed() < Duration::from_secs(2) {
+            std::thread::yield_now();
+        }
+        let live = c.with_state(|st| st.surface(&env.surface_id).map(|s| s.session.current_key()));
+        assert_eq!(*keys.lock().unwrap(), [None, live]);
+        assert!(live.is_some());
     }
 
     #[test]

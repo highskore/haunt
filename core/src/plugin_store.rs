@@ -10,15 +10,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use wasmtime::component::Linker;
 
-use crate::event::AgentEvent;
 use crate::ids::hex;
-use crate::model::CoreHandle;
+use crate::model::{CoreHandle, Tapped};
 use crate::plugin_cache::{CwasmCache, check_dir, write_atomic};
 use crate::plugin_manifest::{ALWAYS, Capabilities, MANIFEST, Manifest, valid_id};
 use crate::plugin_pack::{self, ThemeContribution};
 use crate::plugin_settings::PluginConfig;
 use crate::plugin_theme::{Theme, ThemeToken};
-use crate::plugins::{Decoration, HostRequest, HostState, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost, RowMenuItem};
+use crate::plugins::{HostRequest, HostState, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost, RowMenuItem};
 
 pub const LOCKFILE: &str = "plugins.lock";
 pub const WASM: &str = "plugin.wasm";
@@ -881,17 +880,13 @@ impl PluginSet {
         }
     }
 
-    /// Delivers `event` to plugins whose `events` grant covers it; `verified` as the core decided it.
-    pub fn on_event(&mut self, event: &AgentEvent, verified: bool) -> Vec<(String, Decoration)> {
-        let mut out = Vec::new();
+    /// Delivers an event to plugins whose `events` grant covers it; `verified` as the core decided it.
+    pub fn on_event(&mut self, t: &Tapped) {
         for (caps, p) in &mut self.plugins {
-            if caps.wants_event(&event.kind, verified)
-                && let Ok(Some(d)) = p.on_event(event, verified)
-            {
-                out.push((p.id().to_owned(), d));
+            if caps.wants_event(&t.event.kind, t.verified) {
+                let _ = p.on_event(t);
             }
         }
-        out
     }
 
     /// What was wrong with the user's plugin settings at the last load or `set_config`.
@@ -959,10 +954,10 @@ impl PluginSet {
 /// dropped until the snapshot has a place for them.
 pub fn attach(core: &crate::Core, set: &Arc<Mutex<PluginSet>>) {
     let weak = Arc::downgrade(set);
-    core.set_event_tap(Some(Arc::new(move |event, verified| {
+    core.set_event_tap(Some(Arc::new(move |t: &Tapped| {
         let Some(set) = weak.upgrade() else { return false };
         let mut set = crate::sync::lock(&set);
-        set.on_event(event, verified);
+        set.on_event(t);
         // Any left, not just new ones: a drain that found the set busy took none.
         set.pending_requests() > 0
     })));
@@ -1011,7 +1006,7 @@ mod tests {
         fs::create_dir_all(&s).unwrap();
         fs::write(
             s.join(MANIFEST),
-            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.4\"\nentry = \"p.wasm\"\n[capabilities]\n{caps}\n"),
+            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.5\"\nentry = \"p.wasm\"\n[capabilities]\n{caps}\n"),
         )
         .unwrap();
         fs::write(s.join("p.wasm"), "(component)").unwrap();
@@ -1150,7 +1145,7 @@ mod tests {
         fs::create_dir_all(b.join(id)).unwrap();
         fs::write(
             b.join(id).join(MANIFEST),
-            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"{version}\"\napi = \"0.4\"\nentry = \"plugin.wasm\"\n[capabilities]\n{caps}\n"),
+            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"{version}\"\napi = \"0.5\"\nentry = \"plugin.wasm\"\n[capabilities]\n{caps}\n"),
         )
         .unwrap();
         fs::write(b.join(id).join(WASM), "(component)").unwrap();

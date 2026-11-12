@@ -216,7 +216,7 @@ mod tests {
         let dir = root.join("bundle/dev.haunt.t");
         std::fs::create_dir_all(&dir).unwrap();
         let manifest = |caps: &str| {
-            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.4\"\nentry = \"plugin.wasm\"\n[capabilities]\n{caps}\n")
+            format!("[plugin]\nid = \"dev.haunt.t\"\nname = \"T\"\nversion = \"0.1.0\"\napi = \"0.5\"\nentry = \"plugin.wasm\"\n[capabilities]\n{caps}\n")
         };
         std::fs::write(dir.join(MANIFEST), manifest("sidebar = true")).unwrap();
         // An empty component in binary form.

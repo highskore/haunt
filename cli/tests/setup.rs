@@ -398,7 +398,7 @@ fn fake_bundle(e: &Env, plugins: &[(&str, &str, &str, &str)]) -> PathBuf {
     for (id, name, description, caps) in plugins {
         std::fs::create_dir_all(b.join(id)).unwrap();
         let manifest = format!(
-            "[plugin]\nid = \"{id}\"\nname = \"{name}\"\nversion = \"0.1.0\"\napi = \"0.4\"\nentry = \"plugin.wasm\"\n{description}[capabilities]\n{caps}\n"
+            "[plugin]\nid = \"{id}\"\nname = \"{name}\"\nversion = \"0.1.0\"\napi = \"0.5\"\nentry = \"plugin.wasm\"\n{description}[capabilities]\n{caps}\n"
         );
         std::fs::write(b.join(id).join("haunt-plugin.toml"), manifest).unwrap();
         // An empty component in binary form: the CLI build has no WAT parser.

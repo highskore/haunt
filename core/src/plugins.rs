@@ -1,4 +1,4 @@
-//! wasmtime host for `haunt:plugin@0.4` components (plan sections 3.3 and 3.8).
+//! wasmtime host for `haunt:plugin@0.5` components (plan sections 3.3 and 3.8).
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -11,12 +11,12 @@ use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Config, Engine, EngineWeak, Store, StoreContextMut, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxView, WasiView};
 
-use crate::event::{AgentEvent, EventKind, is_hidden, visible};
+use crate::event::{EventKind, is_hidden, visible};
 use crate::plugin_cache::{CacheError, CwasmCache, cache_name};
 use crate::plugin_fs::FsScope;
 use crate::arrange::{Arrangement, ColorStyle, Section, StateGroup, TabColor};
 use crate::layout::RowKind;
-use crate::model::{CoreHandle, SidebarToken};
+use crate::model::{CoreHandle, SidebarToken, Tapped};
 use crate::plugin_manifest::{Capabilities, KV_CAP};
 use crate::plugin_theme::Theme;
 use crate::session::Outcome;
@@ -45,13 +45,6 @@ const MAX_TITLE: usize = 80;
 const MAX_DECISIONS: u32 = 1000;
 /// One-off approvals (an `export TOKEN=…`, say) never reach a plugin; repeats are what rules are for.
 pub const APPROVALS_MIN: u32 = 2;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Decoration {
-    pub badge: Option<String>,
-    pub style: String,
-    pub meta_suffix: Option<String>,
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct LoadStats {
@@ -515,6 +508,67 @@ impl wside::Host for HostState {
     }
 }
 
+/// Characters of a command, path or summary a plugin gets.
+pub const EVENT_TEXT: usize = 1024;
+
+/// One line of plain text: whitespace becomes a space, other hidden characters go, at most `max` characters.
+pub fn plain(s: &str, max: usize) -> String {
+    s.chars().map(|c| if c.is_whitespace() { ' ' } else { c }).filter(|&c| !is_hidden(c)).take(max).collect()
+}
+
+/// `s` as haunt shows it, hidden characters spelled out, at most `max` characters.
+fn shown(s: &str, max: usize) -> String {
+    visible(s).chars().take(max).collect()
+}
+
+/// The WIT event for `t`. Commands and paths keep what was sent, spelled out, so a plugin sees what
+/// the user would; summaries are plain text.
+fn agent_event(t: &Tapped) -> wit::AgentEvent {
+    let e = &t.event;
+    let call = match &e.kind {
+        EventKind::ToolStart { tool } | EventKind::ToolDone { tool } | EventKind::ToolFailed { tool } | EventKind::ToolRan { tool } | EventKind::PermissionSeen { tool } => {
+            Some(tool)
+        }
+        _ => None,
+    };
+    let summary = match &e.kind {
+        EventKind::TaskCreated { subject, .. } => subject.clone(),
+        EventKind::TaskUpdated { status, .. } => Some(status.clone()),
+        EventKind::ToolRan { tool } => Some(tool.tool_name.clone()),
+        EventKind::SubagentTool { tool_name } => Some(tool_name.clone()),
+        EventKind::PromptSubmit { query } => query.clone(),
+        EventKind::PlanExit { summary } => summary.clone(),
+        _ => None,
+    };
+    let tool = match &e.kind {
+        EventKind::FileEdited { tool_name, .. } => tool_name.clone(),
+        EventKind::SubagentTool { tool_name } => Some(tool_name.clone()),
+        _ => call.map(|c| c.tool_name.clone()),
+    };
+    let file_path = match &e.kind {
+        EventKind::FileEdited { file_path, .. } => file_path.clone(),
+        _ => call.and_then(|c| c.raw_file_path.clone().or_else(|| c.file_path.clone())),
+    };
+    let task_id = match &e.kind {
+        EventKind::TaskCreated { task_id, .. } | EventKind::TaskUpdated { task_id, .. } => Some(task_id.clone()),
+        _ => None,
+    };
+    wit::AgentEvent {
+        kind: plain(e.kind.name(), 64),
+        session_id: e.session_id.as_deref().map(|s| plain(s, 256)),
+        agent_id: e.agent_id.as_deref().map(|s| plain(s, 256)),
+        cwd: e.cwd.as_deref().map(|s| shown(s, EVENT_TEXT)),
+        summary: summary.map(|s| plain(&s, EVENT_TEXT)),
+        verified: t.verified,
+        surface: Some(t.surface.clone()),
+        tool: tool.map(|s| plain(&s, 256)),
+        command: call.and_then(|c| c.raw_command.as_deref().or(c.command.as_deref())).map(|s| shown(s, EVENT_TEXT)),
+        file_path: file_path.map(|s| shown(&s, EVENT_TEXT)),
+        task_id: task_id.map(|s| plain(&s, 256)),
+        request_key: t.request_key.filter(|_| t.verified),
+    }
+}
+
 /// Wall time to the second and monotonic time to 10 ms, so plugins get no fine-grained timer.
 struct CoarseWall;
 impl HostWallClock for CoarseWall {
@@ -644,39 +698,12 @@ impl LoadedPlugin {
 
     /// Only a `verified` event's cwd widens the plugin's `${cwd}` grant; anything in the pty can
     /// forge the rest.
-    pub fn on_event(&mut self, event: &AgentEvent, verified: bool) -> Result<Option<Decoration>, PluginError> {
-        if verified && let Some(cwd) = &event.cwd {
+    pub fn on_event(&mut self, t: &Tapped) -> Result<(), PluginError> {
+        if t.verified && let Some(cwd) = &t.event.cwd {
             self.store.data_mut().fs.add_cwd(cwd);
         }
-        let summary = match &event.kind {
-            EventKind::TaskCreated { subject, .. } => subject.clone(),
-            EventKind::TaskUpdated { status, .. } => Some(status.clone()),
-            EventKind::ToolRan { tool } => Some(tool.tool_name.clone()),
-            EventKind::SubagentTool { tool_name } => Some(tool_name.clone()),
-            _ => None,
-        };
-        let ev = wit::AgentEvent {
-            kind: event.kind.name().to_owned(),
-            session_id: event.session_id.clone(),
-            agent_id: event.agent_id.clone(),
-            cwd: event.cwd.clone(),
-            summary,
-            verified,
-        };
-        let out = self.call(|b, s| b.call_on_event(s, &ev))?;
-        Ok(out.map(|d| Decoration {
-            badge: d.badge,
-            style: match d.style {
-                wit::Style::Meta => "meta",
-                wit::Style::Needs => "needs",
-                wit::Style::Dot => "dot",
-                wit::Style::HollowDot => "hollow-dot",
-                wit::Style::Kbd => "kbd",
-                wit::Style::Mono => "mono",
-            }
-            .to_owned(),
-            meta_suffix: d.meta_suffix,
-        }))
+        let ev = agent_event(t);
+        self.call(|b, s| b.call_on_event(s, &ev))
     }
 
     /// Commands and modes the plugin registered through `palette`.
@@ -822,7 +849,7 @@ impl PluginHost {
             wside::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.fs_read_granted() || caps.fs_write_granted() {
-            let mut fs = l.instance("haunt:plugin/fs@0.4.0")?;
+            let mut fs = l.instance("haunt:plugin/fs@0.5.0")?;
             if caps.fs_read_granted() {
                 fs.func_wrap("read", |s: StoreContextMut<'_, HostState>, (path,): (String,)| Ok((s.data().fs.read(&path),)))?;
                 fs.func_wrap("list", |s: StoreContextMut<'_, HostState>, (path,): (String,)| Ok((s.data().fs.list(&path),)))?;
@@ -911,7 +938,7 @@ mod tests {
     }
 
     const FS_WRITE_IMPORT: &str = r#"(component
-        (import "haunt:plugin/fs@0.4.0" (instance
+        (import "haunt:plugin/fs@0.5.0" (instance
             (export "write" (func (param "path" string) (param "data" (list u8)) (result (result (error string))))))))"#;
 
     #[test]
@@ -934,7 +961,7 @@ mod tests {
         let host = PluginHost::new().unwrap();
         let pty = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/pty@0.4.0" (instance
+            r#"(component (import "haunt:plugin/pty@0.5.0" (instance
                 (export "answer" (func (param "surface" string) (param "allow" bool) (param "request-id" u64) (result (result (error string))))))))"#,
         )
         .unwrap();
@@ -943,7 +970,7 @@ mod tests {
 
         let text = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/pty@0.4.0" (instance
+            r#"(component (import "haunt:plugin/pty@0.5.0" (instance
                 (export "text" (func (param "surface" string) (param "text" string) (result (result (error string))))))))"#,
         )
         .unwrap();
@@ -952,7 +979,7 @@ mod tests {
 
         let notify = Component::new(
             &host.engine,
-            r#"(component (import "haunt:plugin/notify@0.4.0" (instance
+            r#"(component (import "haunt:plugin/notify@0.5.0" (instance
                 (type $r (record (field "id" string) (field "title" string)))
                 (export "action" (type $a (eq $r)))
                 (export "notify" (func (param "title" string) (param "body" string) (param "actions" (list $a))
@@ -963,7 +990,7 @@ mod tests {
         host.check_links(&notify, &Capabilities { notifications: true, ..Default::default() }).unwrap();
     }
 
-    const DECISIONS_IMPORT: &str = r#"(component (import "haunt:plugin/decisions@0.4.0" (instance
+    const DECISIONS_IMPORT: &str = r#"(component (import "haunt:plugin/decisions@0.5.0" (instance
         (type $o (variant (case "allowed-in-haunt") (case "denied-in-haunt") (case "allowed-by-plugin" string)
             (case "denied-by-plugin" string) (case "answered-in-terminal") (case "superseded")))
         (export "outcome" (type $oe (eq $o)))
@@ -972,7 +999,7 @@ mod tests {
         (export "decision" (type $de (eq $d)))
         (export "query" (func (param "text" string) (param "limit" u32) (result (list $de)))))))"#;
 
-    const PROPOSE_IMPORT: &str = r#"(component (import "haunt:plugin/allowlist@0.4.0" (instance
+    const PROPOSE_IMPORT: &str = r#"(component (import "haunt:plugin/allowlist@0.5.0" (instance
         (export "propose" (func (param "project" string) (param "command" string) (result (result (error string))))))))"#;
 
     #[test]
@@ -1002,7 +1029,7 @@ mod tests {
         for (iface, func) in [("decisions", "record"), ("decisions", "write"), ("allowlist", "add-rule"), ("allowlist", "accept"), ("allowlist", "write")] {
             let c = Component::new(
                 &host.engine,
-                format!(r#"(component (import "haunt:plugin/{iface}@0.4.0" (instance (export "{func}" (func (param "x" string))))))"#),
+                format!(r#"(component (import "haunt:plugin/{iface}@0.5.0" (instance (export "{func}" (func (param "x" string))))))"#),
             )
             .unwrap();
             let e = host.check_links(&c, &both).unwrap_err().0;
@@ -1013,7 +1040,7 @@ mod tests {
     #[test]
     fn the_theme_import_needs_no_capability_and_reads_the_current_theme() {
         let host = PluginHost::new().unwrap();
-        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/theme@0.4.0" (instance (export "name" (func (result string))))))"#).unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/theme@0.5.0" (instance (export "name" (func (result string))))))"#).unwrap();
         host.check_links(&c, &Capabilities::default()).unwrap();
         let mut st = HostState::new("dev.haunt.t", &Capabilities::default(), None, None, None);
         assert_eq!(wtheme::Host::name(&mut st), "default");
@@ -1026,7 +1053,7 @@ mod tests {
     #[test]
     fn typing_needs_pty_type_and_a_command_the_user_ran() {
         let host = PluginHost::new().unwrap();
-        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/typing@0.4.0" (instance
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/typing@0.5.0" (instance
             (export "type-text" (func (param "text" string) (param "enter" bool) (result (result (error string))))))))"#).unwrap();
         let e = host.check_links(&c, &Capabilities { pty_write: true, notifications: true, sidebar: true, ..Default::default() }).unwrap_err().0;
         assert!(e.contains("haunt:plugin/typing"), "{e}");
@@ -1039,6 +1066,51 @@ mod tests {
         assert!(wtyping::Host::type_text(&mut st, "ls\nrm -rf ~".into(), false).unwrap_err().contains("not typed"));
         wtyping::Host::type_text(&mut st, "ls".into(), true).unwrap();
         assert_eq!(st.outbox, [HostRequest::PtyType { plugin_id: "dev.haunt.t".into(), surface: "s1".into(), text: "ls".into(), enter: true }]);
+    }
+
+    fn tapped(kind: EventKind, verified: bool, request_key: Option<u64>) -> Tapped {
+        let event = crate::event::AgentEvent {
+            agent: "claude".into(),
+            session_id: Some("s\u{202e}1".into()),
+            cwd: Some("/w/a\nb".into()),
+            agent_id: None,
+            agent_type: None,
+            nonce: None,
+            truncated: false,
+            kind,
+        };
+        Tapped { surface: "tab-1".into(), event, verified, request_key }
+    }
+
+    #[test]
+    fn events_spell_out_commands_and_paths_and_strip_summaries() {
+        let call = crate::event::ToolCall {
+            tool_name: "Bash".into(),
+            raw_command: Some(format!("ls #\nrm -rf ~/x{}", "y".repeat(2000))),
+            command: Some("ls #rm -rf ~/x".into()),
+            ..Default::default()
+        };
+        let e = agent_event(&tapped(EventKind::PermissionSeen { tool: call }, true, Some(7)));
+        let cmd = e.command.unwrap();
+        assert!(cmd.starts_with("ls #⏎rm -rf ~/x"), "{cmd}");
+        assert_eq!(cmd.chars().count(), EVENT_TEXT);
+        assert_eq!((e.tool.as_deref(), e.surface.as_deref(), e.request_key), (Some("Bash"), Some("tab-1"), Some(7)));
+        assert_eq!(e.session_id.as_deref(), Some("s1"));
+        assert_eq!(e.cwd.as_deref(), Some("/w/a⏎b"));
+
+        let prompt = agent_event(&tapped(EventKind::PromptSubmit { query: Some("fix\u{2066} it\nnow".into()) }, true, None));
+        assert_eq!(prompt.summary.as_deref(), Some("fix it now"));
+
+        let edit = agent_event(&tapped(EventKind::FileEdited { tool_name: Some("Edit".into()), file_path: Some("/a\u{200b}b".into()) }, true, None));
+        assert_eq!(edit.file_path.as_deref(), Some("/a\\u{200b}b"));
+        let task = agent_event(&tapped(EventKind::TaskUpdated { task_id: "t9".into(), status: "completed".into() }, true, None));
+        assert_eq!((task.task_id.as_deref(), task.summary.as_deref()), (Some("t9"), Some("completed")));
+    }
+
+    #[test]
+    fn an_unverified_event_carries_no_request_key() {
+        let call = crate::event::ToolCall { tool_name: "Bash".into(), command: Some("ls".into()), ..Default::default() };
+        assert_eq!(agent_event(&tapped(EventKind::PermissionSeen { tool: call }, false, Some(7))).request_key, None);
     }
 
     #[test]
@@ -1058,7 +1130,7 @@ mod tests {
     #[test]
     fn the_sidebar_import_needs_its_capability() {
         let host = PluginHost::new().unwrap();
-        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/sidebar@0.4.0" (instance (export "clear" (func)))))"#).unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/sidebar@0.5.0" (instance (export "clear" (func)))))"#).unwrap();
         let everything_else = Capabilities { decisions_read: true, allowlist_suggest: true, notifications: true, pty_write: true, ..Default::default() };
         let e = host.check_links(&c, &everything_else).unwrap_err().0;
         assert!(e.contains("haunt:plugin/sidebar"), "{e}");

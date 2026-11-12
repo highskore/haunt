@@ -3,7 +3,7 @@ id = "{{id}}"
 name = "{{name}}"
 description = "{{description}}"
 version = "0.1.0"
-api = "0.4"
+api = "0.5"
 entry = "target/wasm32-wasip2/release/haunt_plugin.wasm"
 license = "MIT"
 

@@ -2,7 +2,7 @@
 
 {{description}}
 
-A Haunt plugin: a sandboxed WebAssembly component that adds a "Say hello" command to the ⌘K palette and badges new tasks and tool calls.
+A Haunt plugin: a sandboxed WebAssembly component that adds a "Say hello" command to the ⌘K palette and logs new tasks and tool calls.
 
 Start a new plugin with `haunt plugin new <name> [--dir <path>] [--id <reverse-dns id>]`: it copies this template, fills in the id, name and description, and runs `git init`. If you copy the template by hand, replace the double-brace placeholders in `haunt-plugin.toml`, `Cargo.toml` and this README yourself; `haunt plugin install` refuses the placeholder id.
 
@@ -35,7 +35,7 @@ Every plugin can add palette commands and modes, add entries to a tab's context 
 |---|---|
 | `events = [...]` | agent events delivered to `on-event`: `agent.session-start`, `agent.prompt`, `agent.task`, `agent.subagent`, `agent.tool`, `agent.permission-request`, `agent.notification`, `agent.plan-exit`, `agent.question`, `agent.todos`, `agent.file-edited`, `agent.stop`, `agent.unknown`, or `agent.*` for all. Events carry commands, paths and prompts, which can contain secrets. `terminal.*` names are accepted but not delivered yet. `verified` is false for an event anything in the terminal could have forged; plugins with `pty_write`, `decisions_read` or `allowlist_suggest` get verified events only. |
 | `notifications = true` | `notify.notify`, notifications with action buttons; replies arrive at `on-action` |
-| `pty_write = true` | `pty.answer`: Allow or Deny for the surface's pending permission request, nothing else. No event carries the request key yet, so this can't be used today. |
+| `pty_write = true` | `pty.answer`: Allow or Deny for the surface's pending permission request, nothing else. A verified `permission_seen` haunt can answer carries its `request-key`. |
 | `pty_type = true` | `typing.type-text`: types text, then Return if asked, into the current tab, only while handling a palette command or key the user just ran and never while that tab has a prompt up. No control or invisible characters but a tab. |
 | `fs_read = ["glob", ...]` | `fs.read` and `fs.list` on matching paths |
 | `fs_write = ["glob", ...]` | `fs.write` on matching paths |
@@ -49,7 +49,7 @@ An fs glob is absolute or starts with `${cwd}/` (the agent's folder, from verifi
 
 ## Updating the WIT pin
 
-`wit/haunt-plugin.wit` is a copy of Haunt's `wit/haunt-plugin.wit`, pinned at `haunt:plugin@0.4.0` (the `package` line). The manifest's `api = "0.4"` must match the major.minor Haunt supports. To move to a newer API:
+`wit/haunt-plugin.wit` is a copy of Haunt's `wit/haunt-plugin.wit`, pinned at `haunt:plugin@0.5.0` (the `package` line). The manifest's `api = "0.5"` must match the major.minor Haunt supports. To move to a newer API:
 
 1. Copy `wit/haunt-plugin.wit` from the Haunt version you target over `wit/haunt-plugin.wit`.
 2. Set `api` in `haunt-plugin.toml` to the new major.minor.
