@@ -915,6 +915,15 @@ impl PluginSet {
         self.plugin(plugin_id)?.top_row_clicked()
     }
 
+    /// Every enabled plugin's bound keys.
+    pub fn keys(&self) -> Vec<crate::plugins::PluginKey> {
+        self.plugins.iter().filter(|(_, p)| p.disabled().is_none()).flat_map(|(_, p)| p.keys()).collect()
+    }
+
+    pub fn key_action(&mut self, plugin_id: &str, id: &str, down: bool, terminal_shown: bool) -> Result<(), PluginError> {
+        self.plugin(plugin_id)?.key_action(id, down, terminal_shown)
+    }
+
     /// The user chose an action on one of `plugin_id`'s notifications.
     pub fn notify_action(&mut self, plugin_id: &str, action_id: &str, binding: &str) -> Result<(), PluginError> {
         self.plugin(plugin_id)?.notify_action(action_id, binding)

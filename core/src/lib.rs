@@ -2,6 +2,7 @@
 
 pub mod allowlist;
 pub mod arrange;
+pub mod chord;
 pub mod ctl;
 pub mod decisions;
 pub mod decorate;

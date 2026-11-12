@@ -50,6 +50,7 @@ final class FakeCore: CoreAPI {
     func decisions(query: String, limit: UInt32) -> [Decision] { [] }
     func gatePluginRequest(request: HostRequest) -> PtyWrite? { nil }
     func takePluginRefusals() -> [PluginRefusal] { [] }
+    func setTakenChords(chords: [String: String]) {}
 }
 
 func row(_ id: String, _ name: String = "api-refactor", kind: RowKind = .claude, needs: Bool = false,

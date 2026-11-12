@@ -60,6 +60,7 @@ pub struct Capabilities {
     pub panel: bool,
     pub notify_hold: bool,
     pub sidebar_top: bool,
+    pub keys: bool,
     pub fs_read: Vec<String>,
     pub fs_write: Vec<String>,
     pub net: Vec<String>,
@@ -200,6 +201,9 @@ impl Capabilities {
         if self.sidebar_top {
             out.push(("can show one row of its own at the top of the sidebar".into(), false));
         }
+        if self.keys {
+            out.push(("can bind keyboard shortcuts of its own and tell when you press and release them".into(), false));
+        }
         if self.timer {
             out.push(("can run on its own every 15 seconds or more, not only when an agent event arrives".into(), false));
         }
@@ -238,6 +242,7 @@ impl Capabilities {
             panel: self.panel && !old.panel,
             notify_hold: self.notify_hold && !old.notify_hold,
             sidebar_top: self.sidebar_top && !old.sidebar_top,
+            keys: self.keys && !old.keys,
             fs_read: self.fs_read.iter().filter(|g| !old.fs_read.contains(g)).cloned().collect(),
             fs_write: self.fs_write.iter().filter(|g| !old.fs_write.contains(g)).cloned().collect(),
             ..Default::default()

@@ -158,6 +158,8 @@ pub(crate) struct State {
     /// The plugin holding notifications, until when.
     notify_hold: Option<(String, Instant)>,
     top_row: Option<TopRow>,
+    /// Canonical chord -> who has it ("haunt" for Haunt's and macOS's, else `[keys]`' "<plugin>/<id>").
+    taken_chords: HashMap<String, String>,
 }
 
 impl State {
@@ -1026,6 +1028,15 @@ impl CoreHandle {
             st.notify_hold = None;
         }
         mine
+    }
+
+    /// The app's key map changed: every chord in use or reserved, by owner.
+    pub fn set_taken_chords(&self, chords: HashMap<String, String>) {
+        lock(&self.state).taken_chords = chords;
+    }
+
+    pub fn chord_owner(&self, canonical: &str) -> Option<String> {
+        lock(&self.state).taken_chords.get(canonical).cloned()
     }
 
     /// config.toml's `[layout] row_labels` changed.

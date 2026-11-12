@@ -1,5 +1,11 @@
 import AppKit
 
+struct PluginKey: Equatable, Hashable {
+    var pluginId: String
+    var id: String
+    var chord: String
+}
+
 var failures = 0
 func check(_ ok: Bool, _ what: String, line: Int = #line) {
     if !ok {
@@ -312,6 +318,41 @@ for h in hostile {
     let ms = Date().timeIntervalSince(start) * 1000
     check(ms < 100, "256 KB of hostile TOML parsed in \(Int(ms)) ms")
 }
+
+// Plugin keys: one spelling with the core, and a press and a release per hold.
+check(Shortcut.parse("shift+cmd+]")?.canonical == "cmd+shift+bracket_right" && Shortcut.parse("opt+ctrl+cmd+f5")?.canonical == "cmd+ctrl+opt+f5",
+      "canonical matches chord::canonical_with_cmd")
+func key(_ type: NSEvent.EventType, _ chars: String, _ code: UInt16, _ mods: NSEvent.ModifierFlags, repeating: Bool = false) -> NSEvent {
+    NSEvent.keyEvent(with: type, location: .zero, modifierFlags: mods, timestamp: 0, windowNumber: 0, context: nil,
+                     characters: chars, charactersIgnoringModifiers: chars, isARepeat: repeating, keyCode: code)!
+}
+func flags(_ mods: NSEvent.ModifierFlags) -> NSEvent {
+    NSEvent.keyEvent(with: .flagsChanged, location: .zero, modifierFlags: mods, timestamp: 0, windowNumber: 0, context: nil,
+                     characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 56)!
+}
+let talkMap = KeyMap(table: [:], pluginDefaults: ["dev.x.ptt/talk": "cmd+shift+u"]) { _ in }
+let pk = PluginKeys()
+var heard: [String] = []
+pk.onKey = { p, i, down in heard.append("\(p)/\(i) \(down ? "down" : "up")") }
+pk.update(keys: [PluginKey(pluginId: "dev.x.ptt", id: "talk", chord: "cmd+shift+u")], map: talkMap)
+let cs: NSEvent.ModifierFlags = [.command, .shift]
+check(pk.handle(key(.keyDown, "U", 32, cs)) == nil, "the chord is the plugin's")
+check(pk.handle(key(.keyDown, "U", 32, cs, repeating: true)) == nil, "a repeat is swallowed")
+check(pk.handle(key(.keyDown, "j", 38, [.command])) != nil, "another chord passes")
+check(pk.handle(key(.keyUp, "U", 32, cs)) == nil, "the release is the plugin's")
+check(pk.handle(key(.keyUp, "U", 32, cs)) != nil, "only once")
+_ = pk.handle(key(.keyDown, "U", 32, cs))
+_ = pk.handle(flags([.shift]))
+_ = pk.handle(key(.keyUp, "u", 32, [.shift]))
+_ = pk.handle(key(.keyDown, "U", 32, cs))
+pk.releaseAll()
+_ = pk.handle(key(.keyDown, "U", 32, cs))
+pk.update(keys: [], map: talkMap)
+check(heard == Array(repeating: ["dev.x.ptt/talk down", "dev.x.ptt/talk up"], count: 4).flatMap { $0 },
+      "lifting cmd, losing focus or the key going away each release it: \(heard)")
+let movedMap = KeyMap(table: TOML.parse("[keys]\n\"dev.x.ptt/talk\" = \"cmd+opt+t\"")["keys"] ?? [:], pluginDefaults: ["dev.x.ptt/talk": "cmd+shift+u"]) { _ in }
+pk.update(keys: [PluginKey(pluginId: "dev.x.ptt", id: "talk", chord: "cmd+shift+u")], map: movedMap)
+check(pk.handle(key(.keyDown, "U", 32, cs)) != nil && pk.handle(key(.keyDown, "t", 17, [.command, .option])) == nil, "[keys] moves it")
 
 print(failures == 0 ? "keys: all passed" : "keys: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -4,7 +4,7 @@
 // 0.4: `theme` and `typing` imports; `on-theme-changed` export.
 // 0.5: surface, tool, command, file path, task id and request key on agent-event; `rows`, `timer`,
 //      `clock` and `panel` imports; `on-tick` export; `on-event` returns nothing.
-//      `hold` and `top-row` imports. Draft, not linked yet: `keys`, `exec`, `sound`, `speech`, `dock`, `glow`,
+//      `hold`, `top-row` and `keys` imports. Draft, not linked yet: `exec`, `sound`, `speech`, `dock`, `glow`,
 //      `title` and `terminal` imports; `on-exec` and `on-away-changed` exports.
 package haunt:plugin@0.5.0;
 
@@ -347,16 +347,18 @@ interface top-row {
   set: func(row: option<top>) -> result<_, string>;
 }
 
-// --- Draft: D and 5-10. The shapes are settled for plugins to build against; the host doesn't link
-// --- these imports yet, and a manifest asking for their capabilities doesn't install yet.
-
-// Capability `keys`. `chord` is written as in config.toml (`"ctrl+shift+p"`). Pressing it calls
-// `on-action(id, "key-down")`, releasing it `on-action(id, "key-up")`. Refused for a chord haunt or
-// macOS reserves, or one the user already bound; the user can rebind it in config. At most 8 per plugin.
+// Capability `keys`. `chord` is written as in config.toml (`"cmd+shift+p"`) and needs cmd, since any
+// other chord is terminal input. Pressing it calls `on-action(id, "key-down")`; releasing it, lifting
+// one of its modifiers or haunt losing focus calls `on-action(id, "key-up")`. Repeats are dropped.
+// Refused for a chord haunt or macOS reserves, or one already bound; `[keys] "<plugin id>/<id>"` moves
+// it. At most 8 per plugin. Both calls may type into the tab like a palette command (`pty_type`).
 interface keys {
   bind: func(id: string, chord: string) -> result<_, string>;
   unbind: func(id: string);
 }
+
+// --- Draft: 5-10. The shapes are settled for plugins to build against; the host doesn't link
+// --- these imports yet, and a manifest asking for their capabilities doesn't install yet.
 
 // Capability `exec`, which names the commands it may run, e.g. `exec = ["gh-pr-checks", "git-status"]`.
 // Each runs with fixed arguments, no shell and no stdin, in the folder the app opened tab `surface` in

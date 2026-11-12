@@ -743,6 +743,10 @@ extension MainWindowController: PaletteHost {
         bridge.invoke(pluginId: pluginId, itemId: itemId, terminalShown: !root.agentsOn && root.review == nil)
     }
 
+    func pluginKey(pluginId: String, id: String, down: Bool) {
+        bridge.keyAction(pluginId: pluginId, id: id, down: down, terminalShown: !root.agentsOn && root.review == nil)
+    }
+
     var paletteKeys: KeyMap { config.keys }
 
     var isFullScreen: Bool { window?.styleMask.contains(.fullScreen) ?? false }

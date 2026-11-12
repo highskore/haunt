@@ -27,7 +27,7 @@ mod bindings {
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
-    allowlist as wallow, clock as wclock, hold as whold, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
+    allowlist as wallow, clock as wclock, hold as whold, keys as wkeys, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
     sidebar as wside, theme as wtheme, timer as wtimer, typing as wtyping, types as wit,
 };
 pub(crate) use bindings::haunt::plugin::panel as wpanel;
@@ -43,6 +43,7 @@ const PTY_PER_SEC: usize = 10;
 const MAX_PALETTE: usize = 64;
 const MAX_OUTBOX: usize = 256;
 const MAX_NOTIFIED: usize = 64;
+pub const MAX_KEYS: usize = 8;
 const MAX_LOGS: usize = 1000;
 const MAX_STR: usize = 4096;
 /// Characters, not bytes, of a registered command or mode title.
@@ -74,6 +75,16 @@ pub struct PaletteItem {
     pub mark: Option<Mark>,
     /// Enter jumps to this tab, if it is open, instead of invoking the item.
     pub surface_id: Option<String>,
+}
+
+/// A chord a plugin bound with `keys.bind`; the app's `[keys]` may move it.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
+pub struct PluginKey {
+    pub plugin_id: String,
+    pub id: String,
+    /// Canonical, as `chord::canonical_with_cmd` spells it.
+    pub chord: String,
 }
 
 /// The decision-log markers: open square for your answers, filled for a plugin's, round for one that lapsed.
@@ -118,6 +129,8 @@ pub enum HostRequest {
     HoldNotifications { plugin_id: String, plugin_name: String, minutes: u32 },
     ReleaseNotifications { plugin_id: String },
     ClosePanel { plugin_id: String, id: String },
+    /// The plugin bound or unbound a key: the app rebuilds its key map from `PluginSet::keys`.
+    KeysChanged { plugin_id: String },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -237,6 +250,8 @@ pub struct HostState {
     theme: Arc<Theme>,
     /// The tab focused when the user ran one of this plugin's commands, while that call runs.
     typing_into: Option<String>,
+    /// (id, canonical chord) from `keys.bind`.
+    keys: Vec<(String, String)>,
 }
 
 impl Drop for HostState {
@@ -280,6 +295,7 @@ impl HostState {
             core,
             theme: Theme::default_shared(),
             typing_into: None,
+            keys: Vec::new(),
             events: EventGrant { details: caps.event_details, answers: caps.pty_write },
         }
     }
@@ -655,6 +671,13 @@ impl HostState {
         }
     }
 
+    /// A disabled plugin's keys go back to the terminal.
+    fn drop_keys(&mut self) {
+        if !std::mem::take(&mut self.keys).is_empty() {
+            self.outbox.push(HostRequest::KeysChanged { plugin_id: self.id.clone() });
+        }
+    }
+
     /// A disabled plugin's hold ends, so it can't keep notifications away.
     fn release_hold(&mut self) {
         if self.core.as_ref().is_some_and(|c| c.release_notifications(&self.id)) {
@@ -684,6 +707,40 @@ impl wtop::Host for HostState {
         core.set_top_row(&self.id, Some(top))?;
         self.top_action = action;
         Ok(())
+    }
+}
+
+impl wkeys::Host for HostState {
+    fn bind(&mut self, id: String, chord: String) -> Result<(), String> {
+        if id.is_empty() || id.chars().any(is_hidden) || id.chars().count() > MAX_TITLE {
+            return Err("a key's id must be plain and non-empty".into());
+        }
+        let c = crate::chord::canonical_with_cmd(&chord).ok_or_else(|| format!("{:?} is not a chord with cmd, like \"cmd+shift+p\"", visible(&chord).chars().take(40).collect::<String>()))?;
+        let mine = format!("{}/{id}", self.id);
+        if let Some(owner) = self.core.as_ref().and_then(|core| core.chord_owner(&c)).filter(|o| *o != mine) {
+            return Err(if owner == "haunt" { format!("{c} is Haunt's or macOS's") } else { format!("{c} is already {owner}") });
+        }
+        if let Some((other, _)) = self.keys.iter().find(|(i, k)| *k == c && *i != id) {
+            return Err(format!("{c} is already {other}"));
+        }
+        if !self.keys.iter().any(|(i, _)| *i == id) && self.keys.len() >= MAX_KEYS {
+            return Err(format!("at most {MAX_KEYS} keys"));
+        }
+        if self.keys.iter().any(|(i, k)| *i == id && *k == c) {
+            return Ok(());
+        }
+        self.request(HostRequest::KeysChanged { plugin_id: self.id.clone() })?;
+        self.keys.retain(|(i, _)| *i != id);
+        self.keys.push((id, c));
+        Ok(())
+    }
+
+    fn unbind(&mut self, id: String) {
+        let before = self.keys.len();
+        self.keys.retain(|(i, _)| *i != id);
+        if self.keys.len() != before {
+            self.outbox.push(HostRequest::KeysChanged { plugin_id: self.id.clone() });
+        }
     }
 }
 
@@ -938,6 +995,7 @@ impl LoadedPlugin {
             data.close_panels();
             data.release_hold();
             data.clear_top_row();
+            data.drop_keys();
             PluginError(why)
         })
     }
@@ -1039,9 +1097,27 @@ impl LoadedPlugin {
     /// tab focused now, until the call returns, but only if `terminal_shown`: none while the agents view
     /// or the review screen hides the terminal.
     pub fn run_command(&mut self, action_id: &str, terminal_shown: bool) -> Result<(), PluginError> {
+        self.run_user_action(action_id, "", terminal_shown)
+    }
+
+    /// The user pressed (`down`) or released one of this plugin's keys: `on-action(id, "key-down" or
+    /// "key-up")`, which may type like a command.
+    pub fn key_action(&mut self, id: &str, down: bool, terminal_shown: bool) -> Result<(), PluginError> {
+        if !self.store.data().keys.iter().any(|(i, _)| i == id) {
+            return Err(PluginError(format!("no key {id:?}")));
+        }
+        self.run_user_action(id, if down { "key-down" } else { "key-up" }, terminal_shown)
+    }
+
+    pub fn keys(&self) -> Vec<PluginKey> {
+        let id = self.id();
+        self.store.data().keys.iter().map(|(i, c)| PluginKey { plugin_id: id.to_owned(), id: i.clone(), chord: c.clone() }).collect()
+    }
+
+    fn run_user_action(&mut self, action_id: &str, payload: &str, terminal_shown: bool) -> Result<(), PluginError> {
         let data = self.store.data_mut();
         data.typing_into = data.core.as_ref().and_then(CoreHandle::selected_surface).filter(|_| terminal_shown);
-        let res = self.on_action(action_id, "");
+        let res = self.on_action(action_id, payload);
         self.store.data_mut().typing_into = None;
         res
     }
@@ -1132,6 +1208,9 @@ impl PluginHost {
         }
         if caps.sidebar_top {
             wtop::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if caps.keys {
+            wkeys::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.pty_write {
             wpty::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
@@ -1619,6 +1698,34 @@ mod tests {
         assert!(core.snapshot().top.is_none(), "a dropped plugin's row goes");
         other.set(Some(top("mine", None))).unwrap();
         assert!(!core.snapshot().top.unwrap().clickable && other.top_action.is_none());
+    }
+
+    #[test]
+    fn keys_need_cmd_skip_taken_chords_and_stop_at_eight() {
+        use wkeys::Host as _;
+        let core = crate::Core::new(&*tempdir("keys"));
+        let mut p = HostState::new("dev.x.ptt", &Capabilities { keys: true, ..Default::default() }, None, None, Some(core.handle()));
+        core.handle().set_taken_chords(
+            [("cmd+t", "haunt"), ("cmd+shift+y", "dev.other/go"), ("cmd+shift+u", "dev.x.ptt/talk")].map(|(c, o)| (c.into(), o.into())).into(),
+        );
+        assert!(p.bind("talk".into(), "ctrl+space".into()).is_err(), "no cmd: terminal input");
+        assert!(p.bind("talk".into(), "cmd+t".into()).unwrap_err().contains("Haunt's"));
+        assert!(p.bind("talk".into(), "cmd+shift+y".into()).unwrap_err().contains("dev.other/go"));
+        assert!(p.bind("\u{200b}".into(), "cmd+shift+j".into()).is_err());
+        p.bind("talk".into(), "shift+cmd+u".into()).unwrap();
+        assert!(p.bind("other".into(), "cmd+shift+u".into()).unwrap_err().contains("talk"));
+        assert_eq!(p.keys, [("talk".to_owned(), "cmd+shift+u".to_owned())]);
+        for i in 1..MAX_KEYS {
+            p.bind(format!("k{i}"), format!("cmd+opt+{i}")).unwrap();
+        }
+        assert!(p.bind("k9".into(), "cmd+opt+9".into()).is_err());
+        p.bind("talk".into(), "cmd+shift+i".into()).unwrap();
+        p.unbind("talk".into());
+        p.unbind("talk".into());
+        let changes = p.outbox.iter().filter(|r| matches!(r, HostRequest::KeysChanged { .. })).count();
+        assert_eq!((p.keys.len(), changes), (MAX_KEYS - 1, MAX_KEYS + 2));
+        p.drop_keys();
+        assert!(p.keys.is_empty());
     }
 
     #[test]

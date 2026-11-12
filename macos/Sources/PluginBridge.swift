@@ -8,6 +8,8 @@ final class PluginBridge {
     let hold = NotificationHold()
     /// Brings tab `surfaceId` up, for a notification bound to it.
     var openTab: ((String) -> Void)?
+    /// A plugin bound or unbound a key.
+    var onKeysChanged: (() -> Void)?
     /// Set once the core has started, so the decision log is loaded before plugins read it.
     var plugins: PluginsAPI? {
         didSet {
@@ -34,6 +36,11 @@ final class PluginBridge {
         hold.onRelease = { holder, titles in NotificationHold.postSummary(holder: holder, titles: titles) }
     }
 
+    /// A plugin's key went down or up. `terminalShown` as for `invoke`.
+    func keyAction(pluginId: String, id: String, down: Bool, terminalShown: Bool) {
+        run("plugin \(pluginId) key \(id)") { try $0.keyAction(pluginId: pluginId, id: id, down: down, terminalShown: terminalShown) }
+    }
+
     func topRowClicked(pluginId: String) {
         run("plugin \(pluginId) top row") { try $0.topRowClicked(pluginId: pluginId) }
     }
@@ -52,6 +59,8 @@ final class PluginBridge {
 
     func drain() {
         guard let plugins else { return }
+        var keysChanged = false
+        defer { if keysChanged { onKeysChanged?() } }
         for req in plugins.takeRequests() {
             switch req {
             case let .notify(pluginId, title, body, actions, binding):
@@ -66,6 +75,8 @@ final class PluginBridge {
                 panels.show(pluginId: pluginId, pluginName: pluginName, panel: panel)
             case let .closePanel(pluginId, id):
                 panels.close(pluginId: pluginId, id: id)
+            case .keysChanged:
+                keysChanged = true
             case .ptyAnswer, .ptyType:
                 guard let w = core.gatePluginRequest(request: req), let route = PtyRoute(req, w) else { continue }
                 write(route)

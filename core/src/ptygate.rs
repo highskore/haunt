@@ -54,7 +54,8 @@ impl Core {
             | HostRequest::ShowPanel { .. }
             | HostRequest::ClosePanel { .. }
             | HostRequest::HoldNotifications { .. }
-            | HostRequest::ReleaseNotifications { .. } => None,
+            | HostRequest::ReleaseNotifications { .. }
+            | HostRequest::KeysChanged { .. } => None,
         }
     }
 }

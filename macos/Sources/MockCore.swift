@@ -73,6 +73,7 @@ final class MockCore: CoreAPI {
 
     func gatePluginRequest(request: HostRequest) -> PtyWrite? { nil }
     func takePluginRefusals() -> [PluginRefusal] { [] }
+    func setTakenChords(chords: [String: String]) {}
 
     func snapshotIfNewer(version: UInt64) -> SidebarSnapshot? {
         version == self.version ? nil : snapshot()

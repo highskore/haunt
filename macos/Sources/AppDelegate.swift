@@ -91,11 +91,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             startError = error
             Self.logger.error("core start failed: \(String(describing: error), privacy: .public)")
         }
+        pushTakenChords()
         c.bridge.plugins = Self.startPlugins(fixture: fixture, core: core, dir: config.dir, configToml: config.text)
         config.pluginThemes = Dictionary((c.bridge.plugins?.themes() ?? []).map {
             ($0.id, PluginTheme(file: URL(fileURLWithPath: $0.file), fonts: $0.fonts.map { URL(fileURLWithPath: $0) }, bundled: $0.bundled))
         }, uniquingKeysWith: { a, _ in a })
         shareTheme()
+        pluginKeys.onKey = { [weak c] plugin, id, down in c?.pluginKey(pluginId: plugin, id: id, down: down) }
+        c.bridge.onKeysChanged = { [weak self] in self?.applyPluginKeys() }
         applyPluginKeys()
         Ghostty.App.desktopNotificationHook = { [weak c, weak self] view, title, body in
             guard let self, let tab = c?.tab(for: view) else { return false }
@@ -384,8 +387,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// whether the Ghostty file changed.
     private func rebuildPluginKeys() -> HauntConfig.Changes {
         pluginCommands = controller?.bridge.plugins?.paletteItems(mode: nil, query: "").filter { !$0.isMode } ?? []
-        config.pluginKeyDefaults = Dictionary(pluginCommands.compactMap { i in i.defaultKey.map { (KeyMap.pluginName(i.pluginId, i.id), $0) } },
-                                              uniquingKeysWith: { a, _ in a })
+        var defaults = Dictionary(pluginCommands.compactMap { i in i.defaultKey.map { (KeyMap.pluginName(i.pluginId, i.id), $0) } },
+                                  uniquingKeysWith: { a, _ in a })
+        boundKeys = controller?.bridge.plugins?.keys() ?? []
+        for k in boundKeys { defaults[KeyMap.pluginName(k.pluginId, k.id)] = k.chord }
+        config.pluginKeyDefaults = defaults
         return config.rebuildKeys()
     }
 
@@ -400,6 +406,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if changes.theme { applyTheme() }
         buildMenu()
         controller?.updateKeys(config.keys)
+        keysApplied()
+    }
+
+    /// Keys plugins bound with `keys.bind` (`PluginKeys`), as of the last rebuild.
+    private var boundKeys: [PluginKey] = []
+    private let pluginKeys = PluginKeys()
+
+    private func keysApplied() {
+        pushTakenChords()
+        pluginKeys.update(keys: boundKeys, map: config.keys)
+    }
+
+    /// So `keys.bind` refuses a chord Haunt, macOS or `[keys]` already has.
+    private func pushTakenChords() {
+        var taken: [String: String] = [:]
+        for s in KeyMap.reserved { taken[s.canonical] = "haunt" }
+        for a in KeyMap.Action.allCases { if let s = config.keys[a] { taken[s.canonical] = "haunt" } }
+        for (name, s) in config.keys.plugin { taken[s.canonical] = name }
+        core.setTakenChords(chords: taken)
     }
 
     private func apply(_ changes: HauntConfig.Changes) {
@@ -418,6 +443,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if c.keys {
             buildMenu()
             controller?.updateKeys(config.keys)
+            keysApplied()
         }
         if c.notifications {
             notifier?.settings = config.notifications

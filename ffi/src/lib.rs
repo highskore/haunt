@@ -142,7 +142,7 @@ impl From<haunt_core::plugins::PluginError> for HostError {
 }
 
 #[cfg(feature = "plugins")]
-pub use haunt_core::plugins::{HostRequest, Mark, NotifyAction, PaletteItem, RowMenuItem};
+pub use haunt_core::plugins::{HostRequest, Mark, NotifyAction, PaletteItem, PluginKey, RowMenuItem};
 #[cfg(feature = "plugins")]
 pub use haunt_core::plugin_theme::ThemeToken;
 #[cfg(feature = "plugins")]
@@ -161,6 +161,12 @@ impl HauntCore {
     /// Plugin answers the gate refused since the last call, oldest first, to show the user.
     pub fn take_plugin_refusals(&self) -> Vec<PluginRefusal> {
         self.core.take_plugin_refusals()
+    }
+
+    /// Every chord the key map uses or reserves (canonical) and its owner: "haunt", or the `[keys]` name;
+    /// `keys.bind` refuses these. Call it before loading plugins and on every key map change.
+    pub fn set_taken_chords(&self, chords: std::collections::HashMap<String, String>) {
+        self.core.handle().set_taken_chords(chords);
     }
 }
 
@@ -260,6 +266,16 @@ impl HauntPlugins {
 
     pub fn invoke_row_menu_item(&self, plugin_id: String, item_id: String, surface_id: String) -> Result<(), HostError> {
         Ok(haunt_core::sync::lock(&self.set).invoke_row_item(&plugin_id, &item_id, &surface_id)?)
+    }
+
+    /// Keys plugins bound with `keys.bind`, for `[keys]` as "<plugin id>/<id>".
+    pub fn keys(&self) -> Vec<PluginKey> {
+        haunt_core::sync::lock(&self.set).keys()
+    }
+
+    /// The user pressed (`down`) or released a plugin's key; `terminal_shown` as for `invoke_palette_item`.
+    pub fn key_action(&self, plugin_id: String, id: String, down: bool, terminal_shown: bool) -> Result<(), HostError> {
+        Ok(haunt_core::sync::lock(&self.set).key_action(&plugin_id, &id, down, terminal_shown)?)
     }
 
     /// The user clicked the sidebar's top row, which `plugin_id` set.

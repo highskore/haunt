@@ -19,6 +19,7 @@ protocol CoreAPI: AnyObject {
     func gatePluginRequest(request: HostRequest) -> PtyWrite?
     /// Plugin answers the gate refused since the last call, to show the user.
     func takePluginRefusals() -> [PluginRefusal]
+    func setTakenChords(chords: [String: String])
 }
 
 /// `HauntPlugins` as the UI uses it.
@@ -31,6 +32,8 @@ protocol PluginsAPI: AnyObject {
     func rowMenuItems(surfaceId: String) -> [RowMenuItem]
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws
     func topRowClicked(pluginId: String) throws
+    func keys() -> [PluginKey]
+    func keyAction(pluginId: String, id: String, down: Bool, terminalShown: Bool) throws
     func notifyAction(pluginId: String, actionId: String, binding: String) throws
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?)
@@ -133,6 +136,8 @@ final class NoPlugins: PluginsAPI {
     func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
     func topRowClicked(pluginId: String) throws {}
+    func keys() -> [PluginKey] { [] }
+    func keyAction(pluginId: String, id: String, down: Bool, terminalShown: Bool) throws {}
     func notifyAction(pluginId: String, actionId: String, binding: String) throws {}
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?) {}
@@ -157,6 +162,8 @@ final class FixturePlugins: PluginsAPI {
     func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
     func topRowClicked(pluginId: String) throws {}
+    func keys() -> [PluginKey] { [] }
+    func keyAction(pluginId: String, id: String, down: Bool, terminalShown: Bool) throws {}
     func notifyAction(pluginId: String, actionId: String, binding: String) throws {}
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?) {}
@@ -395,6 +402,13 @@ enum HostRequest: Equatable, Hashable {
     case holdNotifications(pluginId: String, pluginName: String, minutes: UInt32)
     case releaseNotifications(pluginId: String)
     case closePanel(pluginId: String, id: String)
+    case keysChanged(pluginId: String)
+}
+
+struct PluginKey: Equatable, Hashable {
+    var pluginId: String
+    var id: String
+    var chord: String
 }
 
 enum PanelPlacement: Equatable, Hashable {
