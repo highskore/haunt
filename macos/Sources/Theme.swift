@@ -93,9 +93,22 @@ extension Theme {
     }
 
     /// `app.text.chrome`'s stops, or none if any isn't a colour.
-    var chromeStops: [NSColor] {
-        let c = app.textChrome.compactMap { NSColor(themeHex: $0) }
-        return c.count == app.textChrome.count ? c : []
+    var chromeStops: [NSColor] { chrome.map(\.color) }
+    /// Each stop's place from 0 to 1: as written ("#c9c9cf 22%"), or spread evenly when no stop gives one.
+    var chromeLocations: [CGFloat] { chrome.map(\.at) }
+
+    /// `app.text.chrome` parsed, or nothing when a stop isn't a colour or its places aren't all given, in order.
+    private var chrome: [(color: NSColor, at: CGFloat)] {
+        let parts = app.textChrome.map { $0.split(separator: " ").map(String.init) }
+        let colors = parts.compactMap { $0.first.flatMap { NSColor(themeHex: $0) } }
+        guard colors.count == parts.count, parts.allSatisfy({ $0.count <= 2 }) else { return [] }
+        let given = parts.map { p in p.count == 2 && p[1].hasSuffix("%") ? Double(p[1].dropLast()).map { CGFloat($0) / 100 } : nil }
+        if parts.allSatisfy({ $0.count == 1 }) {
+            return colors.enumerated().map { ($1, CGFloat($0) / CGFloat(max(colors.count - 1, 1))) }
+        }
+        let at = given.compactMap { $0 }
+        guard at.count == colors.count, at.allSatisfy((0...1).contains), zip(at, at.dropFirst()).allSatisfy({ $0 <= $1 }) else { return [] }
+        return Array(zip(colors, at))
     }
 
     /// nil when `name` took `value`; otherwise why not.
@@ -475,7 +488,7 @@ struct LoadedTheme {
         }
         guard !ok else { return [] }
         theme.app.textChrome = []
-        return ["app.text.chrome: every stop must be an opaque colour reading \(Int(Self.minContrast)):1 on its backgrounds, drawn flat instead"]
+        return ["app.text.chrome: every stop must be an opaque colour (at an in-order place, if any has one) reading \(Int(Self.minContrast)):1 on its backgrounds, drawn flat instead"]
     }
 
     /// The least contrast a terminal colour needs against the background it is drawn on.

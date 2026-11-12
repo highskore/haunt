@@ -148,8 +148,10 @@ enum Draw {
 
     /// `rect` filled with `stops`, top to bottom, inside the current clip.
     static func chrome(_ rect: NSRect, _ stops: [NSColor], in ctx: CGContext) {
+        let at = Theme.current.chromeLocations
         guard let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: stops.map(\.cgColor) as CFArray,
-                                 locations: stops.indices.map { CGFloat($0) / CGFloat(max(stops.count - 1, 1)) }) else { return }
+                                 locations: at.count == stops.count ? at : stops.indices.map { CGFloat($0) / CGFloat(max(stops.count - 1, 1)) })
+        else { return }
         ctx.saveGState()
         ctx.clip(to: rect)
         ctx.drawLinearGradient(g, start: CGPoint(x: rect.minX, y: rect.minY), end: CGPoint(x: rect.minX, y: rect.maxY), options: [])
