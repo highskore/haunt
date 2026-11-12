@@ -70,6 +70,16 @@ fn pattern(base: &Path, rest: &str) -> Vec<Vec<u8>> {
     pat
 }
 
+/// Folders under `$HOME` macOS guards with its own permission prompts: never a project root themselves.
+const TCC_ROOTS: [&str; 7] = ["Documents", "Desktop", "Downloads", "Pictures", "Movies", "Music", "Library/Mobile Documents"];
+
+/// Where a `gitdir: <path>` file points, canonical; relative paths are from the file's folder.
+fn git_file_target(git: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(git).ok().filter(|t| t.len() < 4096)?;
+    let target = text.strip_prefix("gitdir:")?.trim();
+    git.parent()?.join(target).canonicalize().ok()
+}
+
 #[derive(Debug, Default)]
 pub struct FsScope {
     read: Vec<String>,
@@ -93,25 +103,47 @@ impl FsScope {
         Self { read: valid(read), write: valid(write), cwds: Vec::new(), home, haunt }
     }
 
-    /// `${cwd}` expands to the folders of tabs the plugin has seen verified agent events in. Only a
-    /// folder strictly inside `$HOME` counts, and not one under a dot-folder or `~/Library`, inside
-    /// the haunt dir or containing it: those hold keys, app data or haunt's own lockfile. Without a
-    /// known `$HOME` nothing is added.
-    pub fn add_cwd(&mut self, cwd: &str) {
-        let Some(c) = self.project_folder(cwd) else { return };
+    /// `${cwd}` expands to the project folders of tabs the plugin has seen verified agent events in, as
+    /// `project_folder` resolves them. Without a known `$HOME` nothing is added.
+    pub fn add_cwd(&mut self, cwd: &str) -> bool {
+        let Some(c) = self.project_folder(cwd) else { return false };
         if !self.cwds.contains(&c) && self.cwds.len() < MAX_CWDS {
             self.cwds.push(c);
         }
+        true
     }
 
-    /// `cwd`, canonical, if it may be a `${cwd}` (see `add_cwd`); `exec` runs only in such a folder.
+    /// The git work tree `cwd` is in, canonical, if it may be a `${cwd}`. A tab's cwd comes from the shell
+    /// (OSC 7), which an agent can steer, so only a repository's root counts, found by walking up from
+    /// `cwd` without reaching `$HOME`; a `.git` file must point inside `$HOME`. The root must be strictly
+    /// inside `$HOME`, not under a dot-folder or `~/Library`, neither inside the haunt dir nor containing
+    /// it, and not itself one of the folders macOS guards (`TCC_ROOTS`), though a project inside one is
+    /// fine. `exec` runs only in such a folder.
     pub fn project_folder(&self, cwd: &str) -> Option<PathBuf> {
         let home = self.home.as_ref()?;
         let c = Path::new(cwd).canonicalize().ok()?;
-        let rel = c.strip_prefix(home).ok().filter(|r| r.components().next().is_some())?;
+        let root = c.ancestors().take_while(|d| d.starts_with(home) && *d != home.as_path()).find(|d| {
+            let git = d.join(".git");
+            match std::fs::symlink_metadata(&git) {
+                Ok(m) if m.is_dir() => true,
+                Ok(m) if m.is_file() => git_file_target(&git).is_some_and(|t| t.starts_with(home)),
+                _ => false,
+            }
+        })?;
+        let rel = root.strip_prefix(home).ok()?;
         let private = rel.components().any(|p| p.as_os_str().as_bytes().starts_with(b".")) || rel.starts_with("Library");
-        let haunt = c.starts_with(&self.haunt) || self.haunt.starts_with(&c);
-        (!private && !haunt).then_some(c)
+        let haunt = root.starts_with(&self.haunt) || self.haunt.starts_with(root);
+        let guarded = TCC_ROOTS.iter().any(|t| rel == Path::new(t));
+        (!private && !haunt && !guarded).then(|| root.to_path_buf())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_home(&mut self, home: &Path) {
+        self.home = Some(home.canonicalize().unwrap());
+    }
+
+    pub fn cwds(&self) -> &[PathBuf] {
+        &self.cwds
     }
 
     fn patterns(&self, globs: &[String]) -> Vec<Vec<Vec<u8>>> {
@@ -301,6 +333,7 @@ mod tests {
     fn tempdir(tag: &str) -> TempDir {
         let d = TempDir::created(&format!("fs-{tag}"));
         std::fs::create_dir_all(d.join("proj/.claude")).unwrap();
+        std::fs::create_dir_all(d.join("proj/.git")).unwrap();
         d
     }
 
@@ -423,27 +456,36 @@ mod tests {
     }
 
     #[test]
-    fn cwd_is_a_project_folder_inside_home_and_never_private_or_the_haunt_dir() {
+    fn cwd_is_a_git_root_inside_home_and_never_private_guarded_or_the_haunt_dir() {
         let root = tempdir("wide");
         let home = root.join("Users/me");
-        std::fs::create_dir_all(home.join("code/p")).unwrap();
-        std::fs::create_dir_all(home.join(".haunt/plugins")).unwrap();
+        let git = |d: &str| std::fs::create_dir_all(home.join(d).join(".git")).unwrap();
+        let refused = [".ssh", ".config/gh", "Library/x", "Documents", "Desktop", "Downloads", "Library/Mobile Documents", ".haunt"];
+        for d in refused.iter().chain(&["", "code/p", "Documents/proj"]) {
+            git(d);
+        }
+        std::fs::create_dir_all(home.join("code/p/src/deep")).unwrap();
+        std::fs::create_dir_all(home.join("code/plain")).unwrap();
+        std::fs::create_dir_all(root.join("outside/.git")).unwrap();
+        std::fs::create_dir_all(home.join("code/wt")).unwrap();
+        std::fs::write(home.join("code/wt/.git"), format!("gitdir: {}\n", root.join("outside/.git").display())).unwrap();
+        std::fs::create_dir_all(home.join("code/ok-wt")).unwrap();
+        std::fs::write(home.join("code/ok-wt/.git"), "gitdir: ../p/.git\n").unwrap();
+        symlink(home.join(".ssh"), home.join("code/ssh-link")).unwrap();
         let mut s = FsScope::new(&["${cwd}/*".into()], &[], Some(&home.join(".haunt")));
         s.home = Some(home.canonicalize().unwrap());
-        for private in [".ssh", ".config/gh", "Library", "Library/Application Support", "code/p/.git"] {
-            std::fs::create_dir_all(home.join(private)).unwrap();
+        let resolved = |s: &FsScope, d: &str| s.project_folder(home.join(d).to_str().unwrap());
+        for d in refused.iter().chain(&["", "code/plain", "code/wt", "code/ssh-link", "Library"]) {
+            assert_eq!(resolved(&s, d), None, "{d:?}");
         }
-        for wide in [home.clone(), root.join("Users"), root.to_path_buf(), PathBuf::from("/"), home.join(".haunt"), home.join(".haunt/plugins")] {
-            s.add_cwd(wide.to_str().unwrap());
-        }
-        for private in [".ssh", ".config/gh", "Library", "Library/Application Support", "code/p/.git"] {
-            s.add_cwd(home.join(private).to_str().unwrap());
-        }
-        s.add_cwd(std::env::temp_dir().to_str().unwrap());
-        s.add_cwd(&format!("{}/code/..", home.display()));
-        assert!(s.cwds.is_empty(), "{:?}", s.cwds);
-        s.add_cwd(home.join("code/p").to_str().unwrap());
-        assert_eq!(s.cwds, [home.join("code/p")]);
+        assert_eq!(s.project_folder(root.join("outside").to_str().unwrap()), None);
+        let canon = |d: &str| home.join(d).canonicalize().unwrap();
+        assert_eq!(resolved(&s, "code/p/src/deep"), Some(canon("code/p")), "a tab deep in a repo grants its root");
+        assert_eq!(resolved(&s, "Documents/proj"), Some(canon("Documents/proj")), "a project inside a guarded folder is fine");
+        assert_eq!(resolved(&s, "code/ok-wt"), Some(canon("code/ok-wt")));
+        assert!(!s.add_cwd(home.join(".ssh").to_str().unwrap()) && s.cwds.is_empty());
+        assert!(s.add_cwd(home.join("code/p").to_str().unwrap()));
+        assert_eq!(s.cwds, [canon("code/p")]);
     }
 
     #[test]

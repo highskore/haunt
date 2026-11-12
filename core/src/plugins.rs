@@ -707,6 +707,12 @@ impl wpanel::Host for HostState {
 }
 
 impl HostState {
+    fn grant_tab_folder(&mut self, t: &Tapped) {
+        if !self.fs.add_cwd(&t.tab_cwd) {
+            self.fs.add_cwd(&t.opened_in);
+        }
+    }
+
     fn release_sheet(&self, id: &str) {
         if let Some(c) = &self.core {
             c.release_sheet(&self.id, Some(id));
@@ -824,8 +830,9 @@ impl wexec::Host for HostState {
             return Err(format!("at most {} commands at a time", px::MAX_RUNNING));
         }
         let core = self.core.as_ref().ok_or("no haunt core")?;
-        let opened = core.opened_in(&surface).ok_or("no such tab")?;
-        let dir = self.fs.project_folder(&opened).ok_or("the tab's folder is not a project folder inside your home folder")?;
+        let (cwd, opened) = core.tab_folders(&surface).ok_or("no such tab")?;
+        let dir = self.fs.project_folder(&cwd).or_else(|| self.fs.project_folder(&opened))
+            .ok_or("the tab isn't in a git repository inside your home folder")?;
         let sink = core.exec_sink().ok_or("commands are off")?;
         let job = NEXT_JOB.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let plugin_id = self.id.clone();
@@ -1098,11 +1105,11 @@ impl LoadedPlugin {
         self.call(|b, s| b.call_init(s, settings_json))
     }
 
-    /// A `verified` event widens the plugin's `${cwd}` grant to the folder the app opened the tab in,
-    /// never to the cwd the event names.
+    /// A `verified` event widens the plugin's `${cwd}` grant to the git root of the tab's cwd, else of the
+    /// folder it was opened in (`FsScope::project_folder`), never to the cwd the event names.
     pub fn on_event(&mut self, t: &Tapped) -> Result<(), PluginError> {
         if t.verified {
-            self.store.data_mut().fs.add_cwd(&t.tab_cwd);
+            self.store.data_mut().grant_tab_folder(t);
         }
         let ev = agent_event(t, self.store.data().events);
         self.call(|b, s| b.call_on_event(s, &ev))
@@ -1587,7 +1594,7 @@ mod tests {
             truncated: false,
             kind,
         };
-        Tapped { surface: "tab-1".into(), event, verified, tab_cwd: "/w".into(), request_key }
+        Tapped { surface: "tab-1".into(), event, verified, tab_cwd: "/w".into(), opened_in: "/w".into(), request_key }
     }
 
     #[test]
@@ -1821,6 +1828,28 @@ mod tests {
     }
 
     #[test]
+    fn a_tabs_fs_grant_follows_its_shell_only_into_a_git_root() {
+        let home = tempdir("osc7-home");
+        for d in ["code/p/.git", ".ssh/.git", "notes"] {
+            std::fs::create_dir_all(home.join(d)).unwrap();
+        }
+        let core = crate::Core::new(&*tempdir("osc7"));
+        let grant = |shell_cwd: &str| {
+            let tab = core.register_surface(home.to_str().unwrap()).unwrap().surface_id;
+            core.set_surface_info(&tab, "", home.join(shell_cwd).to_str().unwrap(), None);
+            let (tab_cwd, opened_in) = core.handle().tab_folders(&tab).unwrap();
+            let mut st = HostState::new("dev.x.fs", &Capabilities { fs_read: vec!["${cwd}/*".into()], ..Default::default() }, None, None, None);
+            st.fs.set_home(&home);
+            st.grant_tab_folder(&Tapped { surface: tab, tab_cwd, opened_in, ..tapped(EventKind::Stop, true, None) });
+            st.fs.cwds().to_vec()
+        };
+        assert_eq!(grant("code/p"), [home.join("code/p").canonicalize().unwrap()], "~ then cd into a project");
+        assert!(grant(".ssh").is_empty(), "an OSC 7 for ~/.ssh grants nothing, even with a .git there");
+        assert!(grant("notes").is_empty(), "not a git repository");
+        assert!(grant("").is_empty(), "a tab at ~ gets no grant, and never ~ itself");
+    }
+
+    #[test]
     fn exec_runs_only_granted_commands_in_a_tabs_project_folder() {
         use wexec::Host as _;
         let core = crate::Core::new(&*tempdir("exec"));
@@ -1829,7 +1858,7 @@ mod tests {
         let tab = core.register_surface("/tmp").unwrap().surface_id;
         assert!(p.run(tab.clone(), wexec::Command::GitHead).unwrap_err().contains("not in this plugin's exec list"));
         assert_eq!(p.run("nope".into(), wexec::Command::GitStatus).unwrap_err(), "no such tab");
-        assert!(p.run(tab, wexec::Command::GitStatus).unwrap_err().contains("not a project folder"), "/tmp is outside home");
+        assert!(p.run(tab, wexec::Command::GitStatus).unwrap_err().contains("git repository inside your home"), "/tmp is outside home");
         p.exec_jobs = vec![1, 2];
         assert!(p.run("nope".into(), wexec::Command::GitStatus).unwrap_err().contains("at most 2"));
     }

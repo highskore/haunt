@@ -18,6 +18,6 @@ fn main() {
     )
     .unwrap();
     let t = Instant::now();
-    p.on_event(&haunt_core::Tapped { surface: "s".into(), event, verified: false, tab_cwd: "/".into(), request_key: None }).unwrap();
+    p.on_event(&haunt_core::Tapped { surface: "s".into(), event, verified: false, tab_cwd: "/".into(), opened_in: "/".into(), request_key: None }).unwrap();
     println!("on_event_us={:.1} logs={:?}", t.elapsed().as_secs_f64() * 1e6, p.take_logs());
 }

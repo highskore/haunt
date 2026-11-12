@@ -96,8 +96,10 @@ pub struct Tapped {
     pub surface: String,
     pub event: AgentEvent,
     pub verified: bool,
-    /// The folder the app opened the tab in (`register_surface`); nothing in the pty can change it.
+    /// The tab's cwd now, as the shell last reported it (OSC 7): the pty can steer it.
     pub tab_cwd: String,
+    /// The cwd at `register_surface`: the focused tab's when the app opened it, so also once the pty's.
+    pub opened_in: String,
     /// The surface's answerable request key, on a verified `permission_seen` that made one.
     pub request_key: Option<u64>,
 }
@@ -198,10 +200,10 @@ impl State {
         s.live_permission().filter(|p| p.agent.answer_bytes(true).is_some() && !s.terminal_only(p)).map(|p| p.key())
     }
 
-    /// The tap, and the surface's `opened_in`, when the surface is registered.
-    fn tap_for(&self, surface_id: &str) -> Option<(EventTap, String)> {
+    /// The tap, and the surface's cwd and `opened_in`, when the surface is registered.
+    fn tap_for(&self, surface_id: &str) -> Option<(EventTap, String, String)> {
         let s = self.surfaces.iter().find(|s| s.id == surface_id)?;
-        Some((self.event_tap.clone()?, s.opened_in.clone()))
+        Some((self.event_tap.clone()?, s.cwd.clone(), s.opened_in.clone()))
     }
 
     /// Runs `f` on one surface, then moves the requests it ended into the decision log. Only
@@ -481,8 +483,8 @@ fn deliver(state: &Mutex<State>, offload: &Offload, d: Delivery) -> bool {
         if d.verified {
             let _ = offload.branch.try_send((d.surface_id.clone(), event.cwd.clone(), turn));
         }
-        if let Some((tap, tab_cwd)) = tap {
-            let _ = offload.tap.try_send((tap, Tapped { surface: d.surface_id, event, verified: d.verified, tab_cwd, request_key }));
+        if let Some((tap, tab_cwd, opened_in)) = tap {
+            let _ = offload.tap.try_send((tap, Tapped { surface: d.surface_id, event, verified: d.verified, tab_cwd, opened_in, request_key }));
         }
     }
     changed
@@ -681,8 +683,8 @@ impl Core {
             tap = st.tap_for(surface_id);
             st.apply_unverified(surface_id, &event, now)
         });
-        let Some((tap, tab_cwd)) = tap else { return };
-        let t = Tapped { surface: surface_id.to_owned(), event, verified: false, tab_cwd, request_key: None };
+        let Some((tap, tab_cwd, opened_in)) = tap else { return };
+        let t = Tapped { surface: surface_id.to_owned(), event, verified: false, tab_cwd, opened_in, request_key: None };
         if tap(&t) {
             requests_queued(&self.state);
         }
@@ -1042,9 +1044,9 @@ impl CoreHandle {
         lock(&self.state).exec_sink.clone()
     }
 
-    /// The folder the app opened `surface` in, not the cwd events claim.
-    pub fn opened_in(&self, surface: &str) -> Option<String> {
-        lock(&self.state).surfaces.iter().find(|s| s.id == surface).map(|s| s.opened_in.clone())
+    /// `surface`'s cwd now and the one it was opened in; never the cwd an event claims.
+    pub fn tab_folders(&self, surface: &str) -> Option<(String, String)> {
+        lock(&self.state).surfaces.iter().find(|s| s.id == surface).map(|s| (s.cwd.clone(), s.opened_in.clone()))
     }
 
     /// The app's key map changed: every chord in use or reserved, by owner.
