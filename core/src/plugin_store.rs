@@ -824,6 +824,12 @@ pub struct PluginSet {
     audit_log: Option<PathBuf>,
 }
 
+/// Any app can put Haunt's plugin-copy type on the pasteboard, so its id counts only when it is a valid
+/// plugin id that names an installed plugin granted `clipboard = "write"`.
+fn copy_source<'a>(id: &str, mut plugins: impl Iterator<Item = (&'a Capabilities, &'a str)>) -> bool {
+    crate::plugin_manifest::valid_id(id) && plugins.any(|(caps, p)| p == id && caps.clipboard_write())
+}
+
 /// The most settings JSON one plugin gets.
 pub const MAX_SETTINGS: usize = 256 << 10;
 
@@ -941,6 +947,11 @@ impl PluginSet {
 
     pub fn key_action(&mut self, plugin_id: &str, id: &str, down: bool, terminal_shown: bool) -> Result<(), PluginError> {
         self.plugin(plugin_id)?.key_action(id, down, terminal_shown)
+    }
+
+    /// Whether a pasteboard tag naming `plugin_id` may stand: see `copy_source`.
+    pub fn copied_by(&self, plugin_id: &str) -> bool {
+        copy_source(plugin_id, self.plugins.iter().map(|(caps, p)| (caps, p.id())))
     }
 
     /// The enabled plugin that has `keys.hover-hold`.
@@ -1312,6 +1323,17 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_copy_tag_counts_only_for_an_installed_plugin_that_may_copy() {
+        let copier = Capabilities { clipboard: Some("write".into()), ..Default::default() };
+        let other = Capabilities::default();
+        let set = [(&copier, "dev.haunt.relay"), (&other, "dev.haunt.tabs")];
+        assert!(copy_source("dev.haunt.relay", set.into_iter()));
+        for forged in ["dev.haunt.tabs", "dev.haunt.missing", "Dev.Haunt.Relay", "dev.haunt.relay\u{202e}", "", "relay"] {
+            assert!(!copy_source(forged, set.into_iter()), "{forged:?}");
+        }
+    }
     use crate::testdir::TempDir;
 
     fn tempdir(tag: &str) -> TempDir {

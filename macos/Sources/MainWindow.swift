@@ -305,6 +305,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
         view.onPasteConfirmation = { [weak self, weak view] req in
             if let view { self?.pasteGuard.confirm(req, on: view) }
         }
+        view.isPluginCopy = { [weak self] id in self?.bridge.copiedBy(id) ?? false }
         view.onRiskyPaste = { [weak self, weak view] text, plugin in
             if let view { self?.pasteGuard.hold(text, plugin: plugin, on: view) }
         }

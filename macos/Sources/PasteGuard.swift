@@ -91,7 +91,7 @@ final class PasteGuard {
         let alert = NSAlert()
         alert.messageText = preview.lines == 1 ? "Paste 1 line?" : "Paste \(preview.lines) lines?"
         var notes: [String] = []
-        if let plugin { notes.append("The plugin \(plugin) copied this. Each line runs as a command if the terminal isn't waiting for text.") }
+        if let plugin { notes.append("The plugin \(AgentNotifier.visible(plugin)) copied this. Each line runs as a command if the terminal isn't waiting for text.") }
         if preview.hasPasteEnd {
             notes.append("It contains a bracketed paste end (^[[201~), which tries to run the text after it as typed commands. Ghostty pastes its escape as a space, so it won't.")
         }

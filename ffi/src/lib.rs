@@ -339,6 +339,11 @@ impl HauntPlugins {
         Ok(haunt_core::sync::lock(&self.set).top_row_clicked(&plugin_id)?)
     }
 
+    /// Whether a pasteboard plugin-copy tag naming `plugin_id` is believed: an installed plugin that may copy.
+    pub fn copied_by(&self, plugin_id: String) -> bool {
+        haunt_core::sync::lock(&self.set).copied_by(&plugin_id)
+    }
+
     /// The open tab a plugin's hold summary action brings forward, before `notify_action`.
     pub fn hold_surface(&self, plugin_id: String, action_id: String) -> Option<String> {
         haunt_core::sync::lock(&self.set).hold_surface(&plugin_id, &action_id)

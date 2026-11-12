@@ -12,12 +12,14 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
     /// A paste Haunt holds itself (PastePreview.needsConfirmation); the host asks, then calls `sendPaste`.
     /// The text, and the plugin that copied it (`PluginCopy`) if one did.
     var onRiskyPaste: ((String, String?) -> Void)?
+    /// Whether a plugin-copy tag naming this id is believed (`PluginCopy.source`).
+    var isPluginCopy: (String) -> Bool = { _ in false }
     /// Whether a middle click pastes the selection, read at each click so config changes apply.
     var middleClickPastes: () -> Bool = { true }
 
     /// True when `text` was held for confirmation instead of going to Ghostty.
     private func holdIfRisky(_ text: String?, from pb: NSPasteboard) -> Bool {
-        let plugin = PluginCopy.source(pb)
+        let plugin = PluginCopy.source(pb, isPlugin: isPluginCopy)
         guard let text, let ask = onRiskyPaste, PastePreview(text, fromPlugin: plugin).needsConfirmation else { return false }
         ask(text, plugin)
         return true

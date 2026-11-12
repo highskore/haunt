@@ -84,6 +84,9 @@ final class PluginBridge {
         if let e = audit.error { AppDelegate.logger.error("plugin audit: \(e, privacy: .public)") }
     }
 
+    /// Whether a pasteboard tag naming `pluginId` is believed (`PluginCopy.source`).
+    func copiedBy(_ pluginId: String) -> Bool { plugins?.copiedBy(pluginId: pluginId) ?? false }
+
     func drain() {
         guard let plugins else { return }
         drainAudit()

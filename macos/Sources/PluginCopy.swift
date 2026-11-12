@@ -13,9 +13,10 @@ enum PluginCopy {
         pb.writeObjects([item])
     }
 
-    /// The plugin that wrote what `pb` holds, if a plugin did (anything copied since clears the tag).
-    static func source(_ pb: NSPasteboard) -> String? {
-        pb.string(forType: type).flatMap { $0.isEmpty ? nil : $0 }
+    /// The plugin that wrote what `pb` holds, if a plugin did (anything copied since clears the tag). Any
+    /// app can write the type, so the id counts only when `isPlugin` vouches for it (`HauntPlugins.copiedBy`).
+    static func source(_ pb: NSPasteboard, isPlugin: (String) -> Bool) -> String? {
+        pb.string(forType: type).flatMap { $0.isEmpty || !isPlugin($0) ? nil : $0 }
     }
 
     /// The note at the sidebar's foot after a write.
