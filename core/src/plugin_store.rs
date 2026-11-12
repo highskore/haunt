@@ -60,10 +60,21 @@ pub struct LockEntry {
     pub commit: Option<String>,
     pub sha256_wasm: String,
     pub sha256_manifest: String,
+    #[serde(deserialize_with = "known_grants")]
     pub granted: Capabilities,
     /// A data-only plugin's files (`plugin_pack::files_digest`); its `sha256_wasm` is empty.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sha256_files: String,
+}
+
+/// A grant pinned by a newer haunt can name capabilities this one doesn't know; they are dropped,
+/// never granted, and the rest still loads.
+fn known_grants<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Capabilities, D::Error> {
+    let mut table = toml::Table::deserialize(d)?;
+    let all = Capabilities { clipboard: Some(String::new()), ..Default::default() };
+    let known = toml::Table::try_from(all).map_err(serde::de::Error::custom)?;
+    table.retain(|k, _| known.contains_key(k));
+    Capabilities::deserialize(table).map_err(serde::de::Error::custom)
 }
 
 /// `source` of a plugin that ships inside the app.
@@ -1069,6 +1080,18 @@ mod tests {
 
     fn tempdir(tag: &str) -> TempDir {
         TempDir::created(&format!("store-{tag}"))
+    }
+
+    #[test]
+    fn a_lockfile_grant_from_a_newer_haunt_drops_what_this_one_doesnt_know() {
+        let entry = |granted: &str| format!(
+            "[[plugin]]\nid = \"dev.x.p\"\nversion = \"1\"\nsource = \"s\"\nsha256_wasm = \"a\"\nsha256_manifest = \"b\"\n[plugin.granted]\n{granted}\n"
+        );
+        let lock: Lock = toml::from_str(&entry("timer = true\nteleport = true\nclipboard = \"read\"")).unwrap();
+        let g = &lock.plugins[0].granted;
+        assert!(g.timer && g.clipboard.as_deref() == Some("read"));
+        assert_eq!(*g, Capabilities { timer: true, clipboard: Some("read".into()), ..Default::default() });
+        assert!(toml::from_str::<Lock>(&entry("timer = \"yes\"")).is_err(), "a known one still has to be well-formed");
     }
 
     #[test]

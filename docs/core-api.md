@@ -208,7 +208,7 @@ A request keeps its command or file path exactly as sent. Its `preview` hides no
 
 ## Plugins (`HauntPlugins`, feature `plugins`)
 
-Installed with `haunt plugin install <path>` (cli/), which shows the capabilities, asks y/N (`--yes` for scripts) and pins sha256 of the wasm and manifest in `~/.haunt/plugins.lock`. A plugin whose files no longer match is not loaded until `haunt plugin approve <id>`.
+Installed with `haunt plugin install <path>` (cli/), which shows the capabilities, asks y/N (`--yes` for scripts) and pins sha256 of the wasm and manifest in `~/.haunt/plugins.lock`. A plugin whose files no longer match is not loaded until `haunt plugin approve <id>`. A capability in the pinned grant that this haunt doesn't know (a newer haunt wrote it) is dropped, never granted, and the rest loads.
 
 `haunt plugin new <name> [--dir <path>] [--id <id>]` scaffolds a plugin repo from `cli/template/`, a snapshot of the `haunt-plugin-template` repo embedded in the binary, with `wit/haunt-plugin.wit` from this checkout. The id defaults to `dev.haunt.<name>` and must pass the same reverse-DNS rule as the manifest; it refuses a non-empty folder and runs `git init`. When the template repo changes, copy it over `cli/template/` (without `wit/`); `cli/tests/plugin.rs` builds and installs the scaffold.
 
