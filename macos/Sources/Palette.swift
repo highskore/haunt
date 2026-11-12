@@ -338,7 +338,8 @@ final class PaletteView: NSView {
     var selectedRow: PaletteRow? { rows.indices.contains(selected) ? rows[selected] : nil }
 
     func update(chip: String?, query: String, placeholder: String, rows: [PaletteRow], foot: [String], maxRows: Int) {
-        let keep = selectedRow
+        // A refresh or reorder keeps the selected row; new text starts again from the best match.
+        let keep = query == self.query && chip == self.chip ? selectedRow : nil
         self.chip = chip
         self.query = query
         self.placeholder = placeholder
