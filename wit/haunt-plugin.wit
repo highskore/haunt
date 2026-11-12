@@ -31,8 +31,9 @@ interface types {
     command: option<string>,
     file-path: option<string>,
     task-id: option<string>,
-    // On a verified `permission_seen` that haunt can answer, for plugins granted `pty_write`: the key
-    // `pty.answer` takes.
+    // On a verified `permission_seen`, for plugins granted `pty_write`: the key `pty.answer` takes.
+    // A terminal-only request (suspicious, or an earlier prompt maybe still on screen) has one too,
+    // but answering it writes nothing.
     request-key: option<u64>,
   }
 

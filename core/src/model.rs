@@ -197,10 +197,11 @@ impl State {
         self.surfaces.iter_mut().find(|s| s.id == id)
     }
 
-    /// The key haunt would answer for `surface` now, if its live request is answerable.
-    fn answerable_key(&self, surface: &str) -> Option<u64> {
+    /// The key of `surface`'s live request from an agent haunt knows the keys of. A terminal-only one
+    /// has a key too, so a plugin can follow it, but `answer_by` refuses it.
+    fn live_key(&self, surface: &str) -> Option<u64> {
         let s = &self.surfaces.iter().find(|s| s.id == surface)?.session;
-        s.live_permission().filter(|p| p.agent.answer_bytes(true).is_some() && !s.terminal_only(p)).map(|p| p.key())
+        s.live_permission().filter(|p| p.agent.answer_bytes(true).is_some()).map(|p| p.key())
     }
 
     /// The tap, and the surface's cwd and `opened_in`, when the surface is registered.
@@ -478,7 +479,7 @@ fn deliver(state: &Mutex<State>, offload: &Offload, d: Delivery) -> bool {
         let changed = st.deliver(&d, now);
         turn = st.started_turn(&d);
         if d.verified && d.event.as_ref().is_some_and(|e| matches!(e.kind, crate::event::EventKind::PermissionSeen { .. })) {
-            request_key = st.answerable_key(&d.surface_id);
+            request_key = st.live_key(&d.surface_id);
         }
         changed
     });
@@ -1613,6 +1614,38 @@ mod tests {
         let live = c.with_state(|st| st.surface(&env.surface_id).map(|s| s.session.current_key()));
         assert_eq!(*keys.lock().unwrap(), [None, live]);
         assert!(live.is_some());
+    }
+
+    #[cfg(feature = "plugins")]
+    #[test]
+    fn a_terminal_only_request_carries_its_key_but_no_plugin_can_answer_it() {
+        let c = core();
+        let env = c.register_surface("/w").unwrap();
+        let keys = Arc::new(Mutex::new(Vec::new()));
+        let k = keys.clone();
+        c.set_event_tap(Some(Arc::new(move |t: &Tapped| {
+            k.lock().unwrap().push(t.request_key);
+            false
+        })));
+        let st = c.state.clone();
+        let offload = Offload::spawn(st.clone(), c.branches.clone()).unwrap();
+        let nonces = lock(&st).nonces.clone();
+        let start = r#""event":"tool_start","tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"git push"}"#;
+        let changed = r#""event":"permission_seen","tool_name":"Bash","tool_input":{"command":"rm -rf build"}"#;
+        for body in [start, PERM, changed] {
+            deliver(&st, &offload, crate::intake::decode(&line(&env, Some(&env.nonce), body), &nonces).unwrap());
+        }
+        let t = Instant::now();
+        while keys.lock().unwrap().len() < 3 && t.elapsed() < Duration::from_secs(2) {
+            std::thread::yield_now();
+        }
+        let p = pending(&c).expect("a live request");
+        assert!(p.suspicious);
+        assert_eq!(keys.lock().unwrap().last(), Some(&Some(p.key)), "a plugin still learns the key");
+        let answer = crate::plugins::HostRequest::PtyAnswer { plugin_id: "dev.x.auto".into(), surface: env.surface_id.clone(), allow: true, request_id: p.key };
+        assert_eq!(c.gate_plugin_request(&answer), None);
+        assert_eq!(c.answer_by(&env.surface_id, p.key, false, Some("dev.x.auto")), None);
+        assert_eq!(pending(&c).map(|p| p.key), Some(p.key), "it stays for the terminal");
     }
 
     #[test]
