@@ -116,9 +116,9 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
         if boxes { return drawBoxes() }
         for i in 0..<3 {
             let r = lightRect(i)
-            // Under the light, so a theme can frame it but never hide or recolour it.
+            // Around the light, never inside it: a theme can frame it but never hide or recolour it.
             if let ctx = NSGraphicsContext.current?.cgContext {
-                Layers.draw("lights", r, within: bounds, state: Layers.state(self, hover: lightsHover), index: i, in: ctx)
+                Layers.draw("lights", r, within: bounds, exclude: r, state: Layers.state(self, hover: lightsHover), index: i, in: ctx)
             }
             if Theme.current.effects.lightsShape == "squares" && !lightsHover {
                 // Squares in the window's colour edged in the lights'; the close light's filled with it.

@@ -612,25 +612,25 @@ do {
     write(user, "lf", "[[layer]]\nslot = \"sidebar\"\n  [[layer.draw]]\n  kind = \"image\"\n  file = \"link.png\"\n  # \"pipe.png\" \"mark.png\"\n")
     check(LoadedTheme.layerFiles(user.appendingPathComponent("lf.toml")).map(\.0) == ["mark.png"], "links and FIFOs are skipped")
 
-    // Every colour a layer paints over the slot's text must leave it readable, whatever its shape; edges away
-    // from the text may be any colour.
+    // The text must read on what the layers actually paint under it, whatever they are; edges away from the
+    // text may be any colour.
     let white = Theme()
     func resolved(_ slot: String, _ p: PrimSpec) -> ([ResolvedLayer], [String]) {
         Layers.resolve([LayerSpec(slot: slot, prims: [p])], images: [], theme: white)
     }
     let primary = white.color.textPrimary.themeHex
-    func drawn(_ slot: String, _ prims: [PrimSpec], text: [CGRect]?, ink: NSColor = white.color.textPrimary,
-               bounds: CGRect = CGRect(x: 10, y: 10, width: 80, height: 40)) -> Int {
-        let (l, _) = Layers.resolve([LayerSpec(id: "probe", slot: slot, prims: prims)], images: [], theme: white)
+    func drawn(_ slot: String, _ prims: [PrimSpec], text: [CGRect]?, ink: NSColor = white.color.textPrimary, on: NSColor? = nil,
+               layers: Int = 1, bounds: CGRect = CGRect(x: 10, y: 10, width: 80, height: 40)) -> Int {
+        let specs = (0..<layers).map { LayerSpec(id: "probe\($0)", slot: slot, prims: prims) }
+        let (l, _) = Layers.resolve(specs, images: [], theme: white)
         Layers.set(l, source: LayerSource())
         let c = canvas()
-        Layers.draw(slot, bounds, textRun: bounds, text: text?.map { Layers.Run(rect: $0, ink: ink) }, in: c.ctx)
+        Layers.draw(slot, bounds, textRun: bounds, text: text?.map { Layers.Run(rect: $0, ink: ink, on: on) }, in: c.ctx)
         return c.painted()
     }
     let inner = [CGRect(x: 20, y: 20, width: 60, height: 20)]
-    check(!resolved("row.selected", PrimSpec(kind: "rect", fill: primary)).0[0].prims[0].backs.isEmpty, "a text slot's shapes keep what they leave under it")
     check(drawn("row.selected", [PrimSpec(kind: "rect", fill: primary)], text: inner) == 0
-          && Layers.skipped.contains { $0.contains("probe") && $0.contains("text in \(primary)") },
+          && Layers.skipped.contains { $0.contains("row.selected") && $0.contains("text in \(primary)") },
           "a fill in the text's own colour is skipped over the text, and logged with why")
     // The text is held to the colour it's drawn in, not the slot's usual ink: a caption title in white.
     check(drawn("titlebar", [PrimSpec(kind: "rect", fill: "#ffffff")], text: inner, ink: .white) == 0, "white text can't go on a white layer")
@@ -642,11 +642,11 @@ do {
           "but an edge clear of the text is drawn")
     check(drawn("row.selected", [PrimSpec(kind: "rect", y: SpanSpec(mode: "top", b: 1), fill: "#ffffff33")], text: inner) > 0,
           "so is a top highlight above it")
-    check(drawn("row.selected", [PrimSpec(kind: "gradient", stops: [.init(color: "#00000000", at: 0), .init(color: primary, at: 1)])], text: inner) == 0,
-          "a gradient's stops are held to it")
+    check(drawn("row.selected", [PrimSpec(kind: "gradient", stops: [.init(color: "#00000000", at: 0), .init(color: primary, at: 1)])], text: [CGRect(x: 10, y: 10, width: 80, height: 40)]) == 0,
+          "a gradient is held to it where it reaches the ink")
     check(drawn("row.selected", [PrimSpec(kind: "shadow", radius: 4, blur: 12, color: primary)], text: [CGRect(x: 30, y: 25, width: 40, height: 10)]) > 0,
           "a shadow paints only outside its shape")
-    check(drawn("row.selected", [PrimSpec(kind: "shadow", x: SpanSpec(mode: "left", b: 4), radius: 2, blur: 12, color: primary)], text: inner) == 0,
+    check(drawn("row.selected", [PrimSpec(kind: "shadow", x: SpanSpec(mode: "left", b: 4), radius: 2, blur: 2, offset: [20, 0], color: primary)], text: inner) == 0,
           "and is held to the text it reaches")
     check(drawn("row.selected", [PrimSpec(kind: "bevel", rings: [[primary, primary, primary, primary]])], text: [CGRect(x: 10, y: 10, width: 80, height: 40)]) == 0,
           "bevel edges too")
@@ -658,7 +658,18 @@ do {
                      PrimSpec(kind: "rect", x: SpanSpec(a: 6, b: 6), y: SpanSpec(mode: "top", b: 1), fill: "#ffffff33"),
                      PrimSpec(kind: "rect", radius: 9, stroke: "#ffffff38", width: 0.5)]
     _ = drawn("row.selected", glassLike, text: inner)
-    check(!Layers.skipped.contains { $0.contains("probe") }, "Glass's raised row draws: \(Layers.skipped)")
+    check(Layers.skipped.isEmpty, "Glass's raised row draws: \(Layers.skipped)")
+    // The review's probes. Faint fills that each pass alone, stacked 64 deep.
+    check(drawn("row.selected", [PrimSpec(kind: "rect", fill: String(primary.prefix(7)) + "10")], text: inner, layers: 64) == 0, "64 faint fills stacked are judged together")
+    check(drawn("row.selected", [PrimSpec(kind: "rect", fill: String(primary.prefix(7)) + "10")], text: inner) > 0, "while one alone is fine")
+    // A square traced twice: nonzero fills it, whatever an even-odd reading says.
+    let twice: [PrimSpec.Cmd] = (0..<2).flatMap { _ in [.init(op: "M", pts: [0, 0]), .init(op: "L", pts: [10, 0]), .init(op: "L", pts: [10, 10]),
+                                                         .init(op: "L", pts: [0, 10]), .init(op: "Z", pts: [])] }
+    check(drawn("row.selected", [PrimSpec(kind: "path", fill: primary, path: twice, view: [10, 10])], text: inner) == 0, "a path traced twice still covers the text")
+    // A pill: its text is pill.fg on pill.bg over whatever the layer leaves.
+    let pillFg = white.app.pillFg, pillBg = white.app.pillBg
+    check(drawn("status.needs", [PrimSpec(kind: "rect", fill: pillFg.themeHex)], text: inner, ink: pillFg, on: pillBg) == 0, "a layer in the pill's ink hides the pill's word")
+    check(drawn("status.needs", [PrimSpec(kind: "rect", fill: "#000000")], text: inner, ink: pillFg, on: pillBg) > 0, "a dark one doesn't")
 
     // Clipped to the slot (bleed included), never into the excluded terminal, and states pick layers.
     func layer(_ slot: String, _ p: PrimSpec, when: [String] = [], opacity: Double = 1) -> ResolvedLayer {
@@ -671,8 +682,8 @@ do {
     check(c.alpha(x: 10, y: 10) == 255 && c.alpha(x: 60, y: 10) == 0 && c.alpha(x: 99, y: 99) == 0, "window.bg skips the terminal")
     c = canvas()
     Layers.draw("row.selected", CGRect(x: 20, y: 20, width: 40, height: 20), within: CGRect(x: 0, y: 0, width: 64, height: 100), in: c.ctx)
-    check(c.alpha(x: 30, y: 30) == 255 && c.alpha(x: 30, y: 15) == 255 && c.alpha(x: 30, y: 13) == 0, "a row's layer bleeds 6 pt, no more")
-    check(c.alpha(x: 63, y: 30) == 255 && c.alpha(x: 65, y: 30) == 0, "and never past the sidebar")
+    check(c.alpha(x: 30, y: 30) == 255 && c.alpha(x: 30, y: 19) == 0 && c.alpha(x: 30, y: 41) == 0, "a row's layer stays in its box, over no label")
+    check(c.alpha(x: 59, y: 30) == 255 && c.alpha(x: 61, y: 30) == 0, "on every side")
     c = canvas()
     Layers.draw("sidebar", CGRect(x: 0, y: 0, width: 40, height: 40), state: ["inactive"], in: c.ctx)
     check(c.painted() == 0, "a focused-only layer stays off in an inactive window")
@@ -785,20 +796,26 @@ do {
     Layers.set(Layers.resolve(worst, images: [], theme: white).0, source: worstSource)
     check(Layers.current.isEmpty, "it stays off for the session")
     print("worst-case window: \(Int(first)) ms, then \(String(format: "%.1f", ms)) ms with layers off")
+    // Layers the check refuses still cost their check, and that time counts: 256-segment paths in the text's colour.
+    let refused = Layers.slots.filter { Layers.text[$0] != nil }.map { LayerSpec(slot: $0, prims: Array(repeating: PrimSpec(kind: "path", fill: primary, path: zigzag, view: [400, 400]), count: 16)) }
+    Layers.set(Layers.resolve(refused, images: [], theme: white).0, source: LayerSource(specs: refused))
+    drawWindow()
+    Layers.endFrame()
+    check(Layers.lastFrameMs > 0 && said.contains { $0.contains("skipped") }, "a refused layer's check is timed: \(Layers.lastFrameMs) ms")
     Layers.report = { _ in }
     Layers.set([], source: LayerSource())
     Layers.terminalSeeThrough = false
 
-    // Under text by construction: a function that draws slots draws one before any text. Layers are clipped to
-    // their slot, so a later slot's layers can't reach text drawn earlier in another.
+    // Under text by construction: in every function that draws slots, every slot's layers come before any text,
+    // and layers are clipped to their slot, so none reaches text drawn earlier in another.
     var sites = 0
     for file in ["SidebarView", "TitleBarView", "Palette", "MainWindow"] {
         let src = try! String(contentsOfFile: "macos/Sources/\(file).swift", encoding: .utf8)
         for body in src.components(separatedBy: "func ").dropFirst() where body.contains("Layers.draw(") {
             sites += 1
-            let firstLayer = body.range(of: "Layers.draw(")!.lowerBound
+            let lastLayer = body.range(of: "Layers.draw(", options: .backwards)!.lowerBound
             let text = ["Draw.text(", "Draw.chromeText(", "CTLineDraw("].compactMap { body.range(of: $0)?.lowerBound }.min()
-            check(text.map { $0 > firstLayer } ?? true, "\(file): text drawn before a layer in func \(body.prefix(40))")
+            check(text.map { $0 > lastLayer } ?? true, "\(file): text drawn before a layer in func \(body.prefix(40))")
         }
     }
     check(sites >= 8, "found the drawing sites: \(sites)")

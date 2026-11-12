@@ -79,9 +79,6 @@ struct ResolvedLayer {
         var path: CGPath?
         /// A pattern's cell, drawn once.
         var tile: CGImage?
-        /// What each of its colours leaves under the slot's text, for text slots: the layer is skipped wherever
-        /// one of these would leave the text drawn there unreadable.
-        var backs: [NSColor] = []
     }
 }
 
@@ -102,7 +99,7 @@ enum Layers {
         let paletteText = ["color.palette.ink", "color.palette.mute"]
         var t: [String: (over: [String], fg: [String])] = [
             "titlebar": (["color.window.bg"], ["app.title.fg", "app.title.meta"]),
-            "row.selected": (sidebar + ["color.row.selected"], ["color.text.primary", "color.text.sub", "color.text.meta", "color.needs"]),
+            "row.selected": (sidebar, ["color.text.primary", "color.text.sub", "color.text.meta", "color.needs"]),
             "palette.row.selected": (palette + ["color.palette.sel"], ["color.palette.ink", "app.palette.pill.ink"]),
             "palette.caption": (palette + ["app.row.select.fill"], ["app.row.select.ink"]),
         ]
@@ -111,9 +108,9 @@ enum Layers {
         return t
     }()
 
-    /// Rows may shadow past their box by this much, still inside the sidebar; a light may be ringed.
-    static let bleed: [String: CGFloat] = ["row": 6, "row.selected": 6, "row.hover": 6, "palette.row.selected": 6, "palette.row.hover": 6,
-                                           "lights": 4]
+    /// A light may be ringed past its circle. Rows get no bleed: each is clipped to its own box, so it never
+    /// reaches the text of the row or label next to it.
+    static let bleed: [String: CGFloat] = ["lights": 4]
     /// Bitmaps under text, and anything behind the terminal, are kept this faint, all of a slot's together.
     static let faintAlpha: CGFloat = 0.12
 
@@ -133,6 +130,7 @@ enum Layers {
     static func set(_ layers: [ResolvedLayer], source: LayerSource) {
         current = tooSlow.contains(source) ? [:] : Dictionary(grouping: layers, by: \.slot)
         skipped = []
+        verdicts = [:]
         self.source = source
         frame = (0, false)
     }
@@ -141,6 +139,8 @@ enum Layers {
     struct Run {
         var rect: NSRect
         var ink: NSColor
+        /// What the caller fills under this text after the layers, e.g. a pill.
+        var on: NSColor? = nil
     }
 
     /// A redraw whose layers take longer than this counts as slow; two slow ones, or one over `stopMs`, turn the
@@ -153,9 +153,13 @@ enum Layers {
     private static var frame: (ms: Double, open: Bool) = (0, false)
 
     /// Ends a redraw: every view drawn in one pass of the run loop is one redraw. Tests call it themselves.
+    /// The last redraw's layer time, checks included.
+    private(set) static var lastFrameMs = 0.0
+
     static func endFrame() {
         guard frame.open else { return }
         let ms = frame.ms
+        lastFrameMs = ms
         frame = (0, false)
         guard !current.isEmpty else { return }
         if ms > slowMs { slowFrames += 1 }
@@ -179,10 +183,11 @@ enum Layers {
 
     /// Draws `slot`'s layers into `bounds`, clipped to them (plus the slot's bleed, inside `within`), never into
     /// `exclude` (the terminal). `textRun` is the slot's text, for text anchors; `text` is the text the caller
-    /// draws after, each run in its own colour, which no layer may leave unreadable. Without it the text run (or
-    /// the whole slot) is checked in every colour the slot's text may take.
+    /// draws after, each run in its own colour, and `base` what it fills under the layers beyond the slot's own
+    /// background (a tint). Without `text` the text run (or the whole slot) is checked in every colour the slot's
+    /// text may take. If the layers, as painted, leave any run unreadable, none of the slot's layers are drawn.
     static func draw(_ slot: String, _ bounds: NSRect, within: NSRect? = nil, exclude: NSRect? = nil, textRun: NSRect? = nil,
-                     text: [Run]? = nil, state: Set<String> = [], index: Int? = nil, in ctx: CGContext) {
+                     text: [Run]? = nil, base: [NSColor] = [], state: Set<String> = [], index: Int? = nil, in ctx: CGContext) {
         guard let layers = current[slot] else { return }
         if slot == "pane.backdrop" && !terminalSeeThrough { return }
         let b = bleed[slot] ?? 0
@@ -190,22 +195,22 @@ enum Layers {
         if let within { clip = clip.intersection(within) }
         guard !clip.isEmpty else { return }
         recorder?(slot, clip)
-        let run = textRun ?? bounds
-        let runs = Self.text[slot].map { t in text ?? t.fg.compactMap(Theme.colorPath).map { Run(rect: run, ink: Theme.current[keyPath: $0]) } } ?? []
-        let shown = layers.filter { l in
-            guard l.when.isSubset(of: state), l.index == nil || l.index == index else { return false }
-            guard let why = unreadable(l, runs, slot: bounds, textRun: run) else { return true }
-            let said = "\(l.id.map { "layer \($0)" } ?? "a layer") (\(slot)): \(why) over its text; layer skipped"
-            if skipped.insert(said).inserted { report(said) }
-            return false
-        }
+        let shown = layers.filter { l in l.when.isSubset(of: state) && (l.index == nil || l.index == index) }
         guard !shown.isEmpty else { return }
         if !frame.open {
             frame.open = true
             DispatchQueue.main.async { endFrame() }
         }
+        // The check is timed with the drawing: a theme that is slow to check is slow to draw.
         let start = DispatchTime.now().uptimeNanoseconds
         defer { frame.ms += Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6 }
+        let run = textRun ?? bounds
+        let runs = Self.text[slot].map { t in text ?? t.fg.compactMap(Theme.colorPath).map { Run(rect: run, ink: Theme.current[keyPath: $0]) } } ?? []
+        if !runs.isEmpty, let why = verdict(shown, slot: slot, bounds: bounds, clip: clip, run: run, runs: runs, base: base, state: state, index: index) {
+            let said = "layers on \(slot) skipped: \(why)"
+            if skipped.insert(said).inserted { report(said) }
+            return
+        }
         ctx.saveGState()
         defer { ctx.restoreGState() }
         if let exclude, exclude.intersects(clip) {
@@ -218,18 +223,79 @@ enum Layers {
         render(shown, slot: slot, bounds: bounds, run: run, ctx: ctx)
     }
 
-    /// Why `l` would leave one of `runs` unreadable where it paints, if it would.
-    static func unreadable(_ l: ResolvedLayer, _ runs: [Run], slot: NSRect, textRun: NSRect) -> String? {
-        for p in l.prims {
+    /// Verdicts already reached, by slot, size, state and text; emptied with the theme. nil means readable.
+    private static var verdicts: [String: String?] = [:]
+
+    /// Renders `shown` over the slot's real background at 1x, as painted (stacking, winding, every kind), and says
+    /// which run, if any, it leaves under 3:1.
+    static func verdict(_ shown: [ResolvedLayer], slot: String, bounds: NSRect, clip: NSRect, run: NSRect, runs: [Run], base: [NSColor],
+                        state: Set<String>, index: Int?) -> String? {
+        func rel(_ r: NSRect) -> String { String(format: "%.1f,%.1f,%.1f,%.1f", r.minX - clip.minX, r.minY - clip.minY, r.width, r.height) }
+        let key = "\(slot)|\(shown.map { $0.id ?? "" })|\(shown.count)|\(rel(clip))|\(rel(bounds))|\(rel(run))|\(state.sorted())|\(index ?? -1)|"
+            + runs.map { "\(rel($0.rect))\($0.ink.themeHex)\($0.on?.themeHex ?? "")" }.joined(separator: ";") + "|" + base.map(\.themeHex).joined()
+        if let v = verdicts[key] { return v }
+        let w = Int(clip.width.rounded(.up)), h = Int(clip.height.rounded(.up))
+        var v: String?
+        if w > 0, h > 0, w * h <= 4 << 20,
+           let c = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+            c.translateBy(x: 0, y: CGFloat(h))
+            c.scaleBy(x: 1, y: -1)
+            c.translateBy(x: -clip.minX, y: -clip.minY)
+            let theme = Theme.current
+            let ground = (text[slot]?.over ?? []).compactMap(Theme.colorPath).map { theme[keyPath: $0] } + base
+            c.setFillColor((ground.reduce(theme.app.appearance == "light" ? NSColor.white : .black) { $1.over($0) }).cgColor)
+            c.fill(clip)
+            c.saveGState()
+            render(shown, slot: slot, bounds: bounds, run: run, ctx: c)
+            c.restoreGState()
             for r in runs {
-                for bg in p.backs {
-                    let ratio = r.ink.over(bg).contrast(bg)
-                    guard ratio < LoadedTheme.minContrast, covers(p, [r.rect], slot: slot, textRun: textRun) else { continue }
-                    return "text in \(r.ink.themeHex) would read at \(String(format: "%.1f", ratio)):1 on its \(bg.themeHex), under \(Int(LoadedTheme.minContrast)):1"
+                if let on = r.on {
+                    c.setFillColor(on.cgColor)
+                    c.fill(r.rect)
+                }
+                if let ratio = worst(r, in: c, clip: clip, height: h), ratio < LoadedTheme.minContrast {
+                    v = "text in \(r.ink.themeHex) reads at \(String(format: "%.1f", ratio)):1 over them, under \(Int(LoadedTheme.minContrast)):1"
+                    break
                 }
             }
         }
-        return nil
+        verdicts[key] = v
+        return v
+    }
+
+    /// The contrast `r`'s ink gets on the worst pixel wholly inside its box: any of them may sit under a glyph's
+    /// stroke, so a hairline across the text fails it, while antialiasing that only grazes the box's edge doesn't.
+    private static func worst(_ r: Run, in c: CGContext, clip: NSRect, height: Int) -> Double? {
+        guard let data = c.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
+        let row = c.bytesPerRow
+        let x0 = max(Int((r.rect.minX - clip.minX).rounded(.up)), 0), x1 = min(Int((r.rect.maxX - clip.minX).rounded(.down)), c.width)
+        let y0 = max(Int((r.rect.minY - clip.minY).rounded(.up)), 0), y1 = min(Int((r.rect.maxY - clip.minY).rounded(.down)), height)
+        guard x1 > x0, y1 > y0 else { return nil }
+        let ink = r.ink.usingColorSpace(.sRGB) ?? r.ink
+        let a = Double(ink.alphaComponent), keep = 1 - a
+        let (ir, ig, ib) = (Double(ink.redComponent) * a * 255, Double(ink.greenComponent) * a * 255, Double(ink.blueComponent) * a * 255)
+        let lut = linear
+        var low = Double.infinity
+        for y in y0..<y1 {
+            var p = data + y * row + x0 * 4
+            for _ in x0..<x1 {
+                // The bitmap is opaque (its ground is), so premultiplied is plain.
+                let (br, bg, bb) = (Int(p[0]), Int(p[1]), Int(p[2]))
+                let lb = 0.2126 * lut[br] + 0.7152 * lut[bg] + 0.0722 * lut[bb]
+                let lt = 0.2126 * lut[Int(ir + Double(br) * keep + 0.5)] + 0.7152 * lut[Int(ig + Double(bg) * keep + 0.5)]
+                    + 0.0722 * lut[Int(ib + Double(bb) * keep + 0.5)]
+                low = min(low, (max(lb, lt) + 0.05) / (min(lb, lt) + 0.05))
+                p += 4
+            }
+        }
+        return low
+    }
+
+    /// sRGB's 8-bit values, linear.
+    private static let linear: [Double] = (0..<256).map { i in
+        let v = Double(i) / 255
+        return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
     }
 
     /// `shown` into `ctx`, already clipped.
@@ -261,51 +327,6 @@ enum Layers {
     }
 
     private static func isBitmap(_ p: ResolvedLayer.Prim) -> Bool { p.spec.kind == "image" || p.spec.kind == "pattern" }
-
-    /// Whether `p` paints anywhere over `rects`.
-    static func covers(_ p: ResolvedLayer.Prim, _ rects: [NSRect], slot: NSRect, textRun: NSRect) -> Bool {
-        guard !rects.isEmpty else { return false }
-        let target = CGMutablePath()
-        for r in rects { target.addRect(r) }
-        return painted(p, slot: slot, textRun: textRun).contains { $0.intersects(target, using: .evenOdd) || target.intersects($0, using: .evenOdd) }
-    }
-
-    /// The areas `p` paints in the slot, as filled paths.
-    static func painted(_ p: ResolvedLayer.Prim, slot: NSRect, textRun: NSRect) -> [CGPath] {
-        let s = p.spec, f = frame(s, in: slot, textRun: textRun), w = CGFloat(s.width)
-        let shape = CGPath(roundedRect: f, cornerWidth: min(s.radius, f.width / 2), cornerHeight: min(s.radius, f.height / 2), transform: nil)
-        func stroked(_ path: CGPath) -> CGPath { path.copy(strokingWithWidth: w, lineCap: .butt, lineJoin: .miter, miterLimit: 10) }
-        switch s.kind {
-        case "rect":
-            return (p.fill == nil ? [] : [shape]) + (p.stroke == nil ? [] : [stroked(CGPath(rect: f.insetBy(dx: w / 2, dy: w / 2), transform: nil))])
-        case "line":
-            let line = CGMutablePath()
-            line.addRect(f.insetBy(dx: -w, dy: -w))
-            return [line]
-        case "gradient", "pattern":
-            return [shape]
-        case "bevel":
-            let ring = CGMutablePath()
-            ring.addRect(f)
-            ring.addRect(f.insetBy(dx: CGFloat(p.rings.count), dy: CGFloat(p.rings.count)))
-            return [ring]
-        case "shadow":
-            let reach = CGFloat(s.blur) + abs(CGFloat(s.offset[0])) + abs(CGFloat(s.offset[1]))
-            let ring = CGMutablePath()
-            ring.addRect(f.insetBy(dx: -reach, dy: -reach))
-            ring.addRect(f)
-            return [ring]
-        case "path":
-            guard let path = p.path, s.view.count == 2 else { return [] }
-            return placements(s, f, slot).flatMap { t, r -> [CGPath] in
-                var m = CGAffineTransform(translationX: r.minX, y: r.minY).scaledBy(x: r.width / s.view[0], y: r.height / s.view[1]).concatenating(t)
-                guard let placed = path.copy(using: &m) else { return [] }
-                return (p.fill == nil ? [] : [placed]) + (p.stroke == nil ? [] : [stroked(placed)])
-            }
-        default:
-            return []
-        }
-    }
 
     // MARK: - Geometry
 
@@ -462,12 +483,10 @@ enum Layers {
 
     // MARK: - Resolving
 
-    /// `specs` with colours resolved against `theme`; in a text slot each primitive keeps what its colours leave
-    /// under the text, checked against the text drawn there each time it's drawn. A colour
+    /// `specs` with colours resolved against `theme`; a slot's text is checked against them as drawn. A colour
     /// that isn't a colour token is skipped and named in the result.
     static func resolve(_ specs: [LayerSpec], images: [CGImage?], theme: Theme) -> ([ResolvedLayer], [String]) {
         var problems: [String] = []
-        let base: NSColor = theme.app.appearance == "light" ? .white : .black
         func color(_ s: String?) -> NSColor?? {
             guard let s else { return .some(nil) }
             if s.hasPrefix("@") {
@@ -506,21 +525,6 @@ enum Layers {
                 prims.append(p)
             }
             if prims.isEmpty { continue }
-            if let t = text[l.slot] {
-                let under = t.over.compactMap(Theme.colorPath).reduce(base) { theme[keyPath: $1].over($0) }
-                for k in prims.indices {
-                    let p = prims[k]
-                    var flat = [p.fill, p.stroke, p.color].compactMap { $0 } + p.stops.map(\.0) + p.rings.flatMap { $0 } + p.dots.map(\.0)
-                    flat += zip(p.stops, p.stops.dropFirst()).map { a, b in a.0.blended(withFraction: 0.5, of: b.0) ?? a.0 }
-                    let alpha = CGFloat(l.opacity) * (isBitmap(p) ? faintAlpha : 1)
-                    var backs: [NSColor] = []
-                    for c in flat {
-                        let bg = c.withAlphaComponent(c.alphaComponent * alpha).over(under)
-                        if !backs.contains(bg) { backs.append(bg) }
-                    }
-                    prims[k].backs = backs
-                }
-            }
             out.append(ResolvedLayer(id: l.id, slot: l.slot, when: Set(l.when), opacity: CGFloat(l.opacity), index: l.index, prims: prims))
         }
         return (out, problems)

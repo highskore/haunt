@@ -660,27 +660,16 @@ final class PaletteView: NSView {
 
     /// The dialog's caption and its sunken field, list and buttons, under the content drawn by `draw`.
     private func drawDialog(_ ctx: CGContext) {
-        let app = Theme.current.app, x0 = edge, inner = width
+        let app = Theme.current.app, x0 = edge, inner = width, state = Layers.state(self)
         // Inside the 2 pt bevel and a 1 pt gap, as in the card.
         let cap = NSRect(x: 3, y: 3, width: bounds.width - 6, height: Self.captionH)
         let stops = app.titlebarFill.compactMap { NSColor(themeHex: $0) }
         if stops.count > 1, let g = NSGradient(colors: stops) { g.draw(in: cap, angle: 0) } else { Draw.fill(cap, app.rowSelectFill) }
-        let state = Layers.state(self)
+        let small = Draw.ui(Tok.Size.paletteSmallFont), smallH = Tok.Size.paletteSmallFont * lh
         let headerLine = header.map { Draw.line($0, Draw.ui(Tok.Size.paletteSmallFont, .bold), app.rowSelectInk) }
-        let headerRun = headerLine.map { NSRect(x: cap.minX + 4, y: cap.minY + (cap.height - Tok.Size.paletteSmallFont * lh) / 2, width: Draw.width($0),
-                                                height: Tok.Size.paletteSmallFont * lh) }
+        let headerRun = headerLine.map { NSRect(x: cap.minX + 4, y: cap.minY + (cap.height - smallH) / 2, width: Draw.width($0), height: smallH) }
         Layers.draw("palette.caption", cap, text: headerRun.map { [Layers.Run(rect: $0, ink: app.rowSelectInk)] } ?? [], state: state, in: ctx)
-        if let headerLine, let r = headerRun {
-            Draw.text(headerLine, font: Draw.ui(Tok.Size.paletteSmallFont, .bold), x: r.minX, top: r.minY, lineHeight: r.height, in: ctx)
-        }
         let top = edge + headH, pad = padX
-        if let message {
-            let mt = 3 + Self.captionH + 10
-            drawInfoIcon(NSRect(x: x0 + pad, y: mt, width: Self.messageH, height: Self.messageH))
-            let f = Draw.ui(Tok.Size.paletteSmallFont), h = Tok.Size.paletteSmallFont * lh
-            Draw.text(Draw.line(message, f, Tok.Color.paletteInk), font: f, x: x0 + pad + Self.messageH + 10, top: mt + (Self.messageH - h) / 2,
-                      lineHeight: h, in: ctx)
-        }
         // The input glyph labels the field from outside it, like the card's "Open:".
         var fx = x0 + pad
         if Theme.current.effects.paletteInputIcon {
@@ -692,22 +681,21 @@ final class PaletteView: NSView {
         let list = NSRect(x: x0 + pad, y: top + inputH, width: inner - 2 * pad, height: listH)
         Draw.fill(list, app.paletteField)
         Draw.bevel(list, "in")
-        let f = Draw.ui(Tok.Size.paletteSmallFont)
-        for (label, r, key) in dialogButtons {
-            // OK is the default button: a black ring outside its bevel and a dotted focus around its label.
+        // Every layer before any text: OK is the default button, with a black ring outside its bevel.
+        let buttons = dialogButtons.map { label, r, key in
             let isDefault: Bool = if case .enter = key { true } else { false }
+            let line = Draw.line(label, small, Tok.Color.paletteInk)
+            let run = NSRect(x: (r.midX - Draw.width(line) / 2).rounded(), y: r.minY + (r.height - smallH) / 2, width: Draw.width(line), height: smallH)
+            return (line, r, run, isDefault)
+        }
+        for (_, r, run, isDefault) in buttons {
             Draw.bevel(isDefault ? r.insetBy(dx: 1, dy: 1) : r, "button")
             if isDefault {
                 let ring = NSBezierPath(rect: r.insetBy(dx: 0.5, dy: 0.5))
                 NSColor.black.setStroke()
                 ring.stroke()
             }
-            let line = Draw.line(label, f, Tok.Color.paletteInk), lineH = Tok.Size.paletteSmallFont * lh
-            let tx = (r.midX - Draw.width(line) / 2).rounded(), ty = r.minY + (r.height - lineH) / 2
-            Layers.draw(isDefault ? "button.default" : "button", r,
-                        text: [Layers.Run(rect: NSRect(x: tx, y: ty, width: Draw.width(line), height: lineH), ink: Tok.Color.paletteInk)], state: state, in: ctx)
-            if isDefault { Draw.dottedRing(NSRect(x: tx - 3, y: ty - 1, width: Draw.width(line) + 6, height: lineH + 2).integral, .black) }
-            Draw.text(line, font: f, x: tx, top: ty, lineHeight: lineH, in: ctx)
+            Layers.draw(isDefault ? "button.default" : "button", r, text: [Layers.Run(rect: run, ink: Tok.Color.paletteInk)], state: state, in: ctx)
         }
         let close = dialogClose
         Draw.bevel(close, "button")
@@ -718,6 +706,20 @@ final class PaletteView: NSView {
         x.lineWidth = 1.5
         NSColor.black.setStroke()
         x.stroke()
+        if let headerLine, let r = headerRun {
+            Draw.text(headerLine, font: Draw.ui(Tok.Size.paletteSmallFont, .bold), x: r.minX, top: r.minY, lineHeight: r.height, in: ctx)
+        }
+        if let message {
+            let mt = 3 + Self.captionH + 10
+            drawInfoIcon(NSRect(x: x0 + pad, y: mt, width: Self.messageH, height: Self.messageH))
+            Draw.text(Draw.line(message, small, Tok.Color.paletteInk), font: small, x: x0 + pad + Self.messageH + 10, top: mt + (Self.messageH - smallH) / 2,
+                      lineHeight: smallH, in: ctx)
+        }
+        for (line, _, run, isDefault) in buttons {
+            // The default button's dotted focus around its label.
+            if isDefault { Draw.dottedRing(NSRect(x: run.minX - 3, y: run.minY - 1, width: run.width + 6, height: run.height + 2).integral, .black) }
+            Draw.text(line, font: small, x: run.minX, top: run.minY, lineHeight: run.height, in: ctx)
+        }
     }
 
     /// The caption's close box, which does what Escape does.

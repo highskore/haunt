@@ -163,9 +163,9 @@ opacity = 1.0              # 0–1
 | `pane.backdrop` | behind the terminal, at most 12% opaque, only when Ghostty's `background-opacity` is under 1 |
 | `pane.frame` | a 4 pt ring around the terminal, never inside it |
 | `titlebar`, `sidebar`, `sidebar.footer`, `palette`, `palette.field` | those areas |
-| `lights` | each traffic light, drawn under it (a ring may spill 4 pt past it); `index = 0`–`2` picks one |
+| `lights` | around each traffic light, never inside it (a ring may spill 4 pt past it); `index = 0`–`2` picks one |
 | `label.group` | a group label's line; its text is a text run |
-| `row`, `row.selected`, `row.hover` | a sidebar row's box; they may spill 6 pt past it (shadows), never past the sidebar |
+| `row`, `row.selected`, `row.hover` | a sidebar row's box, clipped to it |
 | `palette.row.selected`, `palette.row.hover` | a palette entry, with the same 6 pt |
 | `icon`, `bar.track`, `bar.fill` | a row's icon, its progress track and the filled part |
 | `status.needs` | a needs-you status; its text is a text run |
@@ -190,9 +190,9 @@ opacity = 1.0              # 0–1
 
 **What Haunt enforces.**
 - **Clipping:** every layer is clipped to its slot; no slot reaches into the terminal, and `pane.backdrop` is under it.
-- **Readable text:** in a slot with text, every colour a shape paints (fills, strokes of any width, gradient stops and the blends between them, bevel edges, shadows, pattern dots) is laid over the slot's background, and the text Haunt draws there, in the colour it draws it in, must still read at 3:1 on it. Wherever a shape with a colour that fails paints over that text, its layer is skipped and logged once; the same shape along an edge clear of the text is drawn. A text slot's images and patterns are drawn together, under its other shapes, at most 12% opaque as a group; so is everything in `pane.backdrop`.
+- **Readable text:** in a slot with text, Haunt draws the slot's layers offscreen over the slot's real background (the row's fill and tint, a pill under its word) and checks each run of its text, in the colour it is drawn in, against every pixel wholly inside that run's box: all must read at 3:1. If one doesn't, none of the slot's layers are drawn there, and that is logged once. So stacking, path winding and any kind of shape are judged as painted. A text slot's images and patterns are drawn together, under its other shapes, at most 12% opaque as a group; so is everything in `pane.backdrop`.
 - **Caps:** 64 `[[layer]]` tables for the whole `extends` chain (skipped ones count), 16 shapes a layer, 256 shapes in all, 4 shadows and 4 gradients a slot, 8 images a chain, each PNG up to 256 KB and 512×512 px, 4 MB decoded in all. Images are PNG only, with a plain `[a-z0-9-].png` name in the theme's own folder (a theme plugin lists them in `[contributes.theme] images`, docs/core-api.md); no SVG, no animated PNG.
-- **Too slow:** if a theme's layers take over 40 ms to draw in two window redraws, or over 200 ms in one, Haunt turns them off for the rest of the session and logs `layers off: too slow to draw`. The theme's tokens still apply.
+- **Too slow:** if a theme's layers take over 40 ms to check and draw in two window redraws, or over 200 ms in one, Haunt turns them off for the rest of the session and logs `layers off: too slow to draw`. The theme's tokens still apply.
 - **No animation, no text.**
 - **Bad input:** an unknown slot, kind, state or key, a value out of range or of the wrong type, is logged once per save and skipped: the key, else the shape, else the layer. The rest of the theme still applies.
 

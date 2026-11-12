@@ -19,12 +19,14 @@ enum ThemeCheck {
         ctx.translateBy(x: 0, y: 1400)
         ctx.scaleBy(x: 2, y: -2)
         // Each state is one redraw, so a theme too slow to draw is turned off here as in the app.
+        var slowest = 0.0
         for state in states {
             drawWindow(ctx, state: state)
             Layers.endFrame()
+            slowest = max(slowest, Layers.lastFrameMs)
         }
         for p in problems { print("\(id): \(p)") }
-        print("\(id): \(loaded.layers.count) layers, \(problems.count) problems")
+        print("\(id): \(loaded.layers.count) layers, \(problems.count) problems, slowest redraw \(Int(slowest)) ms")
         return problems.isEmpty ? 0 : 1
     }
 
@@ -45,8 +47,8 @@ enum ThemeCheck {
                             : runs(CGRect(x: 400, y: 0, width: 300, height: top), Tok.App.titleFg, Tok.App.titleMeta), state: state, in: ctx)
             for i in 0..<3 {
                 let d = Tok.Size.lightsD
-                Layers.draw("lights", CGRect(x: Tok.Size.titlebarPadx + CGFloat(i) * (d + Tok.Size.lightsGap), y: (top - d) / 2, width: d, height: d),
-                            within: bar, state: state, index: i, in: ctx)
+                let light = CGRect(x: Tok.Size.titlebarPadx + CGFloat(i) * (d + Tok.Size.lightsGap), y: (top - d) / 2, width: d, height: d)
+                Layers.draw("lights", light, within: bar, exclude: light, state: state, index: i, in: ctx)
             }
             let side = CGRect(x: 0, y: top, width: w, height: 700 - top), cw = w - 1
             Layers.draw("sidebar", side, state: state, in: ctx)
@@ -62,11 +64,16 @@ enum ThemeCheck {
                 let line1 = CGRect(x: inset + pad[1], y: y + pad[0], width: cw - 2 * (inset + pad[1]), height: 20)
                 let rest = CGRect(x: line1.minX, y: line1.maxY, width: line1.width, height: 48 - 2 * pad[0] - 20)
                 let text = runs(line1, Tok.Color.textPrimary, Tok.Color.textMeta, Tok.Color.needs) + runs(rest, Tok.Color.textMeta, Tok.Color.textSub)
-                for slot in ["row", "row.selected", "row.hover"] { Layers.draw(slot, box, within: side, text: text, state: state, in: ctx) }
+                let fx = Theme.current.effects, app = Theme.current.app
+                let base = fx.rowSelect == "cursor" ? [app.rowSelectFill] : ["fill", "brackets"].contains(fx.rowSelect) ? [Tok.Color.rowSelected] : []
+                for slot in ["row", "row.selected", "row.hover"] {
+                    Layers.draw(slot, box, within: box, text: text, base: slot == "row.selected" ? base : [], state: state, in: ctx)
+                }
                 let icon = CGRect(x: inset + pad[1], y: y + pad[0], width: Tok.Size.iconSize, height: Tok.Size.iconSize)
                 Layers.draw("icon", icon, state: state, index: r, in: ctx)
                 let run = CGRect(x: cw - inset - pad[1] - 50, y: y + pad[0], width: 50, height: Tok.Size.rowRight * Tok.Font.baseLine)
-                Layers.draw("status.needs", run, within: side, textRun: run, text: runs(run, Tok.Color.needs), state: state, in: ctx)
+                let needs = fx.needsPill ? [Layers.Run(rect: run, ink: app.pillFg, on: app.pillBg)] : runs(run, Tok.Color.needs)
+                Layers.draw("status.needs", run, within: side, textRun: run, text: needs, state: state, in: ctx)
                 Layers.draw("bar.track", CGRect(x: 44, y: y + 40, width: 180, height: Tok.Size.barH), state: state, in: ctx)
                 Layers.draw("bar.fill", CGRect(x: 44, y: y + 40, width: 90, height: Tok.Size.barH), state: state, in: ctx)
             }
