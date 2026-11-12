@@ -652,14 +652,21 @@ final class PaletteView: NSView {
         let list = NSRect(x: x0 + pad, y: top + inputH, width: inner - 2 * pad, height: listH)
         Draw.fill(list, app.paletteField)
         Draw.bevel(list, "in")
-        let b = Self.buttonSize, by = top + inputH + listH + 8
         let f = Draw.ui(Tok.Size.paletteSmallFont)
-        for (i, label) in ["Cancel", "OK"].enumerated() {
-            let r = NSRect(x: x0 + inner - pad - b.width - CGFloat(i) * (b.width + 6), y: by, width: b.width, height: b.height)
+        for (label, r, _) in dialogButtons {
             Draw.bevel(r, "button")
             let line = Draw.line(label, f, Tok.Color.paletteInk)
-            Draw.text(line, font: f, x: (r.midX - Draw.width(line) / 2).rounded(), top: r.minY + (b.height - Tok.Size.paletteSmallFont * lh) / 2,
+            Draw.text(line, font: f, x: (r.midX - Draw.width(line) / 2).rounded(), top: r.minY + (r.height - Tok.Size.paletteSmallFont * lh) / 2,
                       lineHeight: Tok.Size.paletteSmallFont * lh, in: ctx)
+        }
+    }
+
+    /// The dialog's buttons, right-aligned under the list; each does what its key does.
+    private var dialogButtons: [(String, NSRect, Key)] {
+        guard dialog else { return [] }
+        let b = Self.buttonSize, by = edge + headH + inputH + listH + 8, right = edge + width - padX
+        return [("Cancel", Key.escape), ("OK", Key.enter)].enumerated().map { i, k in
+            (k.0, NSRect(x: right - b.width - CGFloat(i) * (b.width + 6), y: by, width: b.width, height: b.height), k.1)
         }
     }
 
@@ -937,7 +944,9 @@ final class PaletteView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard let i = entry(at: convert(event.locationInWindow, from: nil)), rows[i].action != .none else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        if let (_, _, key) = dialogButtons.first(where: { $0.1.contains(p) }) { return send(key) }
+        guard let i = entry(at: p), rows[i].action != .none else { return }
         selected = i
         needsDisplay = true
         controller?.activate(rows[i])
