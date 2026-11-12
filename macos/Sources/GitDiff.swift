@@ -43,6 +43,8 @@ struct FileDiff: Equatable {
         var newHash: String?
         var oldSize: Int?
         var newSize: Int?
+        /// Past the review's cap on binaries: its size wasn't looked up.
+        var unsized = false
     }
 
     /// "Binary file, not shown · 12.0 KB → 14.1 KB · 1a2b3c4 → 5d6e7f8", with what's known.
@@ -55,8 +57,13 @@ struct FileDiff: Equatable {
         }
         var parts = ["Binary file, not shown"]
         let (o, n) = (status == .added ? "none" : size(blob.oldSize), status == .deleted ? "none" : size(blob.newSize))
-        if blob.oldSize != nil || blob.newSize != nil { parts.append("\(o) → \(n)") }
-        if blob.oldHash != nil || blob.newHash != nil { parts.append("\(blob.oldHash ?? "none") → \(blob.newHash ?? "none")") }
+        if blob.unsized {
+            parts.append("size not computed")
+        } else if blob.oldSize != nil || blob.newSize != nil {
+            parts.append("\(o) → \(n)")
+        }
+        let short = { (h: String?) in h.map { String($0.prefix(7)) } ?? "none" }
+        if blob.oldHash != nil || blob.newHash != nil { parts.append("\(short(blob.oldHash)) → \(short(blob.newHash))") }
         return parts.joined(separator: " · ")
     }
 
@@ -151,7 +158,7 @@ enum DiffParser {
             } else if line.hasPrefix("index "), let range = line.dropFirst(6).split(separator: " ").first {
                 let ends = range.components(separatedBy: "..")
                 if ends.count == 2 {
-                    let hash = { (h: String) -> String? in h.allSatisfy { $0 == "0" } || !h.allSatisfy(\.isHexDigit) ? nil : String(h.prefix(7)) }
+                    let hash = { (h: String) -> String? in h.allSatisfy { $0 == "0" } || !h.allSatisfy(\.isHexDigit) ? nil : h }
                     (f.blob.oldHash, f.blob.newHash) = (hash(ends[0]), hash(ends[1]))
                 }
             } else if line.hasPrefix("+++ ") {
@@ -368,20 +375,26 @@ enum GitRunner {
         return out
     }
 
+    /// Called with each `run`'s arguments; the review tests count processes with it.
+    nonisolated(unsafe) static var willRun: (([String]) -> Void)?
+
     /// Blocks the calling thread; call it off the main thread. Output past `maxBytes` is counted, not kept.
-    static func run(_ args: [String], cwd: String, timeout: TimeInterval = 10, maxBytes: Int = 16 << 20) -> Output? {
+    static func run(_ args: [String], cwd: String, timeout: TimeInterval = 10, maxBytes: Int = 16 << 20, input: Data? = nil) -> Output? {
+        willRun?(args)
         guard let git = gitPath, let sandbox = sandboxed(git) else { return nil }
         return spawn(sandboxExec, sandbox + safeConfig.flatMap { ["-c", $0] } + ["--no-pager"] + args, cwd: cwd,
-                     env: environment(), timeout: timeout, maxBytes: maxBytes)
+                     env: environment(), timeout: timeout, maxBytes: maxBytes, input: input)
     }
 
     /// Runs `exe` without a shell in a process group of its own, so a timeout or the output cap kills
     /// whatever it started too. No other descriptor of the app is inherited.
     static func spawn(_ exe: String, _ args: [String], cwd: String, env: [String: String], timeout: TimeInterval,
-                      maxBytes: Int) -> Output? {
+                      maxBytes: Int, input: Data? = nil) -> Output? {
         var fds: [Int32] = [0, 0]
         guard pipe(&fds) == 0 else { return nil }
         let (rd, wr) = (fds[0], fds[1])
+        var inFds: [Int32] = [-1, -1]
+        if input != nil, pipe(&inFds) != 0 { close(rd); close(wr); return nil }
         var actions: posix_spawn_file_actions_t?
         var attr: posix_spawnattr_t?
         posix_spawn_file_actions_init(&actions)
@@ -390,7 +403,11 @@ enum GitRunner {
             posix_spawn_file_actions_destroy(&actions)
             posix_spawnattr_destroy(&attr)
         }
-        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+        if input != nil {
+            posix_spawn_file_actions_adddup2(&actions, inFds[0], 0)
+        } else {
+            posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+        }
         posix_spawn_file_actions_adddup2(&actions, wr, 1)
         posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0)
         posix_spawn_file_actions_addchdir_np(&actions, cwd)
@@ -409,6 +426,28 @@ enum GitRunner {
         var pid: pid_t = 0
         let spawned = posix_spawn(&pid, exe, &actions, &attr, argv, envp)
         close(wr)
+        if let input {
+            close(inFds[0])
+            let inWr = inFds[1]
+            if spawned == 0 {
+                // A child that exits early must not take the app down with SIGPIPE.
+                _ = fcntl(inWr, F_SETNOSIGPIPE, 1)
+                DispatchQueue.global(qos: .utility).async {
+                    input.withUnsafeBytes { (b: UnsafeRawBufferPointer) in
+                        var off = 0
+                        while off < b.count {
+                            let n = write(inWr, b.baseAddress! + off, b.count - off)
+                            if n < 0, errno == EINTR { continue }
+                            if n <= 0 { break }
+                            off += n
+                        }
+                    }
+                    close(inWr)
+                }
+            } else {
+                close(inWr)
+            }
+        }
         guard spawned == 0 else { close(rd); return nil }
 
         final class Sink: @unchecked Sendable {
@@ -488,6 +527,7 @@ enum ReviewLoader {
     static let maxUntracked = 100
     static let maxUntrackedBytes = 1 << 20
     static let maxNoIndexBytes = 2 << 20
+    static let maxSizedBinaries = 500
 
     /// How much a cut diff left out: "1.5 MB more, in 3 more files, isn't shown" ("at least" when git timed out).
     static func cut(_ o: GitRunner.Output) -> String {
@@ -548,21 +588,34 @@ enum ReviewLoader {
         let range: [String]? = readTree ? [base] : (head.map { base == $0 ? nil : [base, $0] } ?? nil)
         var files: [FileDiff] = []
         if let range {
-            let diffArgs = ["diff", "--text", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
+            let diffArgs = ["diff", "--text", "--full-index", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
                             "--submodule=short", "--ignore-submodules=dirty", "-M"] + range + ["--"]
             guard let out = git(diffArgs) else { return .failure(.failed("git diff didn't start.")) }
             guard out.status == 0 || out.truncated || out.timedOut else { return .failure(.failed("git diff failed (exit \(out.status)).")) }
             if out.timedOut { notes.append("git diff timed out; the list may be incomplete.") }
             if out.truncated { notes.append("The diff is over 16 MB and was cut: " + ReviewLoader.cut(out) + "; the last file shown may be incomplete.") }
             files = DiffParser.parse(out.text)
-            for i in files.indices where files[i].binary {
-                let size = { (h: String?) in h.flatMap { line(["cat-file", "-s", $0]) }.flatMap { Int($0) } }
+            // Every size from one cat-file, for the first `maxSizedBinaries`; past that none is looked up.
+            let binaries = files.indices.filter { files[$0].binary }
+            let sized = binaries.prefix(maxSizedBinaries)
+            let hashes = Set(sized.flatMap { [files[$0].blob.oldHash, files[$0].blob.newHash].compactMap { $0 } })
+            var sizes: [String: Int] = [:]
+            if !hashes.isEmpty, let o = GitRunner.run(["cat-file", "--batch-check=%(objectname) %(objectsize)"], cwd: root,
+                                                       input: Data(hashes.sorted().map { $0 + "\n" }.joined().utf8)) {
+                for l in o.text.split(separator: "\n") {
+                    let p = l.split(separator: " ")
+                    if p.count == 2, let n = Int(p[1]) { sizes[String(p[0])] = n }
+                }
+            }
+            for i in sized {
+                let size = { (h: String?) in h.flatMap { sizes[$0] } }
                 files[i].blob.oldSize = files[i].status == .added ? nil : size(files[i].blob.oldHash)
                 // A working-tree file's blob isn't in the object database; its size is on disk.
                 var st = stat()
                 let onDisk = readTree && lstat((root as NSString).appendingPathComponent(files[i].path), &st) == 0 ? Int(st.st_size) : nil
                 files[i].blob.newSize = files[i].status == .deleted ? nil : size(files[i].blob.newHash) ?? onDisk
             }
+            for i in binaries.dropFirst(maxSizedBinaries) { files[i].blob.unsized = true }
         }
         let tracked = Set(files.map(\.path))
         let dirty = readTree ? (head.map { git(["diff", "--quiet", "--no-ext-diff", "--no-textconv", "--ignore-submodules=dirty", $0, "--"])?.status == 1 } ?? !files.isEmpty) : false
@@ -608,7 +661,7 @@ enum ReviewLoader {
                     continue
                 }
                 // Exit status 1 means "differs", the normal case here.
-                guard let d = GitRunner.run(["diff", "--no-index", "--text", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",
+                guard let d = GitRunner.run(["diff", "--no-index", "--text", "--full-index", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",
                                              "--dst-prefix=b/", "--", "/dev/null", p], cwd: root, maxBytes: maxNoIndexBytes),
                       d.status <= 1 || d.truncated else { continue }
                 if d.truncated { notes.append("\(shown)'s diff is over 2 MB and was cut: " + ReviewLoader.cut(d) + ".") }

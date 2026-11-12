@@ -400,6 +400,30 @@ check(ReviewLoader.load(cwd: repo, headAtStart: nil) == .failure(.failed("git ca
       "and the review says why")
 GitRunner.sandboxExec = realSandbox
 
+// Many binaries: their sizes come from one cat-file, for the first 500 only.
+fresh()
+for i in 0..<520 { write("b\(i).dat", "x\u{0}\(i)\n") }
+sh(["git", "init", "-q", "-b", "main"], repo)
+sh(["git", "add", "-A"], repo)
+sh(["git", "commit", "-q", "-m", "one"], repo)
+for i in 0..<520 { write("b\(i).dat", "y\u{0}\(i)!\n") }
+var catFiles = 0
+GitRunner.willRun = { if $0.first == "cat-file" { catFiles += 1 } }
+switch ReviewLoader.load(cwd: repo, headAtStart: nil) {
+case let .success(d):
+    let bins = d.files.filter(\.binary)
+    let unsized = bins.filter { $0.binaryNote.contains("size not computed") }
+    let sized = bins.filter { $0.blob.oldSize != nil && $0.blob.newSize != nil }
+    check(catFiles == 1, "one cat-file for every size, not \(catFiles)")
+    check(bins.count == 520 && sized.count == 500 && unsized.count == 20, "\(bins.count) binaries, \(sized.count) sized, \(unsized.count) not")
+    let first = bins.first { $0.path == "b0.dat" }
+    check(first?.blob.oldHash?.count == 40 && first?.binaryNote.contains(" → ") == true
+          && first?.binaryNote.split(separator: "·").last?.split(separator: " ").first?.count == 7, "full ids kept, short ones shown: \(first?.binaryNote ?? "")")
+case let .failure(e):
+    check(false, "load failed: \(e)")
+}
+GitRunner.willRun = nil
+
 // A cut diff counts what it left out: bytes, and the files whose headers fell past the cap.
 fresh()
 for i in 0..<6 { write("f\(i).txt", String(repeating: "line \(i)\n", count: 200)) }
