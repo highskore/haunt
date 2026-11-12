@@ -130,17 +130,24 @@ impl FsScope {
     /// it, and not itself one of the folders macOS guards (`TCC_ROOTS`), though a project inside one is
     /// fine. `exec` runs only in such a folder.
     pub fn project_folder(&self, cwd: &str) -> Option<PathBuf> {
+        self.repo(cwd).map(|r| r.work_tree)
+    }
+
+    /// `project_folder` and its git dir, both from one look at `.git`: a real folder (never a link), or
+    /// what a `.git` file points to.
+    fn repo(&self, cwd: &str) -> Option<crate::plugin_exec::Repo> {
         let home = self.home.as_ref()?;
         let c = Path::new(cwd).canonicalize().ok()?;
-        let root = c.ancestors().take_while(|d| d.starts_with(home) && *d != home.as_path()).find(|d| {
+        let (root, git_dir) = c.ancestors().take_while(|d| d.starts_with(home) && *d != home.as_path()).find_map(|d| {
             let git = d.join(".git");
-            match std::fs::symlink_metadata(&git) {
-                Ok(m) if m.is_dir() => true,
-                Ok(m) if m.is_file() => git_file_target(&git).is_some_and(|t| self.gitdir_allowed(&t)),
-                _ => false,
-            }
+            let git_dir = match std::fs::symlink_metadata(&git) {
+                Ok(m) if m.is_dir() => git,
+                Ok(m) if m.is_file() => git_file_target(&git).filter(|t| self.gitdir_allowed(t))?,
+                _ => return None,
+            };
+            Some((d, git_dir))
         })?;
-        self.may_be_root(root).then(|| root.to_path_buf())
+        self.may_be_root(root).then(|| crate::plugin_exec::Repo { work_tree: root.to_path_buf(), git_dir })
     }
 
     /// `dir` (canonical) is strictly inside `$HOME`, not under a dot-folder or `~/Library`, clear of the
@@ -172,10 +179,7 @@ impl FsScope {
     /// A tab's repository: the project folder it was opened in, which the app chose (never the live cwd,
     /// which the pty can steer), and that work tree's git dir, so git needn't discover either.
     pub fn tab_repo(&self, opened_in: &str) -> Option<crate::plugin_exec::Repo> {
-        let work_tree = self.project_folder(opened_in)?;
-        let git = work_tree.join(".git");
-        let git_dir = if git.is_dir() { git } else { git_file_target(&git)? };
-        Some(crate::plugin_exec::Repo { work_tree, git_dir })
+        self.repo(opened_in)
     }
 
     #[cfg(test)]
@@ -599,6 +603,9 @@ mod tests {
         assert_eq!(repo("code/p/src"), Some((canon("code/p"), canon("code/p/.git"))));
         assert_eq!(repo("code/w"), Some((canon("code/w"), canon("code/m/.git/worktrees/w"))), "a worktree's own git dir");
         assert_eq!(repo(""), None, "opened at ~: no repo");
+        std::fs::create_dir_all(home.join("code/s")).unwrap();
+        std::os::unix::fs::symlink(home.join("code/p/.git"), home.join("code/s/.git")).unwrap();
+        assert_eq!(repo("code/s"), None, "a .git that is a link is neither a root nor a git dir");
     }
 
     #[test]
