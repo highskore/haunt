@@ -55,12 +55,28 @@ const MAX_AUDIT: usize = 1024;
 pub struct AuditLine {
     pub ts_ms: u64,
     pub plugin: String,
-    /// `terminal.read`, `pty.answer`, `pty.type`, `exec`, or `audit.dropped` for lines past `MAX_AUDIT`.
+    /// `terminal.read`, `pty.answer`, `pty.type`, `exec`, `fs.read`, `fs.list`, `fs.write`,
+    /// `decisions.query`, or `audit.dropped` for lines past `MAX_AUDIT`.
     pub kind: String,
     pub surface: String,
-    /// Lines read, the request answered, bytes typed, the job started, or lines dropped.
+    /// The command's name, the path inside the project folder, or the query's text.
+    pub detail: String,
+    /// Lines read, the request answered, bytes typed or moved, the job started, names listed, rows
+    /// returned, or lines dropped.
     pub n: u64,
+    /// The full length in characters of a string field cut to `AUDIT_STR_MAX`, as (field, length).
+    pub clipped: Vec<AuditClip>,
 }
+
+#[cfg_attr(feature = "ffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditClip {
+    pub field: String,
+    pub len: u64,
+}
+
+/// Characters kept of each audited string; the length beyond goes in `clipped`.
+pub const AUDIT_STR_MAX: usize = 64;
 const MAX_STR: usize = 4096;
 /// Characters, not bytes, of a registered command or mode title.
 const MAX_TITLE: usize = 80;
@@ -374,13 +390,62 @@ impl HostState {
         }
     }
 
-    fn audit(&mut self, kind: &str, surface: &str, n: u64) {
+    fn audit(&mut self, kind: &str, surface: &str, detail: &str, n: u64) {
         if self.audit.len() >= MAX_AUDIT {
             self.audit_dropped += 1;
             return;
         }
         let ts_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
-        self.audit.push(AuditLine { ts_ms, plugin: self.id.clone(), kind: kind.into(), surface: surface.into(), n });
+        let mut clipped = Vec::new();
+        let mut cut = |field: &str, v: &str| {
+            let len = v.chars().count();
+            if len > AUDIT_STR_MAX {
+                clipped.push(AuditClip { field: field.into(), len: len as u64 });
+            }
+            v.chars().take(AUDIT_STR_MAX).collect::<String>()
+        };
+        let line = AuditLine {
+            ts_ms,
+            plugin: cut("plugin", &self.id),
+            kind: kind.into(),
+            surface: cut("surface", surface),
+            detail: cut("detail", detail),
+            n,
+            clipped,
+        };
+        self.audit.push(line);
+    }
+
+    fn fs_read(&mut self, path: &str) -> Result<Vec<u8>, String> {
+        let bytes = self.fs.read(path)?;
+        let rel = self.in_project(path);
+        self.audit("fs.read", "", &rel, bytes.len() as u64);
+        Ok(bytes)
+    }
+
+    fn fs_list(&mut self, path: &str) -> Result<Vec<String>, String> {
+        let names = self.fs.list(path)?;
+        let rel = self.in_project(path);
+        self.audit("fs.list", "", &rel, names.len() as u64);
+        Ok(names)
+    }
+
+    fn fs_write(&mut self, path: &str, data: &[u8]) -> Result<(), String> {
+        self.fs.write(path, data)?;
+        let rel = self.in_project(path);
+        self.audit("fs.write", "", &rel, data.len() as u64);
+        Ok(())
+    }
+
+    /// `path` as the plugin gave it, shown inside the project folder it falls in; a bare file name when
+    /// it falls in none (a grant can't reach outside them).
+    fn in_project(&self, path: &str) -> String {
+        let p = Path::new(path);
+        let full = p.canonicalize().ok().or_else(|| Some(p.parent()?.canonicalize().ok()?.join(p.file_name()?)));
+        if let Some(rel) = full.as_deref().and_then(|f| self.fs.cwds().iter().find_map(|c| f.strip_prefix(c).ok())) {
+            return rel.to_string_lossy().into_owned();
+        }
+        p.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned())
     }
 
     fn take_audit(&mut self) -> Vec<AuditLine> {
@@ -388,7 +453,15 @@ impl HostState {
         if self.audit_dropped > 0 {
             let n = std::mem::take(&mut self.audit_dropped);
             let ts_ms = out.last().map_or(0, |l| l.ts_ms);
-            out.push(AuditLine { ts_ms, plugin: self.id.clone(), kind: "audit.dropped".into(), surface: String::new(), n });
+            out.push(AuditLine {
+                ts_ms,
+                plugin: self.id.chars().take(AUDIT_STR_MAX).collect(),
+                kind: "audit.dropped".into(),
+                surface: String::new(),
+                detail: String::new(),
+                n,
+                clipped: Vec::new(),
+            });
         }
         out
     }
@@ -527,7 +600,10 @@ impl wpty::Host for HostState {
             return Err(format!("pty rate limit ({PTY_PER_SEC}/s)"));
         }
         let surface = clip(surface);
-        self.audit("pty.answer", &surface, request_id);
+        // Only a real tab's answer is audited; the gate refuses the rest.
+        if self.core.as_ref().is_some_and(|c| c.tab_folders(&surface).is_some()) {
+            self.audit("pty.answer", &surface, "", request_id);
+        }
         self.request(HostRequest::PtyAnswer { plugin_id: self.id.clone(), surface, allow, request_id })
     }
 }
@@ -541,7 +617,7 @@ impl wtyping::Host for HostState {
         if !self.pty_rate_ok() {
             return Err(format!("pty rate limit ({PTY_PER_SEC}/s)"));
         }
-        self.audit("pty.type", &surface, text.len() as u64);
+        self.audit("pty.type", &surface, "", text.len() as u64);
         self.request(HostRequest::PtyType { plugin_id: self.id.clone(), surface, text, enter })
     }
 }
@@ -576,7 +652,7 @@ impl wterm::Host for HostState {
         let got = reader(&surface, lines).ok_or("that tab's screen can't be read now")?;
         let skip = got.len().saturating_sub(lines as usize);
         let out: Vec<String> = got.iter().skip(skip).map(|l| shown(l, READ_LINE_CHARS)).collect();
-        self.audit("terminal.read", &surface, out.len() as u64);
+        self.audit("terminal.read", &surface, "", out.len() as u64);
         Ok(out)
     }
 }
@@ -585,7 +661,7 @@ impl wdec::Host for HostState {
     fn query(&mut self, text: String, limit: u32) -> Vec<wdec::Decision> {
         let Some(core) = &self.core else { return Vec::new() };
         // The 0.4 `outcome` variant has no case for a refused plugin answer; those rows stay out.
-        core.decisions_where(&text, limit.min(MAX_DECISIONS), |d| !matches!(d.outcome, Outcome::RefusedPlugin { .. }))
+        let rows: Vec<wdec::Decision> = core.decisions_where(&text, limit.min(MAX_DECISIONS), |d| !matches!(d.outcome, Outcome::RefusedPlugin { .. }))
             .into_iter()
             .map(|d| {
                 let outcome = match d.outcome {
@@ -607,7 +683,9 @@ impl wdec::Host for HostState {
                     agent: d.agent.id().to_owned(),
                 }
             })
-            .collect()
+            .collect();
+        self.audit("decisions.query", "", &text, rows.len() as u64);
+        rows
     }
 }
 
@@ -1119,6 +1197,7 @@ impl wexec::Host for HostState {
         if self.exec_jobs.len() >= px::MAX_RUNNING {
             return Err(format!("at most {} commands at a time", px::MAX_RUNNING));
         }
+        let cmd_name = cmd.name();
         let core = self.core.as_ref().ok_or("no haunt core")?;
         let (_, opened) = core.tab_folders(&surface).ok_or("no such tab")?;
         let repo = self.fs.tab_repo(&opened).ok_or("the tab wasn't opened in a git repository inside your home folder")?;
@@ -1130,7 +1209,7 @@ impl wexec::Host for HostState {
             .spawn(move || sink(ExecDone { plugin_id, job, outcome: px::run(&cmd, &repo) }))
             .map_err(|e| e.to_string())?;
         self.exec_jobs.push(job);
-        self.audit("exec", &clip(surface), job);
+        self.audit("exec", &clip(surface), cmd_name, job);
         Ok(job)
     }
 }
@@ -1743,12 +1822,12 @@ impl PluginHost {
         if caps.fs_read_granted() || caps.fs_write_granted() {
             let mut fs = l.instance("haunt:plugin/fs@0.5.0")?;
             if caps.fs_read_granted() {
-                fs.func_wrap("read", |s: StoreContextMut<'_, HostState>, (path,): (String,)| Ok((s.data().fs.read(&path),)))?;
-                fs.func_wrap("list", |s: StoreContextMut<'_, HostState>, (path,): (String,)| Ok((s.data().fs.list(&path),)))?;
+                fs.func_wrap("read", |mut s: StoreContextMut<'_, HostState>, (path,): (String,)| Ok((s.data_mut().fs_read(&path),)))?;
+                fs.func_wrap("list", |mut s: StoreContextMut<'_, HostState>, (path,): (String,)| Ok((s.data_mut().fs_list(&path),)))?;
             }
             if caps.fs_write_granted() {
-                fs.func_wrap("write", |s: StoreContextMut<'_, HostState>, (path, data): (String, Vec<u8>)| {
-                    Ok((s.data().fs.write(&path, &data),))
+                fs.func_wrap("write", |mut s: StoreContextMut<'_, HostState>, (path, data): (String, Vec<u8>)| {
+                    Ok((s.data_mut().fs_write(&path, &data),))
                 })?;
             }
         }
@@ -2264,11 +2343,42 @@ mod tests {
         assert!(st.take_audit().is_empty(), "drained");
         assert!(!st.logs.iter().any(|l| l.contains("terminal.read")), "not in the plugin's own log");
         for _ in 0..MAX_AUDIT + 5 {
-            st.audit("exec", &tab, 1);
+            st.audit("exec", &tab, "git-status", 1);
         }
         let audit = st.take_audit();
         assert_eq!(audit.len(), MAX_AUDIT + 1);
         assert!(matches!(audit.last(), Some(l) if l.kind == "audit.dropped" && l.n == 5), "an overflow is counted");
+    }
+
+    #[test]
+    fn audit_lines_name_what_was_touched_and_cut_long_strings() {
+        use wpty::Host as _;
+        let home = tempdir("audit-home");
+        std::fs::create_dir_all(home.join("code/p/.git")).unwrap();
+        std::fs::create_dir_all(home.join("code/p/src")).unwrap();
+        std::fs::write(home.join("code/p/src/a.rs"), "fn a() {}").unwrap();
+        let caps = Capabilities { fs_read: vec!["${cwd}/src/*".into()], fs_write: vec!["${cwd}/src/*".into()], pty_write: true, ..Default::default() };
+        let core = crate::Core::new(&*tempdir("audit-core"));
+        let mut st = HostState::new("dev.x.fs", &caps, None, None, Some(core.handle()));
+        st.fs.set_home(&home);
+        assert!(st.fs.add_cwd(home.join("code/p").to_str().unwrap()));
+        let src = home.join("code/p/src");
+        assert_eq!(st.fs_read(src.join("a.rs").to_str().unwrap()).unwrap().len(), 9);
+        st.fs_list(src.to_str().unwrap()).unwrap();
+        st.fs_write(src.join("b.rs").to_str().unwrap(), b"x").unwrap();
+        assert!(st.fs_read(home.join("code/p/README").to_str().unwrap()).is_err());
+        let got: Vec<(String, String, u64)> = st.take_audit().into_iter().map(|l| (l.kind, l.detail, l.n)).collect();
+        assert_eq!(got, [("fs.read".into(), "src/a.rs".into(), 9), ("fs.list".into(), "src".into(), 1), ("fs.write".into(), "src/b.rs".into(), 1)]);
+
+        st.answer("no-such-tab".into(), true, 3).unwrap();
+        assert!(st.take_audit().is_empty(), "only a real tab's answer is audited");
+        let tab = core.register_surface(home.to_str().unwrap()).unwrap().surface_id;
+        st.answer(tab.clone(), true, 4).unwrap();
+        assert!(matches!(&st.take_audit()[..], [l] if l.kind == "pty.answer" && l.surface == tab && l.n == 4));
+
+        st.audit("decisions.query", "", &"é".repeat(100), 2);
+        let l = &st.take_audit()[0];
+        assert_eq!((l.detail.chars().count(), &l.clipped[..]), (AUDIT_STR_MAX, &[AuditClip { field: "detail".into(), len: 100 }][..]));
     }
 
     #[test]

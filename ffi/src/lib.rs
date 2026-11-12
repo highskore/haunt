@@ -149,7 +149,7 @@ impl From<haunt_core::plugins::PluginError> for HostError {
 }
 
 #[cfg(feature = "plugins")]
-pub use haunt_core::plugins::{AuditLine, HostRequest, Mark, NotifyAction, PaletteItem, PluginKey, RowMenuItem};
+pub use haunt_core::plugins::{AuditClip, AuditLine, HostRequest, Mark, NotifyAction, PaletteItem, PluginKey, RowMenuItem};
 #[cfg(feature = "plugins")]
 pub use haunt_core::plugin_theme::ThemeToken;
 #[cfg(feature = "plugins")]

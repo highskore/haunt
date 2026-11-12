@@ -436,7 +436,14 @@ struct AuditLine: Equatable, Hashable {
     var plugin: String
     var kind: String
     var surface: String
+    var detail: String
     var n: UInt64
+    var clipped: [AuditClip]
+}
+
+struct AuditClip: Equatable, Hashable {
+    var field: String
+    var len: UInt64
 }
 
 struct AuditDrain: Equatable, Hashable {

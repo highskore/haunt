@@ -23,8 +23,9 @@ use crate::plugins::{dropped_fs_grants, AuditLine, HostRequest, HostState, LoadS
 pub const LOCKFILE: &str = "plugins.lock";
 /// In the haunt dir: one JSON line per `AuditLine`.
 pub const AUDIT_LOG: &str = "plugin-audit.jsonl";
-/// Past this the log moves to `plugin-audit.1.jsonl`, replacing the one there.
+/// Past this the log moves to `plugin-audit.1.jsonl`, the older ones up to `.3`; the oldest goes.
 const AUDIT_LOG_MAX: u64 = 8 << 20;
+const AUDIT_LOG_KEEP: u32 = 3;
 pub const WASM: &str = "plugin.wasm";
 const WASM_CAP: u64 = 64 << 20;
 
@@ -1093,7 +1094,7 @@ impl PluginSet {
     pub fn drain_audit(&mut self) -> (Vec<AuditLine>, Option<String>) {
         let lines: Vec<AuditLine> = self.plugins.iter_mut().flat_map(|(_, p)| p.take_audit()).collect();
         let err = match (&self.audit_log, lines.is_empty()) {
-            (Some(path), false) => append_audit(path, &lines).err().map(|e| format!("{AUDIT_LOG}: {e}")),
+            (Some(path), false) => append_audit(path, &lines, AUDIT_LOG_MAX).err().map(|e| format!("{AUDIT_LOG}: {e}")),
             _ => None,
         };
         (lines, err)
@@ -1200,20 +1201,40 @@ fn own_right_pane(owner: &mut Option<(String, String)>, requests: Vec<HostReques
     (out, displaced)
 }
 
-fn append_audit(path: &Path, lines: &[AuditLine]) -> std::io::Result<()> {
+fn append_audit(path: &Path, lines: &[AuditLine], max: u64) -> std::io::Result<()> {
     use std::io::Write as _;
+    use std::os::fd::AsRawFd as _;
     use std::os::unix::fs::OpenOptionsExt as _;
-    if fs::symlink_metadata(path).is_ok_and(|m| m.len() > AUDIT_LOG_MAX) {
-        fs::rename(path, path.with_extension("1.jsonl"))?;
+    if fs::symlink_metadata(path).is_ok_and(|m| m.len() > max) {
+        let old = |i: u32| path.with_extension(format!("{i}.jsonl"));
+        for i in (1..AUDIT_LOG_KEEP).rev() {
+            rename_if_there(&old(i), &old(i + 1))?;
+        }
+        rename_if_there(path, &old(1))?;
     }
     let mut text = String::new();
     for l in lines {
-        let v = serde_json::json!({ "ts": l.ts_ms, "plugin": l.plugin, "kind": l.kind, "surface": l.surface, "n": l.n });
+        let mut v = serde_json::json!({ "ts": l.ts_ms, "plugin": l.plugin, "kind": l.kind, "surface": l.surface, "detail": l.detail, "n": l.n });
+        for c in &l.clipped {
+            v[format!("{}_len", c.field)] = c.len.into();
+        }
         text.push_str(&v.to_string());
         text.push('\n');
     }
     let mut f = fs::OpenOptions::new().append(true).create(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(path)?;
+    // `mode` applies only to a file this call creates.
+    if unsafe { libc::fchmod(f.as_raw_fd(), 0o600) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
     f.write_all(text.as_bytes())
+}
+
+/// Another drain may have rotated it already: a missing file is fine.
+fn rename_if_there(from: &Path, to: &Path) -> std::io::Result<()> {
+    match fs::rename(from, to) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        r => r,
+    }
 }
 
 /// `drain_audit` without blocking the main thread on a plugin call in progress; the lines wait for the next.
@@ -1242,14 +1263,37 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join(AUDIT_LOG);
-        let line = |n| AuditLine { ts_ms: 7, plugin: "dev.x.p".into(), kind: "terminal.read".into(), surface: "s\"1".into(), n };
-        append_audit(&path, &[line(1)]).unwrap();
-        append_audit(&path, &[line(2)]).unwrap();
+        let line = |n| AuditLine {
+            ts_ms: 7,
+            plugin: "dev.x.p".into(),
+            kind: "exec".into(),
+            surface: "s\"1".into(),
+            detail: "git-log".into(),
+            n,
+            clipped: vec![crate::plugins::AuditClip { field: "surface".into(), len: 90 }],
+        };
+        fs::write(&path, "").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        append_audit(&path, &[line(1)], AUDIT_LOG_MAX).unwrap();
+        append_audit(&path, &[line(2)], AUDIT_LOG_MAX).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         let rows: Vec<serde_json::Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[1], serde_json::json!({ "ts": 7, "plugin": "dev.x.p", "kind": "terminal.read", "surface": "s\"1", "n": 2 }));
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            rows[1],
+            serde_json::json!({ "ts": 7, "plugin": "dev.x.p", "kind": "exec", "surface": "s\"1", "detail": "git-log", "n": 2, "surface_len": 90 })
+        );
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600, "an existing file is made owner-only too");
+
+        // Past the cap the log moves down, three old ones kept.
+        for n in 3..=7 {
+            append_audit(&path, &[line(n)], 1).unwrap();
+        }
+        let first_n = |p: &Path| serde_json::from_str::<serde_json::Value>(fs::read_to_string(p).unwrap().lines().next().unwrap()).unwrap()["n"].clone();
+        assert_eq!(first_n(&path), 7);
+        let old = |i: u32| path.with_extension(format!("{i}.jsonl"));
+        assert_eq!((first_n(&old(1)), first_n(&old(2)), first_n(&old(3))), (6.into(), 5.into(), 4.into()));
+        assert!(!old(4).exists());
         let _ = fs::remove_dir_all(&dir);
     }
 

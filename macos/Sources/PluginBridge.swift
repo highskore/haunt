@@ -14,6 +14,8 @@ final class PluginBridge {
     var onKeysChanged: (() -> Void)?
     /// Set once the core has started, so the decision log is loaded before plugins read it.
     var plugins: PluginsAPI? {
+        // The old set's audit lines are written before it goes.
+        willSet { drainAudit() }
         didSet {
             panels.closeAll()
             hold.release()
@@ -69,13 +71,17 @@ final class PluginBridge {
 
     var loadErrors: [String] { plugins?.loadErrors() ?? [] }
 
-    func drain() {
-        guard let plugins else { return }
-        let audit = plugins.drainAudit()
+    private func drainAudit() {
+        guard let audit = plugins?.drainAudit() else { return }
         for l in audit.lines {
-            AppDelegate.logger.notice("plugin audit \(l.plugin, privacy: .public) \(l.kind, privacy: .public) surface=\(l.surface, privacy: .public) n=\(l.n)")
+            AppDelegate.logger.notice("plugin audit \(l.plugin, privacy: .public) \(l.kind, privacy: .public) surface=\(l.surface, privacy: .public) \(l.detail, privacy: .public) n=\(l.n)")
         }
         if let e = audit.error { AppDelegate.logger.error("plugin audit: \(e, privacy: .public)") }
+    }
+
+    func drain() {
+        guard let plugins else { return }
+        drainAudit()
         var keysChanged = false
         defer { if keysChanged { onKeysChanged?() } }
         for req in plugins.takeRequests() {
