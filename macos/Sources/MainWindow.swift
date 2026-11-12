@@ -23,7 +23,7 @@ final class RingView: NSView {
     }
 }
 
-/// `ornament`'s watermark, behind the terminal: drawn only when the terminal's background lets it through.
+/// `ornament`'s watermark and corner marks, behind the content: shown only when the terminal's background lets them through.
 final class WatermarkView: NSView {
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -31,13 +31,19 @@ final class WatermarkView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard Theme.current.effects.ornament == "sigil", let ctx = NSGraphicsContext.current?.cgContext else { return }
         ctx.clip(to: bounds)
-        NSColor.white.withAlphaComponent(Theme.current.app.ornamentAlpha).setStroke()
+        let app = Theme.current.app
+        NSColor.white.withAlphaComponent(app.ornamentAlpha).setStroke()
         Draw.sigil(at: NSPoint(x: bounds.maxX + 60 - 520, y: bounds.minY - 40), size: 520, stroke: 1.2)
+        let corners = [NSPoint(x: 6, y: 6), NSPoint(x: bounds.width - 52, y: 6),
+                       NSPoint(x: bounds.width - 52, y: bounds.height - 52), NSPoint(x: 6, y: bounds.height - 52)]
+        for (i, o) in corners.enumerated() {
+            Draw.cornerOrnament(at: o, quarterTurns: i, bright: app.ornament, dim: app.ornamentDim, in: ctx)
+        }
     }
 }
 
-/// Window artwork over the window's own views but under its overlays, drawn from `[effects]`: the border,
-/// bevels and `ornament`'s corner marks.
+/// Window artwork over the window's own views but under its overlays, drawn from `[effects]`: the border
+/// and bevels.
 final class OrnamentView: NSView {
     var pane = NSRect.zero { didSet { needsDisplay = true } }
 
@@ -46,14 +52,7 @@ final class OrnamentView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        let fx = Theme.current.effects, app = Theme.current.app
-        if fx.ornament == "sigil" {
-            let corners = [NSPoint(x: 6, y: 6), NSPoint(x: bounds.width - 52, y: 6),
-                           NSPoint(x: bounds.width - 52, y: bounds.height - 52), NSPoint(x: 6, y: bounds.height - 52)]
-            for (i, o) in corners.enumerated() {
-                Draw.cornerOrnament(at: o, quarterTurns: i, bright: app.ornament, dim: app.ornamentDim, in: ctx)
-            }
-        }
+        let fx = Theme.current.effects
         if fx.windowFrame == "bevel" { Draw.bevel(bounds, "out") }
         if fx.paneFrame == "bevel" { Draw.bevel(pane, "in") }
         if fx.windowBorder {
@@ -159,7 +158,7 @@ private final class RootView: NSView {
         ring.highlight = Theme.current.app.windowHighlight
         layer?.cornerRadius = fx.windowSquare ? 0 : fx.windowRadius
         layer?.masksToBounds = fx.windowRadius > 0 || fx.windowSquare
-        ornaments.isHidden = fx.ornament == "none" && !fx.windowBorder && fx.windowFrame == "none" && fx.paneFrame == "none"
+        ornaments.isHidden = !fx.windowBorder && fx.windowFrame == "none" && fx.paneFrame == "none"
         ornaments.needsDisplay = true
         watermark.isHidden = fx.ornament == "none" || !Theme.current.app.terminalSeeThrough
         watermark.needsDisplay = true

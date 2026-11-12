@@ -109,7 +109,7 @@ Some looks need more than colours and sizes. The `[effects]` table switches on e
 | `progress.style` | `"bar"`, `"dotted"`, `"segments"` | the progress bar solid, a dotted track with a fading fill and a diamond knob (`app.bar.knob`), or blocks in a sunken track |
 | `needs.glow` | bool | a glow behind the needs-you status |
 | `needs.weight` | `"regular"`, `"bold"` | the needs-you status's weight, when it isn't a pill |
-| `ornament` | `"none"`, `"sigil"` | artwork drawn in code: a sigil at the sidebar's foot (left out when the rows need its room), marks in the window's corners, and a sigil behind the terminal at `app.ornament.alpha` (0–0.12) when the window and Ghostty's background are both see-through |
+| `ornament` | `"none"`, `"sigil"` | artwork drawn in code: a sigil at the sidebar's foot (left out when the rows need its room), and, behind the window's content, a sigil at `app.ornament.alpha` (0–0.12) and marks in the window's corners, shown only when the window and Ghostty's background are both see-through |
 | `palette.inset` | 0–80, default 22 | how far the bottom-right palette stands in from the window's edges |
 | `palette.header`, `palette.input.rules` | bool | `[strings] palette.header` above the input, and rules above and below the input |
 | `ui.weight` | `"regular"`, `"light"` | the theme's UI face's regular text drawn light |
