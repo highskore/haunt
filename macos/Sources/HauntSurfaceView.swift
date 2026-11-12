@@ -16,6 +16,9 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
     var isPluginCopy: (String) -> Bool = { _ in false }
     /// Whether a middle click pastes the selection, read at each click so config changes apply.
     var middleClickPastes: () -> Bool = { true }
+    /// This tab's surface id, and whether it has a request a stray Return could answer (`KeyGuard`).
+    var surfaceId = ""
+    var awaitsAnswer: () -> Bool = { false }
 
     /// True when `text` was held for confirmation instead of going to Ghostty.
     private func holdIfRisky(_ text: String?, from pb: NSPasteboard) -> Bool {
@@ -41,8 +44,19 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
     }
 
     override func keyDown(with event: NSEvent) {
+        // Neither this view nor Ghostty's filters isARepeat: a Return still held from the palette or
+        // another tab would otherwise type into whatever tab took focus.
+        guard KeyGuard.shared.allows(view: ObjectIdentifier(self), surfaceId: surfaceId, isRepeat: event.isARepeat,
+                                     isReturn: KeyGuard.isReturn(keyCode: event.keyCode), awaitsAnswer: awaitsAnswer,
+                                     now: ProcessInfo.processInfo.systemUptime) else { return }
         onInput?()
         super.keyDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let took = super.becomeFirstResponder()
+        if took { KeyGuard.shared.focusMoved() }
+        return took
     }
 
     override func paste(_ sender: Any?) {

@@ -406,5 +406,31 @@ tick()
 hh.owner = nil
 check(hovers.last == "dev.x.peek end s4", "the owner going away ends it")
 
+// KeyGuard: a held key never crosses into another terminal, and a plugin's switch never answers a prompt.
+do {
+    let g = KeyGuard()
+    var asked = 0
+    let needs = { () -> Bool in asked += 1; return true }
+    let idle = { () -> Bool in false }
+    check(g.allows(view: "a", surfaceId: "A", isRepeat: false, isReturn: true, awaitsAnswer: idle, now: 0), "a press goes through")
+    check(g.allows(view: "a", surfaceId: "A", isRepeat: true, isReturn: true, awaitsAnswer: idle, now: 0.5), "its repeats in the same terminal too")
+    check(!g.allows(view: "b", surfaceId: "B", isRepeat: true, isReturn: true, awaitsAnswer: idle, now: 0.6), "a repeat Return to a terminal that didn't get the press is dropped")
+    g.focusMoved()
+    check(!g.allows(view: "a", surfaceId: "A", isRepeat: true, isReturn: true, awaitsAnswer: idle, now: 0.7), "after focus moves, even the first terminal's repeats are dropped")
+
+    g.pluginSwitched(to: "B", at: 10)
+    g.focusMoved()
+    check(!g.allows(view: "b", surfaceId: "B", isRepeat: false, isReturn: true, awaitsAnswer: needs, now: 10.3), "a Return within 400 ms of a plugin switch into a needs-you tab is dropped")
+    check(!g.allows(view: "b", surfaceId: "B", isRepeat: true, isReturn: true, awaitsAnswer: needs, now: 10.5), "and the rest of that hold with it")
+    check(g.allows(view: "b", surfaceId: "B", isRepeat: false, isReturn: false, awaitsAnswer: needs, now: 10.1), "other keys go through")
+    check(g.allows(view: "b", surfaceId: "B", isRepeat: false, isReturn: true, awaitsAnswer: needs, now: 10.45), "a normal Return after 400 ms passes")
+    check(g.allows(view: "b", surfaceId: "B", isRepeat: true, isReturn: true, awaitsAnswer: needs, now: 10.6), "and so does its own repeat")
+    g.pluginSwitched(to: "C", at: 20)
+    check(g.allows(view: "c", surfaceId: "C", isRepeat: false, isReturn: true, awaitsAnswer: idle, now: 20.1), "a tab with nothing to answer takes Return at once")
+    check(g.allows(view: "d", surfaceId: "D", isRepeat: false, isReturn: true, awaitsAnswer: needs, now: 20.1), "only the tab the plugin switched to waits")
+    check(asked == 1, "the core is asked only inside the window (\(asked))")
+    check(KeyGuard.isReturn(keyCode: 36) && KeyGuard.isReturn(keyCode: 76) && !KeyGuard.isReturn(keyCode: 49), "Return and keypad Enter")
+}
+
 print(failures == 0 ? "keys: all passed" : "keys: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

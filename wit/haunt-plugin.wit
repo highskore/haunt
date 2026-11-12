@@ -221,8 +221,10 @@ interface sidebar {
   arrange: func(arrangement: arrangement) -> result<_, string>;
   clear: func();
 
-  // Selects open tab `surface`, as clicking its row would. Only while one of this plugin's buttons,
-  // keys (on key-down) or commands, or a notification action the user chose, runs; once per use.
+  // Selects open tab `surface`, as clicking its row would: it also brings Haunt's window forward and
+  // leaves the agents view. Only while one of this plugin's buttons, keys (on key-down) or commands,
+  // or a notification action the user chose, runs; once per use. For 400 ms after, a Return on that
+  // tab while it has a request is dropped, and a key held from before never repeats into it.
   focus: func(surface: string) -> result<_, string>;
 }
 

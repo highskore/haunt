@@ -221,7 +221,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
         super.init(window: win)
         win.delegate = self
         bridge.panels.host = self
-        bridge.openTab = { [weak self] id in self?.open(id) }
+        bridge.openTab = { [weak self] id in
+            KeyGuard.shared.pluginSwitched(to: id, at: ProcessInfo.processInfo.systemUptime)
+            self?.open(id)
+        }
         bridge.onNote = { [weak self] line in self?.root.toast.show(line) }
         root.topRow.onClick = { [weak self] plugin in self?.bridge.topRowClicked(pluginId: plugin) }
         root.sidebar.onHover = { [weak self] id in self?.bridge.hover.pointer(over: id) }
@@ -306,6 +309,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
             if let view { self?.pasteGuard.confirm(req, on: view) }
         }
         view.isPluginCopy = { [weak self] id in self?.bridge.copiedBy(id) ?? false }
+        view.surfaceId = env.surfaceId
+        view.awaitsAnswer = { [weak self] in self?.core.hasUnresolved(surfaceId: env.surfaceId) ?? false }
         view.onRiskyPaste = { [weak self, weak view] text, plugin in
             if let view { self?.pasteGuard.hold(text, plugin: plugin, on: view) }
         }
