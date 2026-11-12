@@ -70,7 +70,7 @@ final class Harness {
     var opened: [String] = []
     var focused: String?
     lazy var notifier = AgentNotifier(center: center, core: core,
-                                      write: { [unowned self] b, s in self.writes.append((b, s)) },
+                                      press: { [unowned self] k, s in self.writes.append((k.bytes, s)) },
                                       open: { [unowned self] s in self.opened.append(s) },
                                       isFocused: { [unowned self] s in self.focused == s })
 

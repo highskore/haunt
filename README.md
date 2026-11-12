@@ -174,6 +174,7 @@ macos/tests/sidebar.sh   # sidebar drop targets, the agents view's restored fram
 macos/tests/loginpath.sh # the login-shell PATH lookup
 macos/tests/bundle-plugins.sh # make-app's --plugins: none by default, exactly the names given
 macos/tests/notify.sh    # notifications: when Allow shows, answer routing, toggles, the menu bar menu
+macos/tests/answerkey.sh # answers go as keystrokes, and only the fixed Allow/Deny keys do
 macos/fidelity.sh        # pixel check against the mockups (HAUNT_INACTIVE=1 for the unfocused window)
 ```
 

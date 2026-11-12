@@ -60,6 +60,12 @@ final class TabStore {
         }
     }
 
+    /// An agent's answer as a keystroke, not a paste: its prompt ignores pasted text.
+    func press(_ key: AnswerKey, to surfaceId: String) {
+        guard let surface = tab(surfaceId)?.view.surface else { return }
+        _ = ghostty_surface_binding_action(surface, key.action, UInt(key.action.utf8.count))
+    }
+
     /// A Return as its own keystroke: `ghostty_surface_text` pastes, and a pasted CR doesn't submit.
     func pressReturn(_ surfaceId: String) {
         guard let surface = tab(surfaceId)?.view.surface else { return }

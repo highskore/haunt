@@ -7,9 +7,9 @@ final class PluginBridge {
     /// Set once the core has started, so the decision log is loaded before plugins read it.
     var plugins: PluginsAPI?
     private let core: CoreAPI
-    private let write: (PtyWrite) -> Void
+    private let write: (PtyRoute) -> Void
 
-    init(core: CoreAPI, write: @escaping (PtyWrite) -> Void) {
+    init(core: CoreAPI, write: @escaping (PtyRoute) -> Void) {
         self.core = core
         self.write = write
     }
@@ -23,8 +23,8 @@ final class PluginBridge {
             case let .notify(pluginId, title, body, _, _):
                 Self.notify(pluginId: pluginId, title: title, body: body)
             case .ptyAnswer, .ptyType:
-                guard let w = core.gatePluginRequest(request: req) else { continue }
-                write(w)
+                guard let w = core.gatePluginRequest(request: req), let route = PtyRoute(req, w) else { continue }
+                write(route)
             }
         }
     }

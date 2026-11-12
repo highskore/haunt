@@ -114,9 +114,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.ghostty = ghostty
         self.fixture = fixture
         self.config = config
-        bridge = PluginBridge(core: core) { [store] w in
-            store.write(w.bytes, to: w.surfaceId)
-            if w.enter { store.pressReturn(w.surfaceId) }
+        bridge = PluginBridge(core: core) { [store] route in
+            switch route {
+            case let .press(key, surfaceId):
+                store.press(key, to: surfaceId)
+            case let .paste(w):
+                store.write(w.bytes, to: w.surfaceId)
+                if w.enter { store.pressReturn(w.surfaceId) }
+            }
         }
         let size = fixture?.size ?? Self.defaultSize
         let win = NSWindow(contentRect: NSRect(origin: .zero, size: size),
@@ -410,7 +415,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// Writes bytes the core returned for a surface; see `TabStore.write`.
-    func write(_ bytes: Data, to surfaceId: String) { store.write(bytes, to: surfaceId) }
+    func press(_ key: AnswerKey, to surfaceId: String) { store.press(key, to: surfaceId) }
 
     // MARK: Sidebar, palette, keys
 

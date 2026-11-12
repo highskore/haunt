@@ -42,7 +42,7 @@ final class AgentNotifier {
 
     private let center: NoteCenter
     private let core: CoreAPI
-    private let write: (Data, String) -> Void
+    private let press: (AnswerKey, String) -> Void
     private let open: (String) -> Void
     private let isFocused: (String) -> Bool
 
@@ -53,11 +53,11 @@ final class AgentNotifier {
     private var known: Set<String> = []
     private var posted: Set<String> = []
 
-    init(center: NoteCenter, core: CoreAPI, write: @escaping (Data, String) -> Void,
+    init(center: NoteCenter, core: CoreAPI, press: @escaping (AnswerKey, String) -> Void,
          open: @escaping (String) -> Void, isFocused: @escaping (String) -> Bool) {
         self.center = center
         self.core = core
-        self.write = write
+        self.press = press
         self.open = open
         self.isFocused = isFocused
     }
@@ -115,8 +115,9 @@ final class AgentNotifier {
             open(s)
         case .allow, .deny:
             guard settings.enabled, settings.onPermission, !paused, let key = requestKey,
-                  let bytes = core.answerPermission(surfaceId: s, requestKey: key, allow: action == .allow) else { return }
-            write(bytes, s)
+                  let bytes = core.answerPermission(surfaceId: s, requestKey: key, allow: action == .allow),
+                  let answer = AnswerKey(bytes) else { return }
+            press(answer, s)
         }
     }
 

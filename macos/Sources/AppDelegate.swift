@@ -190,7 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private func startNotifications(_ c: MainWindowController) {
         let center = SystemNoteCenter()
         let n = AgentNotifier(center: center, core: core,
-                              write: { [weak c] bytes, id in c?.write(bytes, to: id) },
+                              press: { [weak c] key, id in c?.press(key, to: id) },
                               open: { [weak c] id in c?.open(id) },
                               isFocused: { [weak c] id in c?.isFocused(id) ?? false })
         n.settings = config.notifications
