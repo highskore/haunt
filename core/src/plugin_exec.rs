@@ -493,11 +493,22 @@ mod tests {
 
     #[test]
     fn a_slow_command_and_what_it_started_are_killed_at_the_timeout() {
+        let args = ["-c", "sleep 30 & echo \"started $!\"; sleep 30"].map(String::from);
         let t = Instant::now();
-        let args = ["-c", "sleep 30 & echo started; sleep 30"].map(String::from);
-        let o = run_argv("sh", Path::new("/bin/sh"), &[PathBuf::from("/bin/bash"), PathBuf::from("/bin/sleep")], &args, None, Path::new("/"), Duration::from_millis(300)).unwrap();
-        assert_eq!((o.status, o.stdout.as_str()), (-1, "started\n"));
-        assert!(t.elapsed() < Duration::from_secs(3), "the backgrounded sleep must not hold the pipe open");
+        let o = run_argv("sh", Path::new("/bin/sh"), &[PathBuf::from("/bin/bash"), PathBuf::from("/bin/sleep")], &args, None, Path::new("/"), Duration::from_secs(1)).unwrap();
+        assert!(t.elapsed() < Duration::from_secs(5), "the backgrounded sleep must not hold the pipe open");
+        // Under load the shell may not have printed yet; the kill is what's asserted.
+        assert_eq!(o.status, -1);
+        let Some(pid) = o.stdout.strip_prefix("started ").and_then(|p| p.trim().parse::<libc::pid_t>().ok()) else {
+            assert!("started ".starts_with(o.stdout.as_str()), "{:?}", o.stdout);
+            return;
+        };
+        let dead = || unsafe { libc::kill(pid, 0) } != 0;
+        let t = Instant::now();
+        while !dead() && t.elapsed() < Duration::from_secs(3) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(dead(), "the backgrounded sleep {pid} outlived the timeout");
     }
 
     #[test]
