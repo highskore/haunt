@@ -911,7 +911,7 @@ fn status_same(w: &[Glyph], p: &[char]) -> bool {
 /// "ok-done-ok" is refused, and "abandoned", "idler", "undone·x" and "allowlist ok" are not. Words are
 /// split twice: with symbols kept as wildcards (`don℮`) and with every non-ASCII character or symbol
 /// as a break (`done✓`, `doneꓸ`, `doneː`), so a word in another script touching one is refused too.
-pub(crate) fn says_status(text: &str) -> bool {
+pub fn says_status(text: &str) -> bool {
     static PHRASES: std::sync::LazyLock<Vec<Vec<char>>> = std::sync::LazyLock::new(|| {
         let waiting = crate::layout::WAITING.split(' ').next();
         let all = crate::layout::STATUS_TEXTS.iter().copied().chain(waiting).chain(["Allow", "Deny"]);
@@ -3011,6 +3011,17 @@ mod tests {
         assert_eq!(walks, [(String::new(), 1)], "the walk is audited as it reports: the project root and the files it counted");
         p.exec_done(d.job, JobOutcome::Exec(Err("x".into()))).unwrap();
         assert!(p.store.data().exec_jobs.is_empty(), "a tree job's id is no exec job");
+    }
+
+    #[test]
+    fn theme_words_go_through_the_label_check() {
+        for t in ["\u{13A0}one", "done\u{2800}", "needs  you", "\u{410}llow", "Approve", "RUNNING", "ALL IDLE", "a\u{300}llow"] {
+            assert!(says_status(t), "{t:?}");
+        }
+        for t in ["Invoke", "\u{21B5} SUMMON \u{B7} ESC BANISH", "XII \u{B7} XI \u{B7} MMXXVI", "AGENTS III", "Go To", "Open:",
+                  "Type the name of a tab, a command or a theme.", "\u{21B5} OPEN \u{B7} ESC BACK", "\u{2514} ", "- "] {
+            assert!(!says_status(t), "{t:?}");
+        }
     }
 
     #[test]

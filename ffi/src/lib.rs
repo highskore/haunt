@@ -18,6 +18,13 @@ pub fn refusal_text(reason: Refusal) -> String {
     reason.text().to_owned()
 }
 
+/// Whether a theme's or plugin's text could pass for one of Haunt's status words.
+#[cfg(feature = "plugins")]
+#[uniffi::export]
+pub fn says_status(text: String) -> bool {
+    haunt_core::plugins::says_status(&text)
+}
+
 #[uniffi::export]
 pub fn event_name(event: AgentEvent) -> String {
     event.kind.name().to_owned()

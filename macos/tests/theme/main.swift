@@ -476,10 +476,15 @@ check(words.theme.app.strings["command"] == nil && words.problems.contains { $0.
 let day = DateComponents(calendar: Calendar(identifier: .gregorian), year: 2026, month: 11, day: 4).date!
 check(words.theme.string("titlebar.right", now: day) == "IV · XI · MMXXVI", "dates come from the clock, in Roman numerals")
 check(words.theme.string("sidebar.foot", agents: 4) == "AGENTS IV (4)" && words.theme.string("palette.foot") == nil, "and the agent count")
-write(user, "status", "[strings]\npalette.header = \"Needs You\"\npalette.foot = \"↵ ALLOWED\"\nrow.sub.prefix = \"done \"\nsidebar.foot = \"SPIRITS\"\ntitlebar.right = \"Undone\"\n")
+// The words themselves are core's label check (its tests hold the probes); here, that a theme goes through it.
+var asked: [String] = []
+Theme.statusCheck = { asked.append($0); return $0.hasPrefix("Needs") }
+write(user, "status", "[strings]\npalette.header = \"Needs You\"\nsidebar.foot = \"SPIRITS\"\ntitlebar.right = \"Undone\"\n")
 let status = load("status")
-check(status.theme.app.strings == ["titlebar.right": "Undone"], "status words are refused, and a foot without the count: \(status.problems)")
-check(status.problems.filter { $0.contains("status words") }.count == 3 && status.problems.contains { $0.contains("must show {agents}") }, "each for its reason")
+Theme.statusCheck = { _ in false }
+check(status.theme.app.strings == ["titlebar.right": "Undone"], "what core's check flags is refused, and a foot without the count: \(status.problems)")
+check(status.problems.filter { $0.contains("status words") }.count == 1 && status.problems.contains { $0.contains("must show {agents}") }, "each for its reason")
+check(asked.contains("Needs You") && asked.contains("Undone"), "each string is asked about as written: \(asked)")
 check(Theme.roman(0) == "0" && Theme.roman(3999) == "MMMCMXCIX" && Theme.roman(1994) == "MCMXCIV", "roman numerals")
 
 // Chrome text is drawn flat unless every stop reads on every background it is drawn over.
