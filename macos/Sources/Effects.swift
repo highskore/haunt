@@ -86,6 +86,18 @@ struct Effects: Equatable {
     /// The palette's `[strings] palette.header` above its input, and rules above and below the input.
     var paletteHeader = false
     var paletteInputRules = false
+    /// A "bevel"led window frame (`app.window.pad` in from its edge), and a sunken pane.
+    var windowFrame = "none"
+    var paneFrame = "none"
+    /// The title bar "plain", or a "caption": `app.titlebar.fill` behind a left-aligned title and the lights as
+    /// window buttons on the right; with a ghost icon before the title, and a row of the app's menus under it.
+    var titlebarStyle = "plain"
+    var titlebarIcon = false
+    var titlebarMenu = false
+    /// The progress bar as "segments" in a sunken track; the agent icons as pixel art.
+    var iconStyle = "vector"
+    /// The palette as a "panel" or a "dialog": a caption with `[strings] palette.header`, a sunken field and list.
+    var paletteFrame = "panel"
 
     enum Key {
         case bool(WritableKeyPath<Effects, Bool>)
@@ -125,17 +137,24 @@ struct Effects: Equatable {
         "window.square": .bool(\.windowSquare),
         "window.border": .bool(\.windowBorder),
         "titlebar.double": .bool(\.titlebarDouble),
-        "lights.shape": .choice(\.lightsShape, ["circle", "diamond"]),
-        "label.rule": .choice(\.labelRule, ["none", "diamond"]),
-        "row.select": .choice(\.rowSelect, ["fill", "brackets"]),
+        "lights.shape": .choice(\.lightsShape, ["circle", "diamond", "boxes"]),
+        "label.rule": .choice(\.labelRule, ["none", "diamond", "groupbox"]),
+        "row.select": .choice(\.rowSelect, ["fill", "brackets", "name"]),
         "icon.ring": .bool(\.iconRing),
         "icon.shell": .choice(\.iconShell, ["tile", "diamond"]),
-        "progress.style": .choice(\.progressStyle, ["bar", "dotted"]),
+        "progress.style": .choice(\.progressStyle, ["bar", "dotted", "segments"]),
         "needs.glow": .bool(\.needsGlow),
         "ornament": .choice(\.ornament, ["none", "sigil"]),
         "palette.inset": .number(\.paletteInset, 0...80),
         "palette.header": .bool(\.paletteHeader),
         "palette.input.rules": .bool(\.paletteInputRules),
+        "window.frame": .choice(\.windowFrame, ["none", "bevel"]),
+        "pane.frame": .choice(\.paneFrame, ["none", "bevel"]),
+        "titlebar.style": .choice(\.titlebarStyle, ["plain", "caption"]),
+        "titlebar.icon": .bool(\.titlebarIcon),
+        "titlebar.menu": .bool(\.titlebarMenu),
+        "icon.style": .choice(\.iconStyle, ["vector", "pixel"]),
+        "palette.frame": .choice(\.paletteFrame, ["panel", "dialog"]),
     ]
 
     /// nil when `name` took `value`; otherwise why not.

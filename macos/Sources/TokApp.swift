@@ -67,6 +67,27 @@ struct AppTokens: Equatable {
     var titlebarRule2 = NSColor(white: 1, alpha: 0.06)
     /// `[effects] progress.style = "dotted"`'s knob, and the gap between the sigil and the footer text.
     var barKnob = NSColor.white
+    /// Bevels (`window.frame`, `pane.frame`, `label.rule = "groupbox"`, `palette.frame = "dialog"`): the highlight,
+    /// the light, the shade and the dark edge; and how far a bevelled window's content stands in.
+    var bevelLight = NSColor.white
+    var bevelHi = NSColor(white: 0.875, alpha: 1)
+    var bevelShade = NSColor(white: 0.5, alpha: 1)
+    var bevelDark = NSColor(white: 0.04, alpha: 1)
+    var windowPad: CGFloat = 0
+    /// `pane.frame = "bevel"`: the space between the sidebar and the sunken pane (half of it above both).
+    var paneGap: CGFloat = 4
+    /// `label.rule = "groupbox"`: the box's inset from the sidebar's sides and padding under its last row, and
+    /// the space between boxes.
+    var groupPad: CGFloat = 4
+    /// `palette.frame = "dialog"`: the sunken field and list.
+    var paletteField = NSColor.white
+    /// Moves a bottom-right palette right of `palette.inset` (left when negative), for a card whose side and
+    /// bottom margins differ.
+    var paletteOffsetX: CGFloat = 0
+    var groupGap: CGFloat = 18
+    /// `titlebar.style = "caption"`: the bar's gradient stops, left to right; and `row.select = "name"`'s text.
+    var titlebarFill: [String] = []
+    var rowSelectInk = NSColor.white
     var sidebarFootGap: CGFloat = 6
     /// Ornament lines and outlines, and the fainter rules and rings.
     var ornament = NSColor(white: 1, alpha: 0.6)
@@ -124,6 +145,18 @@ struct AppTokens: Equatable {
         "app.titlebar.right.tracking": .number(\.app.titlebarRightTracking),
         "app.titlebar.rule2": .color(\.app.titlebarRule2),
         "app.bar.knob": .color(\.app.barKnob),
+        "app.bevel.light": .color(\.app.bevelLight),
+        "app.bevel.hi": .color(\.app.bevelHi),
+        "app.bevel.shade": .color(\.app.bevelShade),
+        "app.bevel.dark": .color(\.app.bevelDark),
+        "app.window.pad": .number(\.app.windowPad),
+        "app.pane.gap": .number(\.app.paneGap),
+        "app.group.pad": .number(\.app.groupPad),
+        "app.palette.field": .color(\.app.paletteField),
+        "app.palette.offset.x": .number(\.app.paletteOffsetX),
+        "app.group.gap": .number(\.app.groupGap),
+        "app.titlebar.fill": .strings(\.app.titlebarFill),
+        "app.row.select.ink": .color(\.app.rowSelectInk),
         "app.sidebar.foot.gap": .number(\.app.sidebarFootGap),
         "app.ornament": .color(\.app.ornament),
         "app.ornament.dim": .color(\.app.ornamentDim),

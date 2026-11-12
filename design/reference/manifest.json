@@ -7324,5 +7324,120 @@
     "tol": 2
    }
   ]
+ },
+ "th-04-win95": {
+  "file": "haunt-reference/mockups/haunt-themes/index.html",
+  "index": 4,
+  "crop": ".win",
+  "size_pt": [
+   900,
+   568
+  ],
+  "size_px": [
+   1800,
+   1136
+  ],
+  "anchors": [
+   {
+    "name": "tb.bg",
+    "token": "theme",
+    "expect": "#000080",
+    "tol": 0.5,
+    "mode": "point",
+    "x": 12,
+    "y": 26,
+    "ref": "#000080"
+   },
+   {
+    "name": "side.bg",
+    "token": "theme",
+    "expect": "#c0c0c0",
+    "tol": 0.5,
+    "mode": "point",
+    "x": 506,
+    "y": 1045,
+    "ref": "#c0c0c0"
+   },
+   {
+    "name": "pal.field",
+    "token": "theme",
+    "expect": "#ffffff",
+    "tol": 0.5,
+    "mode": "point",
+    "x": 1628,
+    "y": 732,
+    "ref": "#ffffff"
+   },
+   {
+    "name": "row.name",
+    "token": "theme",
+    "expect": "#ffffff",
+    "tol": 1.0,
+    "mode": "text",
+    "rect": [
+     74,
+     283,
+     122,
+     311
+    ],
+    "ref": "#ffffff"
+   },
+   {
+    "name": "needs",
+    "token": "theme",
+    "expect": "#800000",
+    "tol": 1.0,
+    "mode": "text",
+    "rect": [
+     373,
+     142,
+     486,
+     170
+    ],
+    "ref": "#800000"
+   }
+  ],
+  "edges": [
+   {
+    "name": "tb.bottom",
+    "x": 606,
+    "y": 26,
+    "dir": "down",
+    "expect": 46,
+    "tol": 2
+   },
+   {
+    "name": "pane.left",
+    "x": 558,
+    "y": 590,
+    "dir": "left",
+    "expect": 519,
+    "tol": 2
+   },
+   {
+    "name": "grp.top",
+    "x": 258,
+    "y": 124,
+    "dir": "up",
+    "expect": 118,
+    "tol": 2
+   },
+   {
+    "name": "pal.top",
+    "x": 1378,
+    "y": 589,
+    "dir": "up",
+    "expect": 574,
+    "tol": 2
+   },
+   {
+    "name": "pal.left",
+    "x": 1082,
+    "y": 1015,
+    "dir": "left",
+    "expect": 1045,
+    "tol": 2
+   }
+  ]
  }
 }

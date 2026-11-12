@@ -446,6 +446,9 @@ check(!bwfx.windowSquare && !bwfx.windowBorder && !bwfx.titlebarDouble && bwfx.l
       && bwfx.rowSelect == "fill" && !bwfx.iconRing && bwfx.iconShell == "tile" && bwfx.progressStyle == "bar" && !bwfx.needsGlow
       && bwfx.ornament == "none" && bwfx.paletteInset == 22 && !bwfx.paletteHeader && !bwfx.paletteInputRules,
       "every ornament effect is off by default")
+check(bwfx.windowFrame == "none" && bwfx.paneFrame == "none" && bwfx.titlebarStyle == "plain" && !bwfx.titlebarIcon && !bwfx.titlebarMenu
+      && bwfx.iconStyle == "vector" && bwfx.paletteFrame == "panel" && bwapp.titlebarFill.isEmpty && bwapp.paletteOffsetX == 0,
+      "and every bevel effect")
 check(bwapp.displayFont.isEmpty && bwapp.textChrome.isEmpty && bwapp.strings.isEmpty && Theme().chromeStops.isEmpty,
       "and no display face, chrome or theme words")
 
@@ -477,6 +480,14 @@ write(user, "chromebad", "[app]\ntext.chrome = [\"#ffffff\", \"nope\"]\n")
 check(load("chromeok").theme.chromeStops.count == 3, "readable stops are kept: \(load("chromeok").problems)")
 check(load("chromedim").theme.app.textChrome.isEmpty && load("chromedim").problems.contains { $0.contains("app.text.chrome") }, "a dim stop drops the gradient")
 check(load("chromebad").theme.app.textChrome.isEmpty, "so does a stop that isn't a colour")
+
+// A light window's dark terminal: its text is checked against the terminal's background, not the window's.
+write(user, "dosbox", "appearance = \"light\"\n[color]\nwindow.bg = \"#c0c0c0\"\ntext.terminal = \"#c0c0c0\"\n[ghostty]\nbackground = \"#000000\"\n")
+write(user, "dosdim", "appearance = \"light\"\n[color]\nwindow.bg = \"#c0c0c0\"\ntext.terminal = \"#c0c0c0\"\n")
+check(load("dosbox").problems.isEmpty && load("dosbox").theme.color.textTerminal.hex == "#c0c0c0", "grey on a black terminal: \(load("dosbox").problems)")
+check(load("dosdim").problems.contains { $0.contains("terminal") } && load("dosdim").theme.color.textTerminal.hex != "#c0c0c0",
+      "grey on a grey terminal is fixed")
+check(Theme.stringKeys.contains("palette.message"), "the dialog's message is a theme string")
 
 print(failures == 0 ? "theme: all passed" : "theme: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

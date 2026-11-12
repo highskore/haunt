@@ -47,7 +47,7 @@ extension Theme {
 
     /// The places a theme may word, each one plain line; `{day.roman}`, `{month.roman}`, `{year.roman}`,
     /// `{agents}` and `{agents.roman}` fill in when drawn.
-    static let stringKeys: Set<String> = ["row.sub.prefix", "titlebar.right", "palette.header", "palette.foot", "palette.input.glyph", "sidebar.foot"]
+    static let stringKeys: Set<String> = ["row.sub.prefix", "titlebar.right", "palette.header", "palette.foot", "palette.input.glyph", "palette.message", "sidebar.foot"]
     static let maxStringLength = 48
 
     private mutating func setString(_ name: String, _ value: TOML.Value) -> String? {
@@ -158,7 +158,6 @@ extension Theme {
             ("color.text.label", ["color.window.bg", "color.sidebar.bg"]),
             ("color.text.hi", ["color.window.bg"]),
             ("color.text.ok", ["color.window.bg"]),
-            ("color.text.terminal", ["color.window.bg"]),
             ("color.palette.ink", ["color.palette.bg"]),
             ("color.palette.mute", ["color.palette.bg"]),
             ("color.statusmenu.ink", ["color.statusmenu.bg"]),
@@ -173,6 +172,7 @@ extension Theme {
             ("app.sidebar.foot.fg", ["color.window.bg", "color.sidebar.bg"]),
             ("app.pill.fg", ["color.window.bg", "color.sidebar.bg", "app.pill.bg"]),
             ("app.palette.pill.ink", ["color.palette.bg", "color.palette.sel"]),
+            ("app.row.select.ink", ["color.sidebar.bg", "color.row.selected"]),
         ]
         let guides: [(String, [String])] = [
             ("color.diff.mark", ["color.window.bg"]),
@@ -198,6 +198,8 @@ extension Theme {
 
     /// Fills, borders and rules: a theme may fade them as it likes.
     static let decorative: Set<String> = [
+        // Checked against the terminal's own background, which [ghostty] may set, by enforceContrast.
+        "color.text.terminal",
         "color.bar.fill", "color.bar.track", "color.btn.primary.bg", "color.card.bg",
         "color.card.border", "color.claude", "color.diff.add.bg", "color.diff.del.bg", "color.diff.hunk.bg", "color.diff.rule",
         "color.diff.sel", "color.diff.sq.add", "color.dot", "color.dot.hollow", "color.float.border", "color.focus.expanded.bg",
@@ -212,7 +214,7 @@ extension Theme {
         "color.window.border", "color.zen.track",
         "app.scrim", "app.window.ring", "app.window.highlight", "app.palette.ring", "app.palette.highlight", "app.row.raised.ring",
         "app.row.raised.highlight", "app.row.raised.shadow", "app.row.hover", "app.pill.bg", "app.pill.ring", "app.palette.pill.highlight",
-        "app.palette.pill.mute", "app.ornament", "app.ornament.dim", "app.titlebar.rule2", "app.bar.knob",
+        "app.palette.pill.mute", "app.ornament", "app.ornament.dim", "app.titlebar.rule2", "app.bar.knob", "app.bevel.light", "app.bevel.hi", "app.bevel.shade", "app.bevel.dark", "app.palette.field",
     ]
 
     /// Secondary text that may be see-through, down to `minAlpha`: its contrast is judged blended.

@@ -3371,6 +3371,104 @@
      "expect": "left"
     }
    ]
+  },
+  "th-04-win95": {
+   "file": "th",
+   "index": 4,
+   "crop": ".win",
+   "anchors": [
+    {
+     "name": "tb.bg",
+     "sel": ".tb",
+     "at": [
+      "left+3",
+      "top+10"
+     ],
+     "hex": "#000080"
+    },
+    {
+     "name": "side.bg",
+     "sel": ".side",
+     "at": [
+      "right-2",
+      "bottom-20"
+     ],
+     "hex": "#c0c0c0"
+    },
+    {
+     "name": "pal.field",
+     "sel": ".fld",
+     "at": [
+      "right-30",
+      "50%"
+     ],
+     "hex": "#ffffff"
+    },
+    {
+     "name": "row.name",
+     "sel": ".row.sel .nm",
+     "text": true,
+     "hex": "#ffffff"
+    },
+    {
+     "name": "needs",
+     "sel": ".needs .rt",
+     "text": true,
+     "hex": "#800000"
+    }
+   ],
+   "edges": [
+    {
+     "name": "tb.bottom",
+     "sel": ".tb",
+     "from": [
+      "left+300",
+      "top+10"
+     ],
+     "dir": "down",
+     "expect": "bottom"
+    },
+    {
+     "name": "pane.left",
+     "sel": ".pane",
+     "from": [
+      "left+20",
+      "50%"
+     ],
+     "dir": "left",
+     "expect": "left+1"
+    },
+    {
+     "name": "grp.top",
+     "sel": ".grp",
+     "from": [
+      "50%",
+      "top+5"
+     ],
+     "dir": "up",
+     "expect": "top+2"
+    },
+    {
+     "name": "pal.top",
+     "sel": ".pal",
+     "from": [
+      "50%",
+      "top+10"
+     ],
+     "dir": "up",
+     "expect": "top+3"
+    },
+    {
+     "name": "pal.left",
+     "sel": ".pal",
+     "from": [
+      "left+20",
+      "bottom-5"
+     ],
+     "dir": "left",
+     "expect": "left+2"
+    }
+   ]
   }
  }
 }

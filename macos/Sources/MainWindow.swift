@@ -48,6 +48,8 @@ final class OrnamentView: NSView {
                 Draw.cornerOrnament(at: o, quarterTurns: i, bright: app.ornament, dim: app.ornamentDim, in: ctx)
             }
         }
+        if fx.windowFrame == "bevel" { Draw.bevel(bounds, "out") }
+        if fx.paneFrame == "bevel" { Draw.bevel(pane, "in") }
         if fx.windowBorder {
             let hl = Tok.App.hairline
             let edge = NSBezierPath(rect: bounds.insetBy(dx: hl / 2, dy: hl / 2))
@@ -150,7 +152,7 @@ private final class RootView: NSView {
         ring.highlight = Theme.current.app.windowHighlight
         layer?.cornerRadius = fx.windowSquare ? 0 : fx.windowRadius
         layer?.masksToBounds = fx.windowRadius > 0 || fx.windowSquare
-        ornaments.isHidden = fx.ornament == "none" && !fx.windowBorder
+        ornaments.isHidden = fx.ornament == "none" && !fx.windowBorder && fx.windowFrame == "none" && fx.paneFrame == "none"
         ornaments.needsDisplay = true
     }
 
@@ -165,21 +167,28 @@ private final class RootView: NSView {
             toast.frame = toast.frame(in: bounds)
             return
         }
+        // A bevelled window keeps its frame clear; a sunken pane stands off the sidebar and the title bar.
+        let app = Theme.current.app, fx = Theme.current.effects
+        let pad = fx.windowFrame == "bevel" ? app.windowPad : 0
+        let sunk = fx.paneFrame == "bevel"
+        let inner = bounds.insetBy(dx: pad, dy: pad)
         let top = TitleBarView.height(zen: sidebarHidden), w = sidebarHidden ? 0 : sidebarW
-        titleBar.frame = NSRect(x: 0, y: 0, width: bounds.width, height: top)
+        let bodyTop = inner.minY + top + (sunk ? app.paneGap / 2 : 0), gap = sunk && !sidebarHidden ? app.paneGap : 0
+        titleBar.frame = NSRect(x: inner.minX, y: inner.minY, width: inner.width, height: top)
         let topH = sidebarHidden ? 0 : topRow.height
         topRow.isHidden = topH == 0
-        topRow.frame = NSRect(x: 0, y: top, width: sidebarW, height: topH)
-        sidebar.frame = NSRect(x: 0, y: top + topH, width: sidebarW, height: bounds.height - top - topH)
+        topRow.frame = NSRect(x: inner.minX, y: bodyTop, width: sidebarW, height: topH)
+        sidebar.frame = NSRect(x: inner.minX, y: bodyTop + topH, width: sidebarW, height: inner.maxY - bodyTop - topH)
         // Without the sidebar, the title bar's right half: its title sits on the left.
         toast.frame = sidebarHidden
             ? toast.frame(in: NSRect(x: bounds.width / 2, y: 0, width: bounds.width / 2, height: top))
             : toast.frame(in: sidebar.frame)
         let paneW = (rightPane as? RightPane)?.width ?? PluginPanels.rightWidth
-        let rightW = rightPane == nil ? 0 : min(paneW, max(bounds.width - w - Tok.App.minPaneW, 0))
-        pane.frame = NSRect(x: w, y: top, width: bounds.width - w - rightW, height: bounds.height - top)
-        rightPane?.frame = NSRect(x: bounds.width - rightW, y: top, width: rightW, height: bounds.height - top)
-        ornaments.pane = pane.frame
+        let rightW = rightPane == nil ? 0 : min(paneW, max(inner.width - w - gap - Tok.App.minPaneW, 0))
+        let paneBox = NSRect(x: inner.minX + w + gap, y: bodyTop, width: inner.width - w - gap - rightW, height: inner.maxY - bodyTop)
+        pane.frame = sunk ? paneBox.insetBy(dx: 2, dy: 2) : paneBox
+        rightPane?.frame = NSRect(x: inner.maxX - rightW, y: bodyTop, width: rightW, height: inner.maxY - bodyTop)
+        ornaments.pane = paneBox
         review?.frame = reviewCoversSidebar ? NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top) : pane.frame
         scrim.frame = NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top)
     }

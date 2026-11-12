@@ -1,6 +1,6 @@
 #!/bin/bash
 # Launches build/haunt-fixtures.app on a mockup fixture, captures its window and runs design/check.
-# Usage: macos/fidelity.sh [screen...]   (default: ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox nt-07-menu th-01-glass th-02-sigil)
+# Usage: macos/fidelity.sh [screen...]   (default: ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox nt-07-menu th-01-glass th-02-sigil th-04-win95)
 # The app opens in the background (open -g -n, HAUNT_INACTIVE=1) on a throwaway home and config, so nothing takes
 # focus or touches ~/.haunt; captures get an -inactive suffix. Each instance is killed after its capture, or on exit.
 set -uo pipefail
@@ -26,24 +26,24 @@ if [ ! -x "$FBIN" ] || [ -n "$(find Sources Vendor deps/lib -newer "$FBIN" -prin
 fi
 PLUGINS="${HAUNT_PLUGINS_DIR:-$ROOT/../haunt-plugins}"
 if [ ! -d "$APP" ] || [ "$FBIN" -nt "$APP/Contents/MacOS/haunt" ] || [ "$ROOT/build/haunt.app" -nt "$APP" ] ||
-  [ -n "$(find "$PLUGINS/haunt-decision-log" "$PLUGINS/haunt-theme-glass" "$PLUGINS/haunt-theme-sigil" -newer "$APP" -not -path '*/target/*' -print -quit 2>/dev/null)" ]; then
+  [ -n "$(find "$PLUGINS/haunt-decision-log" "$PLUGINS/haunt-theme-glass" "$PLUGINS/haunt-theme-sigil" "$PLUGINS/haunt-theme-win95" -newer "$APP" -not -path '*/target/*' -print -quit 2>/dev/null)" ]; then
   rm -rf "$APP"
   cp -R "$ROOT/build/haunt.app" "$APP"
   cp "$FBIN" "$APP/Contents/MacOS/haunt"
   # The log palettes go through the real decision-log plugin, and th- screens through their theme plugin,
   # whatever the shipping build bundles.
   rm -rf "$APP/Contents/Resources/plugins"
-  ./bundle-plugins.sh "$APP/Contents/Resources/plugins" decision-log,theme-glass,theme-sigil >/dev/null || exit 1
+  ./bundle-plugins.sh "$APP/Contents/Resources/plugins" decision-log,theme-glass,theme-sigil,theme-win95 >/dev/null || exit 1
   codesign --force --sign - "$APP" >/dev/null 2>&1
 fi
 status=0
-for screen in "${@:-ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox nt-07-menu th-01-glass th-02-sigil}"; do
+for screen in "${@:-ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette av-01-narrow-list rv-01-files rv-06-comment rv-09-overview rv-11-inbox nt-07-menu th-01-glass th-02-sigil th-04-win95}"; do
   for s in $screen; do
     tag="$s${HAUNT_INACTIVE:+-inactive}"
     # The palette and the menu bar menu are their own windows; the mockup's crop leaves out their 1 pt border.
     width=""
     inset=0
-    case "$s" in dl-04-palette) width=400; inset=2 ;; nt-07-menu) width=250; inset=2 ;; th-02-sigil) width=900; inset=2 ;; esac
+    case "$s" in dl-04-palette) width=400; inset=2 ;; nt-07-menu) width=250; inset=2 ;; th-02-sigil) width=900; inset=2 ;; th-04-win95) width=900 ;; esac
     # Glass shows the card's wallpaper, blurred, instead of the desktop.
     backdrop=""
     [ -f "$ROOT/design/reference/$s-backdrop.png" ] && backdrop="$ROOT/design/reference/$s-backdrop.png"
@@ -64,7 +64,7 @@ for screen in "${@:-ui-03-icon-only ui-06-grouped-flat ui-10-zen dl-04-palette a
       status=1
     else
       screencapture -x -o -l "${win%% *}" "$OUT/$tag-capture.png"
-      if [ "$inset" -gt 0 ]; then
+      if [ -n "$width" ]; then
         # screencapture -l on a child window sometimes returns the whole window group; then the panel is
         # cut out of it at its offset from the main window.
         main=$(tools/winid-pid "$pid" 900)

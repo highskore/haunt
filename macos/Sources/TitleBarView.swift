@@ -40,7 +40,12 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
     var progress: CGFloat? { didSet { if progress != oldValue { needsDisplay = true } } }
 
     /// The zen layout adds the progress line above the title bar.
-    static func height(zen: Bool) -> CGFloat { Tok.Size.titlebarH + (zen ? Tok.Size.zenBar : 0) }
+    static func height(zen: Bool) -> CGFloat { Tok.Size.titlebarH + (zen ? Tok.Size.zenBar : menuH) }
+
+    /// `[effects] titlebar.menu`'s row under the caption: the title's type with 2 pt above and 5 below.
+    static var menuH: CGFloat { Theme.current.effects.titlebarMenu ? Tok.App.titleFont * Tok.Font.baseLine + 7 : 0 }
+    private var caption: Bool { Theme.current.effects.titlebarStyle == "caption" && !zen }
+    private var boxes: Bool { Theme.current.effects.lightsShape == "boxes" }
 
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
@@ -52,6 +57,12 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
     private var lightsY: CGFloat { rowTop + (rowH - Tok.Size.lightsD) / 2 }
 
     private func lightRect(_ i: Int) -> NSRect {
+        if boxes {
+            // Window buttons, right-aligned: minimise, maximise, then close after a 2 pt gap.
+            let w: CGFloat = 16, h: CGFloat = 14, right = bounds.width - 2
+            let x = [right - w, right - 2 - 3 * w, right - 2 - 2 * w][i]
+            return NSRect(x: x, y: rowTop + (Tok.Size.titlebarH - h) / 2, width: w, height: h)
+        }
         let d = Tok.Size.lightsD
         return NSRect(x: Tok.Size.titlebarPadx + CGFloat(i) * (d + Tok.Size.lightsGap), y: lightsY, width: d, height: d)
     }
@@ -70,7 +81,9 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
     private var lightsArea: NSTrackingArea?
     private var flagsMonitor: Any?
 
-    private var lightsGroup: NSRect { lightRect(0).union(lightRect(2)).insetBy(dx: -Tok.App.lightsSlop, dy: -Tok.App.lightsSlop) }
+    private var lightsGroup: NSRect {
+        lightRect(0).union(lightRect(1)).union(lightRect(2)).insetBy(dx: -Tok.App.lightsSlop, dy: -Tok.App.lightsSlop)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -98,6 +111,7 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
     }
 
     private func drawLights() {
+        if boxes { return drawBoxes() }
         for i in 0..<3 {
             let r = lightRect(i)
             if Theme.current.effects.lightsShape == "diamond" && !lightsHover {
@@ -145,6 +159,70 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
                     br.line(to: NSPoint(x: c.x + a, y: c.y - a + g * 2)); br.close(); br.fill()
                 }
             }
+        }
+    }
+
+    /// `lights.shape = "boxes"`: raised window buttons with pixel glyphs.
+    private func drawBoxes() {
+        let glyphs: [[String]] = [
+            ["kk....kk", ".kk..kk.", "..kkkk..", "...kk...", "..kkkk..", ".kk..kk.", "kk....kk"],
+            [".......", ".......", ".......", ".......", ".......", ".kkkkkk", ".kkkkkk"],
+            ["kkkkkkkkk", "kkkkkkkkk", "k.......k", "k.......k", "k.......k", "k.......k", "k.......k", "k.......k", "kkkkkkkkk"],
+        ]
+        for i in 0..<3 {
+            let r = lightRect(i)
+            Draw.fill(r, Tok.Color.windowBg)
+            Draw.bevel(r, "button")
+            let g = glyphs[i], w = CGFloat(g[0].count), h = CGFloat(g.count)
+            Draw.pixels(g, ["k": Tok.Color.textPrimary], at: NSPoint(x: (r.midX - w / 2).rounded(.down), y: (r.midY - h / 2).rounded(.down)))
+        }
+    }
+
+    /// `titlebar.style = "caption"`: the gradient bar, the ghost and a left-aligned title; then the menu row.
+    private func drawCaption(_ ctx: CGContext) {
+        let bar = NSRect(x: 0, y: rowTop, width: bounds.width, height: Tok.Size.titlebarH)
+        let stops = Theme.current.app.titlebarFill.compactMap { NSColor(themeHex: $0) }
+        if stops.count >= 2, let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: stops.map(\.cgColor) as CFArray,
+                                               locations: stops.indices.map { CGFloat($0) / CGFloat(stops.count - 1) }) {
+            ctx.saveGState()
+            ctx.clip(to: bar)
+            ctx.drawLinearGradient(g, start: CGPoint(x: bar.minX, y: 0), end: CGPoint(x: bar.maxX, y: 0), options: [])
+            ctx.restoreGState()
+        } else if let c = stops.first {
+            Draw.fill(bar, c)
+        }
+        var x = Tok.Size.titlebarPadx
+        if Theme.current.effects.titlebarIcon {
+            Draw.pixels(Draw.ghostPixels, ["k": .black, "w": .white], at: NSPoint(x: x, y: bar.minY + ((bar.height - 16) / 2).rounded()))
+            x += 16 + 4
+        }
+        if let tab, !titleFormat.isEmpty {
+            let size = Tok.App.titleFont, font = Draw.ui(size, .bold), lh = size * Tok.Font.baseLine
+            let text = TitleFormat.parts(titleFormat, tab: tab.name, meta: tab.meta).map(\.text).joined()
+            // The selection's ink: the caption shares its fill.
+            let ink = Theme.current.app.rowSelectInk
+            let line = Draw.truncated(Draw.line(text, font, ink), lightRect(1).minX - 4 - x, font, ink)
+            Draw.text(line, font: font, x: x, top: bar.minY + (bar.height - lh) / 2, lineHeight: lh, in: ctx)
+        }
+        for (_, line, r) in menuLayout() {
+            Draw.text(line, font: Draw.ui(Tok.App.titleFont), x: r.minX + 7, top: r.minY + 2, lineHeight: Tok.App.titleFont * Tok.Font.baseLine, in: ctx)
+        }
+    }
+
+    /// The app's own menus as a row under the caption, their first letters underlined; each opens its menu.
+    private func menuLayout() -> [(NSMenu, CTLine, NSRect)] {
+        guard Theme.current.effects.titlebarMenu, !zen, let items = NSApp.mainMenu?.items else { return [] }
+        let font = Draw.ui(Tok.App.titleFont)
+        var x: CGFloat = 0
+        return items.compactMap { item -> (NSMenu, CTLine, NSRect)? in
+            guard let menu = item.submenu else { return nil }
+            let title = menu.title.isEmpty ? "Haunt" : menu.title
+            let s = NSMutableAttributedString(string: title, attributes: [.font: font, .foregroundColor: Tok.Color.textPrimary])
+            s.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: NSRange(location: 0, length: 1))
+            let line = CTLineCreateWithAttributedString(s)
+            let r = NSRect(x: x, y: rowTop + Tok.Size.titlebarH + 1, width: Draw.width(line) + 14, height: Self.menuH - 3)
+            x = r.maxX
+            return (menu, line, r)
         }
     }
 
@@ -218,6 +296,7 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
             }
         }
 
+        if caption { drawCaption(ctx) }
         drawLights()
 
         if zen {
@@ -245,6 +324,7 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
         case .empty:
             break
         }
+        if caption { return }
         if let (line, font, r) = rightLayout() {
             Draw.text(line, font: font, x: r.minX, top: r.minY, lineHeight: r.height, in: ctx)
         }
@@ -365,6 +445,10 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
         let actions: [Selector] = [#selector(NSWindow.performClose(_:)), #selector(NSWindow.performMiniaturize(_:)), green]
         for i in 0..<3 where lightRect(i).insetBy(dx: -Tok.App.lightsSlop, dy: -Tok.App.lightsSlop).contains(p) {
             NSApp.sendAction(actions[i], to: window, from: self)
+            return
+        }
+        if let (menu, _, r) = menuLayout().first(where: { $0.2.contains(p) }) {
+            menu.popUp(positioning: nil, at: NSPoint(x: r.minX, y: r.maxY), in: self)
             return
         }
         if zen, let hit = hintLayout().parts.first(where: { $0.2.insetBy(dx: -Tok.App.hitSlop, dy: -Tok.App.hitSlop).contains(p) }) {

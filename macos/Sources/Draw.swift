@@ -242,6 +242,76 @@ enum Draw {
         ctx.restoreGState()
     }
 
+    /// A 1 or 2 pt bevel inside `r` in `app.bevel.*`: "out" raised (a window), "in" sunken (a field), "button",
+    /// "etched" (a group box) or "thin" (a 1 pt sunken edge).
+    static func bevel(_ r: NSRect, _ style: String) {
+        let a = Theme.current.app
+        let (light, hi, shade, dark) = (a.bevelLight, a.bevelHi, a.bevelShade, a.bevelDark)
+        // Each ring's top-left colour, then its bottom-right one, which wins at the corners as in the CSS.
+        let rings: [(NSColor, NSColor)] = switch style {
+        case "out": [(hi, dark), (light, shade)]
+        case "in": [(shade, light), (dark, hi)]
+        case "button": [(light, dark), (hi, shade)]
+        case "etched": [(shade, light), (light, shade)]
+        default: [(shade, light)]
+        }
+        for (i, (tl, br)) in rings.enumerated() {
+            let b = r.insetBy(dx: CGFloat(i), dy: CGFloat(i))
+            fill(NSRect(x: b.minX, y: b.minY, width: b.width, height: 1), tl)
+            fill(NSRect(x: b.minX, y: b.minY, width: 1, height: b.height), tl)
+            fill(NSRect(x: b.minX, y: b.maxY - 1, width: b.width, height: 1), br)
+            fill(NSRect(x: b.maxX - 1, y: b.minY, width: 1, height: b.height), br)
+        }
+    }
+
+    /// `icon.style = "pixel"`: the claude and shell icons as pixel art; false for the vector style or a kind without one.
+    static func pixelIcon(_ kind: RowKind, in r: NSRect) -> Bool {
+        guard Theme.current.effects.iconStyle == "pixel" else { return false }
+        switch kind {
+        case .claude: pixelStar(in: r)
+        case .shell:
+            pixels(dosPixels, ["k": .black, "b": NSColor(srgbRed: 0, green: 0, blue: 0.5, alpha: 1), "g": NSColor(white: 0.75, alpha: 1)],
+                   at: NSPoint(x: r.minX, y: r.minY), scale: r.width / 16)
+        case .codex: return false
+        }
+        return true
+    }
+
+    /// The haunt-themes card's 9×9 pixel Claude star, scaled into `rect` in Claude orange.
+    static func pixelStar(in rect: NSRect) {
+        let rows = ["#...#...#", ".#..#..#.", "..#.#.#..", "...###...", "#########", "...###...", "..#.#.#..", ".#..#..#.", "#...#...#"]
+        let k = rect.width / 9
+        Tok.Color.claude.setFill()
+        for (y, row) in rows.enumerated() {
+            for (x, ch) in row.enumerated() where ch == "#" {
+                NSRect(x: rect.minX + CGFloat(x) * k, y: rect.minY + CGFloat(y) * k, width: k, height: k).fill()
+            }
+        }
+    }
+
+    /// Pixel art from rows of characters, `colors` naming each one's fill; anything else is left clear.
+    static func pixels(_ rows: [String], _ colors: [Character: NSColor], at o: NSPoint, scale k: CGFloat = 1) {
+        for (y, row) in rows.enumerated() {
+            for (x, ch) in row.enumerated() {
+                guard let c = colors[ch] else { continue }
+                c.setFill()
+                NSRect(x: o.x + CGFloat(x) * k, y: o.y + CGFloat(y) * k, width: k, height: k).fill()
+            }
+        }
+    }
+
+    /// The card's 16 pt pixel ghost and MS-DOS box.
+    static let ghostPixels = [
+        ".....kkkkkk.....", "....kwwwwwwk....", "...kwwwwwwwwk...", "..kwwwwwwwwwwk..", "..kwwwwwwwwwwk..", "..kwwkkwwkkwwk..",
+        "..kwwkkwwkkwwk..", "..kwwkkwwkkwwk..", "..kwwwwwwwwwwk..", "..kwwwwwwwwwwk..", "..kwwwwwwwwwwk..", "..kwwwwwwwwwwk..",
+        "..kwwwwwwwwwwk..", "....w.w..w.w....",
+    ]
+    static let dosPixels = [
+        "................", "kkkkkkkkkkkkkkkk", "kbbbbbbbbbbbbbbk", "kbbbbbbbbbbbbbbk", "kkkkkkkkkkkkkkkk", "kkkkkkkkkkkkkkkk",
+        "kkgkkkkkkkkkkkkk", "kkkgkkkkkkkkkkkk", "kkgkkkkkkkkkkkkk", "kkkkkggggkkkkkkk", "kkkkkkkkkkkkkkkk", "kkkkkkkkkkkkkkkk",
+        "kkkkkkkkkkkkkkkk", "kkkkkkkkkkkkkkkk", "kkkkkkkkkkkkkkkk", "................",
+    ]
+
     /// Over what is there, so a theme's see-through colours layer as they do in the mockups.
     static func fill(_ rect: NSRect, _ color: NSColor) {
         color.setFill()

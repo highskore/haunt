@@ -158,7 +158,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
         case .bottomRight:
             view.heightLimit = f.height - top - Self.cornerInset
             let size = view.fittingSize
-            panel.setFrame(NSRect(x: f.maxX - Self.cornerInset - size.width, y: f.minY + Self.cornerInset,
+            panel.setFrame(NSRect(x: f.maxX - Self.cornerInset - size.width + Theme.current.app.paletteOffsetX, y: f.minY + Self.cornerInset,
                                   width: size.width, height: size.height), display: true)
         }
     }
@@ -516,11 +516,22 @@ final class PaletteView: NSView {
     private var icons: Bool { !plainMode && Theme.current.effects.paletteIcons }
     private var width: CGFloat { panelW - 2 * edge }
     private var padX: CGFloat { Tok.Size.paletteInputPad[1] }
+    /// An entry's side margin; a dialog's entries sit in its list, inside the list's 3 pt padding and their own.
+    private var entryX: CGFloat { dialog ? padX + 3 + Tok.Size.paletteEntryPad[1] : padX }
     private var inputH: CGFloat {
-        Tok.Size.paletteInputPad[0] * 2 + Tok.Size.paletteInputFont * lh + border + (inputRules ? 2 * Self.ruleMargin + border : 0)
+        if dialog { return Self.fieldH + 8 }
+        return Tok.Size.paletteInputPad[0] * 2 + Tok.Size.paletteInputFont * lh + border + (inputRules ? 2 * Self.ruleMargin + border : 0)
     }
     /// `[effects] palette.header`: the header's height, its type set solid with 10 pt above and 4 below.
-    private var headH: CGFloat { header == nil ? 0 : 10 + Theme.current.app.paletteHeaderFont + 4 }
+    private var headH: CGFloat {
+        if dialog { return 3 + Self.captionH + 10 + (message == nil ? 0 : Self.messageH + 8) - edge }
+        return header == nil ? 0 : 10 + Theme.current.app.paletteHeaderFont + 4
+    }
+    /// `palette.frame = "dialog"`: a raised dialog with a caption, a sunken field and list, and OK / Cancel.
+    private var dialog: Bool { !plainMode && Theme.current.effects.paletteFrame == "dialog" }
+    private static let captionH: CGFloat = 18, buttonSize = NSSize(width: 75, height: 23), fieldH: CGFloat = 21, messageH: CGFloat = 32
+    /// The dialog's `[strings] palette.message`, beside an info icon.
+    private var message: String? { dialog ? Theme.current.string("palette.message") : nil }
     private var header: String? { plainMode || !Theme.current.effects.paletteHeader ? nil : Theme.current.string("palette.header") }
     private var inputRules: Bool { !plainMode && Theme.current.effects.paletteInputRules }
     /// `palette.input.rules`: the rules stand this far from the header and the list.
@@ -533,7 +544,8 @@ final class PaletteView: NSView {
         return icons ? max(text, Tok.Size.iconSize) : text
     }
     private var footH: CGFloat {
-        foot.isEmpty ? 0 : border + Tok.Size.paletteFootPad[0] * 2 + Tok.Size.paletteSmallFont * lh
+        if dialog { return 8 + Self.buttonSize.height + 8 + 3 - edge }
+        return foot.isEmpty ? 0 : border + Tok.Size.paletteFootPad[0] * 2 + Tok.Size.paletteSmallFont * lh
     }
     private var visible: Range<Int> { scroll..<min(rows.count, scroll + rowsShown) }
 
@@ -563,7 +575,11 @@ final class PaletteView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let r = Tok.Size.paletteRadius
-        if glass {
+        if dialog {
+            Draw.fill(bounds, Tok.Color.paletteBg)
+            Draw.bevel(bounds, "out")
+            drawDialog(ctx)
+        } else if glass {
             let shape = NSBezierPath(roundedRect: bounds, xRadius: r, yRadius: r)
             Tok.Color.paletteBg.setFill()
             shape.fill()
@@ -580,7 +596,9 @@ final class PaletteView: NSView {
 
         ctx.saveGState()
         ctx.translateBy(x: edge, y: edge)
-        if let header, let f = Draw.display(Theme.current.app.paletteHeaderFont) {
+        if dialog {
+            // Drawn by drawDialog.
+        } else if let header, let f = Draw.display(Theme.current.app.paletteHeaderFont) {
             let line = Draw.line(header, f, Tok.Color.paletteInk), size = Theme.current.app.paletteHeaderFont
             Draw.chromeText(line, font: f, x: ((width - Draw.width(line)) / 2).rounded(), top: 10, lineHeight: size, in: ctx)
         }
@@ -591,7 +609,7 @@ final class PaletteView: NSView {
             drawEntry(rows[i], index: i, top: y, ctx: ctx)
             y += entryH(i)
         }
-        if !foot.isEmpty { drawFoot(top: inputH + listH, ctx: ctx) }
+        if !foot.isEmpty && !dialog { drawFoot(top: inputH + listH, ctx: ctx) }
         ctx.restoreGState()
         if glass {
             let app = Theme.current.app
@@ -600,6 +618,62 @@ final class PaletteView: NSView {
             ring.lineWidth = border
             app.paletteRing.setStroke()
             ring.stroke()
+        }
+    }
+
+    /// The dialog's caption and its sunken field, list and buttons, under the content drawn by `draw`.
+    private func drawDialog(_ ctx: CGContext) {
+        let app = Theme.current.app, x0 = edge, inner = width
+        // Inside the 2 pt bevel and a 1 pt gap, as in the card.
+        let cap = NSRect(x: 3, y: 3, width: bounds.width - 6, height: Self.captionH)
+        let stops = app.titlebarFill.compactMap { NSColor(themeHex: $0) }
+        if stops.count > 1, let g = NSGradient(colors: stops) { g.draw(in: cap, angle: 0) } else { Draw.fill(cap, Tok.Color.rowSelected) }
+        if let header {
+            let f = Draw.ui(Tok.Size.paletteSmallFont, .bold)
+            Draw.text(Draw.line(header, f, app.rowSelectInk), font: f, x: cap.minX + 4, top: cap.minY + (cap.height - Tok.Size.paletteSmallFont * lh) / 2,
+                      lineHeight: Tok.Size.paletteSmallFont * lh, in: ctx)
+        }
+        let top = edge + headH, pad = padX
+        if let message {
+            let mt = 3 + Self.captionH + 10
+            drawInfoIcon(NSRect(x: x0 + pad, y: mt, width: Self.messageH, height: Self.messageH))
+            let f = Draw.ui(Tok.Size.paletteSmallFont), h = Tok.Size.paletteSmallFont * lh
+            Draw.text(Draw.line(message, f, Tok.Color.paletteInk), font: f, x: x0 + pad + Self.messageH + 10, top: mt + (Self.messageH - h) / 2,
+                      lineHeight: h, in: ctx)
+        }
+        // The input glyph labels the field from outside it, like the card's "Open:".
+        var fx = x0 + pad
+        if Theme.current.effects.paletteInputIcon, let glyph = Theme.current.string("palette.input.glyph") {
+            fx = x0 + padX + Draw.width(Draw.line(glyph, Draw.ui(Tok.Size.paletteInputFont - 1), Tok.Color.paletteMute)) + 6
+        }
+        let field = NSRect(x: fx, y: top, width: x0 + inner - pad - fx, height: Self.fieldH)
+        Draw.fill(field, app.paletteField)
+        Draw.bevel(field, "in")
+        let list = NSRect(x: x0 + pad, y: top + inputH, width: inner - 2 * pad, height: listH)
+        Draw.fill(list, app.paletteField)
+        Draw.bevel(list, "in")
+        let b = Self.buttonSize, by = top + inputH + listH + 8
+        let f = Draw.ui(Tok.Size.paletteSmallFont)
+        for (i, label) in ["Cancel", "OK"].enumerated() {
+            let r = NSRect(x: x0 + inner - pad - b.width - CGFloat(i) * (b.width + 6), y: by, width: b.width, height: b.height)
+            Draw.bevel(r, "button")
+            let line = Draw.line(label, f, Tok.Color.paletteInk)
+            Draw.text(line, font: f, x: (r.midX - Draw.width(line) / 2).rounded(), top: r.minY + (b.height - Tok.Size.paletteSmallFont * lh) / 2,
+                      lineHeight: Tok.Size.paletteSmallFont * lh, in: ctx)
+        }
+    }
+
+    /// The card's 32 pt information icon: a white disc with a navy "i".
+    private func drawInfoIcon(_ r: NSRect) {
+        let disc = NSBezierPath(ovalIn: r.insetBy(dx: 2.5, dy: 2.5))
+        NSColor.white.setFill()
+        disc.fill()
+        NSColor.black.setStroke()
+        disc.lineWidth = 1
+        disc.stroke()
+        let navy = NSColor(srgbRed: 0, green: 0, blue: 0.5, alpha: 1)
+        for (x, y, w, h) in [(14.0, 7.0, 4.0, 4.0), (14, 13, 4, 12), (12, 23, 8, 2)] {
+            Draw.fill(NSRect(x: r.minX + x, y: r.minY + y, width: w, height: h), navy)
         }
     }
 
@@ -644,9 +718,11 @@ final class PaletteView: NSView {
             let line = Draw.line(placeholder, f, Tok.Color.paletteMute)
             Draw.text(line, font: f, x: x + gap, top: padY, lineHeight: lineH, in: ctx)
         }
-        drawKey("esc", right: width - padX, mid: mid, font: Tok.Size.paletteSmallFont, ctx: ctx)
+        if !dialog { drawKey("esc", right: width - padX, mid: mid, font: Tok.Size.paletteSmallFont, ctx: ctx) }
         let bottom = padY * 2 + lineH
-        if inputRules {
+        if dialog {
+            // The field's bevel is its edge.
+        } else if inputRules {
             Draw.fill(NSRect(x: ruleX, y: bottom, width: width - 2 * ruleX, height: border), Tok.Color.paletteRule)
         } else {
             Draw.fill(NSRect(x: 0, y: bottom, width: width, height: border), Tok.Color.paletteRule)
@@ -713,14 +789,14 @@ final class PaletteView: NSView {
         let y = top + Tok.Size.paletteEntryPad[0]
         let small = mono(Tok.Size.paletteSmallFont), smallH = Tok.Size.paletteSmallFont * lh
         let body = mono(Tok.Size.paletteFont), bodyH = Tok.Size.paletteFont * lh
-        let timeX = padX
+        let timeX = entryX
         let markX = timeX + Tok.Size.paletteEntryTimeW + gap
-        let textX = icons ? padX + Tok.Size.iconSize + Tok.Size.rowGap[1] : markX + Tok.Size.paletteEntryMarkW + gap
-        let right = width - padX
+        let textX = icons ? entryX + Tok.Size.iconSize + Tok.Size.rowGap[1] : markX + Tok.Size.paletteEntryMarkW + gap
+        let right = width - entryX
 
         if icons {
             let s = Tok.Size.iconSize
-            drawIcon(row.icon ?? .shell, in: NSRect(x: padX, y: y + (textLines - s) / 2, width: s, height: s), ctx: ctx)
+            drawIcon(row.icon ?? .shell, in: NSRect(x: entryX, y: y + (textLines - s) / 2, width: s, height: s), ctx: ctx)
         } else if !row.left.isEmpty {
             Draw.text(Draw.line(row.left, small, mute), font: small, x: timeX, top: y, lineHeight: smallH, in: ctx)
         }
@@ -773,6 +849,7 @@ final class PaletteView: NSView {
 
     /// `[effects] palette.icons`: the sidebar's icons, a tab's kind or the shell glyph.
     private func drawIcon(_ kind: RowKind, in r: NSRect, ctx: CGContext) {
+        if Draw.pixelIcon(kind, in: r) { return }
         switch kind {
         case .claude:
             let s = Tok.Size.claudeIcon

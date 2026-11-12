@@ -74,7 +74,10 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     // CSS px → pt 1:1; line boxes use body's 1.5 line-height.
     private var lh: CGFloat { Tok.Font.baseLine }
     private var rowLine1: CGFloat { max(Tok.Size.iconSize, Tok.Size.rowName * lh, Tok.Size.rowRight * lh) }
-    private var labelHeight: CGFloat { Tok.Size.labelPad[0] + Tok.Size.labelFont * lh + Tok.Size.labelPad[2] }
+    private var labelHeight: CGFloat { groupBox ? Tok.Size.labelPad[0] : Tok.Size.labelPad[0] + Tok.Size.labelFont * lh + Tok.Size.labelPad[2] }
+    /// `label.rule = "groupbox"`: each group in an etched box, its label on the top edge; the label's top padding
+    /// is the space above the first row.
+    private var groupBox: Bool { Theme.current.effects.labelRule == "groupbox" && !panel }
     private var contentWidth: CGFloat { panel ? bounds.width : bounds.width - Tok.App.hairline }
     /// A row's text starts `[effects] row.inset` plus its padding in from the side.
     private var rowPadX: CGFloat { Theme.current.effects.rowInset + Tok.Size.rowPad[1] }
@@ -106,6 +109,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
                 items.append(.row(r, top: y, height: h, group: g.id))
                 y += h
             }
+            if groupBox && !g.label.isEmpty { y += Theme.current.app.groupPad + Theme.current.app.groupGap }
         }
         pruneLineCaches()
         positionEditor()
@@ -306,6 +310,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         Draw.fill(bounds, panel ? Tok.Color.windowBg : Tok.Color.sidebarBg)
         if !panel { Draw.fill(NSRect(x: bounds.width - Tok.App.hairline, y: 0, width: Tok.App.hairline, height: bounds.height), Tok.Color.hairline) }
+        if groupBox { drawGroupBoxes() }
         for item in items {
             switch item {
             case let .label(text, top, _):
@@ -380,6 +385,21 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         return String(first) + s.dropFirst().lowercased()
     }
 
+    /// Each labelled group's etched box, from its label's top to its last row plus `app.group.pad`.
+    private func drawGroupBoxes() {
+        var spans: [String: (top: CGFloat, bottom: CGFloat)] = [:]
+        for item in items {
+            switch item {
+            case let .label(_, top, g): spans[g] = (top, top)
+            case let .row(_, top, h, g): if let s = spans[g] { spans[g] = (s.top, top + h) }
+            }
+        }
+        let pad = Theme.current.app.groupPad
+        for (_, s) in spans {
+            Draw.bevel(NSRect(x: pad, y: s.top, width: contentWidth - 2 * pad, height: s.bottom + pad - s.top), "etched")
+        }
+    }
+
     private func drawLabel(_ text: String, top: CGFloat, ctx: CGContext) {
         let line = labelLines[text] ?? {
             let upper = Theme.current.effects.labelCase == "upper"
@@ -388,6 +408,12 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             labelLines[text] = l
             return l
         }()
+        if groupBox {
+            // On the box's top edge, over a gap in it.
+            let lineH = Tok.Size.labelFont * lh, x = Theme.current.app.groupPad + Tok.Size.labelPad[1]
+            Draw.fill(NSRect(x: x - 3, y: top - 2, width: Draw.width(line) + 6, height: 4), Tok.Color.sidebarBg)
+            return Draw.text(line, font: Fonts.label, x: x, top: top - lineH / 2, lineHeight: lineH, in: ctx)
+        }
         let lineTop = top + Tok.Size.labelPad[0], lineH = Tok.Size.labelFont * lh
         guard Theme.current.effects.labelRule == "diamond" else {
             return Draw.chromeText(line, font: Fonts.label, x: Tok.Size.labelPad[1], top: lineTop, lineHeight: lineH, in: ctx)
@@ -499,7 +525,9 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let box = NSRect(x: fx.rowInset, y: top, width: contentWidth - 2 * fx.rowInset, height: height)
         let shape = NSBezierPath(roundedRect: box, xRadius: fx.rowRadius, yRadius: fx.rowRadius)
         if row.selected {
-            if fx.rowSelect == "brackets" { drawBrackets(box, ctx: ctx) } else if fx.rowRaised { drawRaised(shape, box) } else {
+            if fx.rowSelect == "name" {
+                // Drawn with the name, below.
+            } else if fx.rowSelect == "brackets" { drawBrackets(box, ctx: ctx) } else if fx.rowRaised { drawRaised(shape, box) } else {
                 Tok.Color.rowSelected.setFill()
                 shape.fill()
             }
@@ -553,8 +581,22 @@ final class SidebarView: NSView, NSTextFieldDelegate {
                       lineHeight: Tok.Size.rowRight * lh, in: ctx)
             ctx.restoreGState()
         }
-        Draw.text(l.name, font: Fonts.name, x: col2, top: y + (rowLine1 - Tok.Size.rowName * lh) / 2,
-                  lineHeight: Tok.Size.rowName * lh, in: ctx)
+        if row.selected && fx.rowSelect == "name" {
+            // The name alone highlighted, with a dotted focus ring inside it.
+            let nameH = Tok.Size.rowName * lh
+            let r = NSRect(x: col2 - 2, y: y + (rowLine1 - nameH) / 2, width: Draw.width(l.name) + 4, height: nameH).integral
+            Draw.fill(r, Tok.Color.rowSelected)
+            let ring = NSBezierPath(rect: r.insetBy(dx: 0.5, dy: 0.5))
+            ring.lineWidth = 1
+            ring.setLineDash([1, 1], count: 2, phase: 0)
+            Theme.current.app.rowSelectInk.setStroke()
+            ring.stroke()
+            let name = Draw.line(row.name, Fonts.name, Theme.current.app.rowSelectInk)
+            Draw.text(name, font: Fonts.name, x: col2, top: y + (rowLine1 - nameH) / 2, lineHeight: nameH, in: ctx)
+        } else {
+            Draw.text(l.name, font: Fonts.name, x: col2, top: y + (rowLine1 - Tok.Size.rowName * lh) / 2,
+                      lineHeight: Tok.Size.rowName * lh, in: ctx)
+        }
         if let dot = l.dot {
             let d = Tok.Size.tabDot
             Tok.Color.tab(dot).setFill()
@@ -635,6 +677,18 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     private func drawBar(_ track: NSRect, fill: NSRect) {
         let fx = Theme.current.effects, r = min(fx.barRadius, track.height / 2)
         if fx.progressStyle == "dotted" { return drawDottedBar(track, fill: fill) }
+        if fx.progressStyle == "segments" {
+            // A 1 pt sunken track, 2 pt in, filled with 8 pt blocks 2 pt apart.
+            Draw.fill(track, Tok.Color.barTrack)
+            Draw.bevel(track, "thin")
+            let inner = track.insetBy(dx: 2, dy: 2), end = inner.minX + max(fill.width - 4, 0)
+            var x = inner.minX
+            while x < end {
+                Draw.fill(NSRect(x: x, y: inner.minY, width: min(8, end - x), height: inner.height), Tok.Color.barFill)
+                x += 10
+            }
+            return
+        }
         guard r > 0 || fx.barGlow else {
             Draw.fill(track, Tok.Color.barTrack)
             Draw.fill(fill, Tok.Color.barFill)
@@ -685,6 +739,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     }
 
     private func drawIcon(_ kind: RowKind, in r: NSRect, ctx: CGContext) {
+        if Draw.pixelIcon(kind, in: r) { return }
         switch kind {
         case .claude:
             let s = Tok.Size.claudeIcon
