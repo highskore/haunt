@@ -79,6 +79,7 @@ pub struct SurfaceEnv {
 pub type Listener = Arc<dyn Fn() + Send + Sync>;
 
 /// What `Core::replay_line` did with a line.
+#[cfg(any(test, feature = "replay"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineResult {
     /// It carried the surface's nonce: only such events may create a request.
@@ -706,14 +707,14 @@ impl Core {
 
     /// Pins the time every change and snapshot sees; None goes back to the clock. Lets a recorded
     /// trace be replayed with its own times.
-    #[doc(hidden)]
+    #[cfg(any(test, feature = "replay"))]
     pub fn set_clock(&self, now: Option<Instant>) {
         lock(&self.state).clock = now;
     }
 
     /// Sets the home dir rows abbreviate to `~` and the shell named on shell rows, which `new` reads
     /// from the environment, so a replay doesn't depend on it.
-    #[doc(hidden)]
+    #[cfg(any(test, feature = "replay"))]
     pub fn set_home_and_shell(&self, home: Option<String>, shell: Option<String>) {
         let mut st = lock(&self.state);
         st.home = home;
@@ -722,7 +723,7 @@ impl Core {
 
     /// One hook line delivered as the socket intake would, with the same decoding and nonce check, but
     /// no rate limit, branch lookup or plugin tap. None if no registered surface has its id.
-    #[doc(hidden)]
+    #[cfg(any(test, feature = "replay"))]
     pub fn replay_line(&self, line: &str) -> Option<LineResult> {
         let nonces = lock(&self.state).nonces.clone();
         let d = crate::intake::decode(line, &nonces)?;

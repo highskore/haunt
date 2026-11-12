@@ -7,6 +7,8 @@ version.workspace = true
 [features]
 default = ["plugins"]
 ffi = ["dep:uniffi"]
+# Pins the clock and feeds hook lines directly, for haunt-replay. The app and the FFI never enable it.
+replay = []
 plugins = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:sha2", "dep:hmac", "dep:toml"]
 
 [dependencies]
