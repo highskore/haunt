@@ -376,6 +376,19 @@ check(ReviewLoader.load(cwd: repo, headAtStart: nil) == .failure(.failed("git ca
       "and the review says why")
 GitRunner.sandboxExec = realSandbox
 
+// Reviews load on background threads; the sandbox probe's cache is shared and locked. A new runner path
+// empties it, so the threads race to fill it.
+let runnerLink = NSTemporaryDirectory() + "haunt-review-sandbox-exec-\(getpid())"
+try? FileManager.default.createSymbolicLink(atPath: runnerLink, withDestinationPath: realSandbox)
+GitRunner.sandboxExec = runnerLink
+let probes = UnsafeMutableBufferPointer<[String]?>.allocate(capacity: 32)
+probes.initialize(repeating: nil)
+DispatchQueue.concurrentPerform(iterations: 32) { i in probes[i] = GitRunner.sandboxed(GitRunner.gitPath!) }
+check(Set(probes.map { $0 ?? [] }).count == 1 && probes[0] != nil, "every thread gets the same sandbox")
+probes.deallocate()
+GitRunner.sandboxExec = realSandbox
+try? FileManager.default.removeItem(atPath: runnerLink)
+
 // A textconv or external diff driver alone also keeps the working tree out; harmless diff settings don't.
 for (k, v) in [("diff.evil.textconv", "true"), ("diff.evil.command", "true"), ("diff.external", "true"), ("diff.renames", "true")] {
     fresh()

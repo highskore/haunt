@@ -285,12 +285,16 @@ enum GitRunner {
         free(c)
         guard !real.contains("\""), !real.contains("\\"), FileManager.default.isExecutableFile(atPath: sandboxExec) else { return nil }
         let args = ["-p", "(version 1)(allow default)(deny process-fork)(deny process-exec)(allow process-exec (literal \"\(real)\"))", real]
+        sandboxLock.lock()
+        defer { sandboxLock.unlock() }
         if sandboxWorks?.git != real || sandboxWorks?.runner != sandboxExec {
             let probe = spawn(sandboxExec, args + ["version"], cwd: "/", env: environment(), timeout: 10, maxBytes: 4096)
             sandboxWorks = (real, sandboxExec, probe?.status == 0 && probe?.text.hasPrefix("git version") == true)
         }
         return sandboxWorks?.ok == true ? args : nil
     }
+    /// `run` is called from background threads; the probe's cache is read and written only under this.
+    private static let sandboxLock = NSLock()
     private static var sandboxWorks: (git: String, runner: String, ok: Bool)?
 
     /// `path` with links resolved, if it and every folder up to / belong to root or the user and only they,
