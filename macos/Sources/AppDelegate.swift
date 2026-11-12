@@ -253,6 +253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     func applicationWillTerminate(_ notification: Notification) {
+        controller?.bridge.drainAudit(final: true)
         config.flushState()
         notifier?.removeAll()
         noteCenter?.removeOurs()
