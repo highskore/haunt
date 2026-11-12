@@ -327,11 +327,20 @@ interface panel {
 
 // Capability `notify_hold`. Holds haunt's notifications and other plugins' while the user focuses,
 // then shows one that sums them up. A permission prompt is never held: its notification still shows,
-// and its row still goes to NEEDS YOU. One hold at a time, owned by the plugin that started it.
+// and its row still goes to NEEDS YOU. Several plugins may hold at once; the summary shows when the
+// last one lets go, naming the holders by id (two, then "+n") with each one's headline and actions.
 interface hold {
-  // Holds for `minutes` (1 to 240); haunt releases it then if the plugin hasn't.
+  record summary-action {
+    id: string,
+    label: string,
+  }
+  // Holds for `minutes` (1 to 240); haunt releases it then if the plugin hasn't. Starting again
+  // moves the end and clears the summary.
   start: func(minutes: u32) -> result<_, string>;
-  // Ends the hold; haunt shows the summary.
+  // While holding: a plain headline (cut to 64) and at most 2 actions (labels plain, cut to 24, and
+  // never one of haunt's status words) for the summary. Choosing one calls `on-action(id, "hold")`.
+  set-summary: func(headline: option<string>, actions: list<summary-action>) -> result<_, string>;
+  // Ends this plugin's hold.
   release: func();
 }
 

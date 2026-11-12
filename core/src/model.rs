@@ -157,8 +157,8 @@ pub(crate) struct State {
     rows_plugins: HashMap<u64, String>,
     /// config.toml `[layout] row_labels`: plugins whose decoration wins a row, first first.
     row_labels: Vec<String>,
-    /// The plugin holding notifications, until when.
-    notify_hold: Option<(String, Instant)>,
+    /// The plugins holding notifications, each until when.
+    notify_hold: Vec<(String, Instant)>,
     top_row: Option<TopRow>,
     /// Where `exec` jobs report; set while a plugin set is attached.
     exec_sink: Option<crate::plugin_exec::ExecSink>,
@@ -1013,27 +1013,26 @@ impl CoreHandle {
         res
     }
 
-    /// `plugin_id` holds notifications until `until`; refused while another plugin's hold runs.
-    pub fn hold_notifications(&self, plugin_id: &str, until: Instant) -> Result<(), String> {
+    /// `plugin_id` holds notifications until `until`, alongside any other plugin's hold; a second
+    /// start moves its own end.
+    pub fn hold_notifications(&self, plugin_id: &str, until: Instant) {
         let mut st = lock(&self.state);
-        if let Some((owner, end)) = &st.notify_hold
-            && owner != plugin_id
-            && *end > Instant::now()
-        {
-            return Err(format!("{owner} is holding notifications"));
-        }
-        st.notify_hold = Some((plugin_id.to_owned(), until));
-        Ok(())
+        let now = Instant::now();
+        st.notify_hold.retain(|(p, end)| p != plugin_id && *end > now);
+        st.notify_hold.push((plugin_id.to_owned(), until));
     }
 
-    /// Ends `plugin_id`'s hold; whether it had one.
+    /// Whether `plugin_id`'s hold runs.
+    pub fn holds_notifications(&self, plugin_id: &str) -> bool {
+        lock(&self.state).notify_hold.iter().any(|(p, end)| p == plugin_id && *end > Instant::now())
+    }
+
+    /// Ends `plugin_id`'s hold, and only its; whether it had one.
     pub fn release_notifications(&self, plugin_id: &str) -> bool {
         let mut st = lock(&self.state);
-        let mine = st.notify_hold.as_ref().is_some_and(|(owner, _)| owner == plugin_id);
-        if mine {
-            st.notify_hold = None;
-        }
-        mine
+        let had = st.notify_hold.iter().any(|(p, _)| p == plugin_id);
+        st.notify_hold.retain(|(p, _)| p != plugin_id);
+        had
     }
 
     pub fn set_exec_sink(&self, sink: Option<crate::plugin_exec::ExecSink>) {

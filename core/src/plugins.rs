@@ -126,7 +126,9 @@ pub enum HostRequest {
     ShowPanel { plugin_id: String, plugin_name: String, panel: Panel },
     /// Hold haunt's and other plugins' notifications (never a permission prompt's) for `minutes`, then
     /// show one summary; the app releases it then itself.
-    HoldNotifications { plugin_id: String, plugin_name: String, minutes: u32 },
+    HoldNotifications { plugin_id: String, minutes: u32 },
+    /// What the holder adds to the summary; replaces its earlier one.
+    HoldSummary { plugin_id: String, headline: Option<String>, actions: Vec<NotifyAction> },
     ReleaseNotifications { plugin_id: String },
     ClosePanel { plugin_id: String, id: String },
     /// The plugin bound or unbound a key: the app rebuilds its key map from `PluginSet::keys`.
@@ -255,6 +257,8 @@ pub struct HostState {
     user_call: bool,
     /// (id, canonical chord) from `keys.bind`.
     keys: Vec<(String, String)>,
+    /// Action ids of this plugin's latest hold summary: the only `"hold"` replies `notify_action` takes.
+    hold_actions: Vec<String>,
     /// The manifest's `exec` names.
     exec: Vec<String>,
     /// Jobs started and not yet reported.
@@ -305,6 +309,7 @@ impl HostState {
             typing_into: None,
             user_call: false,
             keys: Vec::new(),
+            hold_actions: Vec::new(),
             exec: caps.exec.clone(),
             exec_jobs: Vec::new(),
             events: EventGrant { details: caps.event_details, answers: caps.pty_write },
@@ -846,6 +851,11 @@ impl wexec::Host for HostState {
 }
 
 pub const HOLD_MAX_MINUTES: u32 = 240;
+const HOLD_ACTIONS_MAX: usize = 2;
+const HOLD_HEADLINE_MAX: usize = 64;
+const HOLD_LABEL_MAX: usize = 24;
+/// The binding a hold summary's actions come back with.
+pub const HOLD_BINDING: &str = "hold";
 
 impl whold::Host for HostState {
     fn start(&mut self, minutes: u32) -> Result<(), String> {
@@ -856,9 +866,32 @@ impl whold::Host for HostState {
             return Err("too many pending requests".into());
         }
         let core = self.core.as_ref().ok_or("no haunt core")?;
-        core.hold_notifications(&self.id, Instant::now() + Duration::from_secs(u64::from(minutes) * 60))?;
-        let (plugin_id, plugin_name) = (self.id.clone(), self.name.clone());
-        self.request(HostRequest::HoldNotifications { plugin_id, plugin_name, minutes })
+        core.hold_notifications(&self.id, Instant::now() + Duration::from_secs(u64::from(minutes) * 60));
+        self.hold_actions.clear();
+        self.request(HostRequest::HoldNotifications { plugin_id: self.id.clone(), minutes })
+    }
+
+    fn set_summary(&mut self, headline: Option<String>, actions: Vec<whold::SummaryAction>) -> Result<(), String> {
+        if !self.core.as_ref().is_some_and(|c| c.holds_notifications(&self.id)) {
+            return Err("no hold running".into());
+        }
+        if actions.len() > HOLD_ACTIONS_MAX {
+            return Err(format!("at most {HOLD_ACTIONS_MAX} actions"));
+        }
+        let mut acts = Vec::new();
+        for a in actions {
+            let (id, title) = (clip(a.id), plain(&a.label, HOLD_LABEL_MAX));
+            if id.is_empty() || title.trim().is_empty() {
+                return Err("an action needs an id and a label".into());
+            }
+            if says_status(&title) {
+                return Err(format!("{title:?} reads as Haunt's own status"));
+            }
+            acts.push(NotifyAction { id, title });
+        }
+        self.hold_actions = acts.iter().map(|a| a.id.clone()).collect();
+        let headline = plain_opt(headline, HOLD_HEADLINE_MAX);
+        self.request(HostRequest::HoldSummary { plugin_id: self.id.clone(), headline, actions: acts })
     }
 
     fn release(&mut self) {
@@ -1209,9 +1242,12 @@ impl LoadedPlugin {
     }
 
     /// The user chose action `action_id` on a notification bound to `binding` (empty: none):
-    /// `on-action(action_id, binding)`, only for an action this plugin posted in this run.
+    /// `on-action(action_id, binding)`, only for an action this plugin posted in this run or put in its
+    /// latest hold summary.
     pub fn notify_action(&mut self, action_id: &str, binding: &str) -> Result<(), PluginError> {
-        if !self.store.data().notified.iter().any(|(a, b)| a == action_id && b == binding) {
+        let st = self.store.data();
+        let held = binding == HOLD_BINDING && st.hold_actions.iter().any(|a| a == action_id);
+        if !held && !st.notified.iter().any(|(a, b)| a == action_id && b == binding) {
             return Err(PluginError(format!("no notification action {action_id:?}")));
         }
         self.on_action(action_id, binding)
@@ -1772,7 +1808,7 @@ mod tests {
     }
 
     #[test]
-    fn one_plugin_holds_notifications_at_a_time_and_a_dropped_one_lets_go() {
+    fn plugins_hold_side_by_side_and_each_releases_only_its_own() {
         use whold::Host as _;
         let host = PluginHost::new().unwrap();
         let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/hold@0.5.0" (instance (export "release" (func)))))"#).unwrap();
@@ -1783,17 +1819,27 @@ mod tests {
         let caps = Capabilities { notify_hold: true, ..Default::default() };
         let mut focus = HostState::new("dev.x.focus", &caps, None, None, Some(core.handle()));
         let mut other = HostState::new("dev.x.other", &caps, None, None, Some(core.handle()));
+        let act = |id: &str, label: &str| whold::SummaryAction { id: id.into(), label: label.into() };
         assert!(focus.start(0).is_err() && focus.start(HOLD_MAX_MINUTES + 1).is_err());
+        assert!(focus.set_summary(None, vec![]).unwrap_err().contains("no hold"));
         focus.start(25).unwrap();
-        assert!(other.start(5).unwrap_err().contains("dev.x.focus"));
-        other.release();
-        assert!(matches!(&focus.outbox[..], [HostRequest::HoldNotifications { plugin_id, minutes: 25, .. }] if plugin_id == "dev.x.focus"));
-        assert!(other.outbox.is_empty(), "releasing someone else's hold does nothing");
-        focus.release();
-        assert!(matches!(focus.outbox.last(), Some(HostRequest::ReleaseNotifications { plugin_id }) if plugin_id == "dev.x.focus"));
         other.start(5).unwrap();
-        drop(other);
-        focus.start(5).unwrap();
+
+        assert!(focus.set_summary(None, vec![act("a", "A"), act("b", "B"), act("c", "C")]).is_err());
+        assert!(focus.set_summary(None, vec![act("ok", "Allow")]).unwrap_err().contains("status"));
+        assert!(focus.set_summary(None, vec![act("", "Again")]).is_err());
+        focus.set_summary(Some("Focus\nblock over, a long headline that keeps going well past the cap".into()), vec![act("again", "Start another 25 minutes please")]).unwrap();
+        let Some(HostRequest::HoldSummary { plugin_id, headline: Some(h), actions }) = focus.outbox.last() else { panic!() };
+        assert_eq!((plugin_id.as_str(), h.chars().count(), actions[0].title.chars().count()), ("dev.x.focus", HOLD_HEADLINE_MAX, HOLD_LABEL_MAX));
+        assert!(h.starts_with("Focus block over") && focus.hold_actions == ["again"]);
+
+        other.release();
+        assert!(matches!(other.outbox.last(), Some(HostRequest::ReleaseNotifications { plugin_id }) if plugin_id == "dev.x.other"));
+        assert!(core.handle().holds_notifications("dev.x.focus") && !core.handle().holds_notifications("dev.x.other"), "a release ends only its own hold");
+        focus.start(10).unwrap();
+        assert!(focus.hold_actions.is_empty(), "a new start clears the summary");
+        drop(focus);
+        assert!(!core.handle().holds_notifications("dev.x.focus"), "a dropped plugin lets go");
     }
 
     #[test]

@@ -33,7 +33,7 @@ final class PluginBridge {
                 try $0.panelAction(pluginId: plugin, panelId: panel, generation: generation, action: action)
             }
         }
-        hold.onRelease = { holder, titles in NotificationHold.postSummary(holder: holder, titles: titles) }
+        hold.onRelease = NotificationHold.post
     }
 
     /// A plugin's key went down or up. `terminalShown` as for `invoke`.
@@ -48,7 +48,7 @@ final class PluginBridge {
     /// The user chose a plugin notification (`action` empty) or one of its actions. A binding naming an open
     /// tab brings it up; an action reaches the plugin as `on-action(action, binding)`.
     func notificationChosen(pluginId: String, action: String, binding: String) {
-        if !binding.isEmpty { openTab?(binding) }
+        if !binding.isEmpty, binding != NotificationHold.binding { openTab?(binding) }
         guard !action.isEmpty else { return }
         run("plugin \(pluginId) notification action \(action)") {
             try $0.notifyAction(pluginId: pluginId, actionId: action, binding: binding)
@@ -67,8 +67,10 @@ final class PluginBridge {
                 let id = UUID().uuidString
                 if hold.keeps(id: id, title: title, from: pluginId) { continue }
                 Self.notify(id: id, pluginId: pluginId, title: title, body: body, actions: actions, binding: binding)
-            case let .holdNotifications(pluginId, _, minutes):
+            case let .holdNotifications(pluginId, minutes):
                 hold.start(pluginId: pluginId, minutes: minutes)
+            case let .holdSummary(pluginId, headline, actions):
+                hold.summary(pluginId: pluginId, headline: headline, actions: actions)
             case let .releaseNotifications(pluginId):
                 hold.release(pluginId: pluginId)
             case let .showPanel(pluginId, pluginName, panel):

@@ -25,6 +25,13 @@ final class SystemNoteCenter: NSObject, NoteCenter, UNUserNotificationCenterDele
         }
         return UNNotificationCategory(identifier: "dev.haunt.plugin.\(String(h, radix: 16))", actions: acts, intentIdentifiers: [])
     }
+    /// The (plugin, action) a hold summary's button `identifier` stands for; `acts` holds "plugin\u{1f}action".
+    static func holdAction(_ identifier: String, _ acts: [String]) -> (plugin: String, action: String)? {
+        guard identifier.hasPrefix(pluginAction), let i = Int(identifier.dropFirst(pluginAction.count)), acts.indices.contains(i) else { return nil }
+        let p = acts[i].split(separator: "\u{1f}", maxSplits: 1)
+        return p.count == 2 ? (String(p[0]), String(p[1])) : nil
+    }
+
     /// Whether one of Ghostty's own notes shows while Haunt is in front: not over the surface it came from.
     var presentsGhosttyNote: (UNNotification) -> Bool = { _ in true }
 
@@ -101,6 +108,13 @@ final class SystemNoteCenter: NSObject, NoteCenter, UNUserNotificationCenterDele
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let info = response.notification.request.content.userInfo
+        if let acts = info[NotificationHold.actionsKey] as? [String], let pick = Self.holdAction(response.actionIdentifier, acts) {
+            DispatchQueue.main.async { [weak self] in
+                self?.onPluginResponse?(pick.plugin, pick.action, NotificationHold.binding)
+                completionHandler()
+            }
+            return
+        }
         if let plugin = info[Self.pluginKey] as? String {
             let id = response.actionIdentifier
             let action = id.hasPrefix(Self.pluginAction) ? String(id.dropFirst(Self.pluginAction.count)) : ""

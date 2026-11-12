@@ -1,40 +1,75 @@
 import Foundation
 import UserNotifications
 
-/// A plugin's hold on notifications (`HostRequest.holdNotifications`): Haunt's "done" notes and other
-/// plugins' notes wait, and one summary shows when it ends. A note about an agent that needs you is never held.
+/// Plugins' holds on notifications (`HostRequest.holdNotifications`): Haunt's "done" notes and other
+/// plugins' notes wait while any plugin holds, and one summary shows when the last lets go. A note about
+/// an agent that needs you is never held, and neither is a holder's own.
 final class NotificationHold {
-    private(set) var owner: String?
-    private var held: [(id: String, title: String, from: String?)] = []
-    private var timer: Timer?
-    /// The owner's id and one line per note that waited, oldest first.
-    var onRelease: ((String, [String]) -> Void)?
+    static let binding = "hold", actionsKey = "holdActions"
+    static let shownHolders = 2
 
-    /// The core already refused a second plugin's hold; the app ends it itself after `minutes`.
+    struct Summary: Equatable {
+        /// Every plugin that held, in the order they started.
+        var holders: [String]
+        /// "id: headline" of the holders shown.
+        var headlines: [String]
+        /// The shown holders' actions, as (plugin id, action).
+        var actions: [(String, NotifyAction)]
+        /// One line per note that waited, oldest first.
+        var lines: [String]
+
+        static func == (a: Summary, b: Summary) -> Bool {
+            a.holders == b.holders && a.headlines == b.headlines && a.lines == b.lines
+                && a.actions.map { "\($0.0)/\($0.1.id)/\($0.1.title)" } == b.actions.map { "\($0.0)/\($0.1.id)/\($0.1.title)" }
+        }
+    }
+
+    /// Who holds now.
+    private(set) var holders: Set<String> = []
+    /// Everyone who held since the hold began, with what each added to the summary.
+    private var added: [(id: String, headline: String?, actions: [NotifyAction])] = []
+    private var held: [(id: String, title: String, from: String?)] = []
+    private var timers: [String: Timer] = [:]
+    var onRelease: ((Summary) -> Void)?
+
+    /// The core caps `minutes`; the app ends each plugin's hold itself after them.
     func start(pluginId: String, minutes: UInt32) {
-        if let o = owner, o != pluginId { return }
-        owner = pluginId
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(minutes) * 60, repeats: false) { [weak self] _ in
+        holders.insert(pluginId)
+        added.removeAll { $0.id == pluginId }
+        added.append((pluginId, nil, []))
+        timers[pluginId]?.invalidate()
+        timers[pluginId] = Timer.scheduledTimer(withTimeInterval: TimeInterval(minutes) * 60, repeats: false) { [weak self] _ in
             self?.release(pluginId: pluginId)
         }
     }
 
-    /// Ends the hold if `pluginId` (nil: anyone) has it.
-    func release(pluginId: String? = nil) {
-        guard let o = owner, pluginId == nil || pluginId == o else { return }
-        owner = nil
-        timer?.invalidate()
-        timer = nil
-        // Ids, not display names, so a plugin can't pass its lines off as Haunt's or another plugin's.
-        let lines = held.map { n in AgentNotifier.visible(n.from.map { "\($0): \(n.title)" } ?? n.title) }
-        held = []
-        if !lines.isEmpty { onRelease?(o, lines) }
+    func summary(pluginId: String, headline: String?, actions: [NotifyAction]) {
+        guard holders.contains(pluginId), let i = added.firstIndex(where: { $0.id == pluginId }) else { return }
+        added[i] = (pluginId, headline, Array(actions.prefix(2)))
     }
 
-    /// Whether note `id` waits instead of showing. `plugin`: who posts it, nil for Haunt; the owner's own show.
+    /// Ends `pluginId`'s hold (nil: everyone's); the summary comes once nobody holds.
+    func release(pluginId: String? = nil) {
+        let ending = pluginId.map { holders.contains($0) ? [$0] : [] } ?? Array(holders)
+        for p in ending {
+            holders.remove(p)
+            timers.removeValue(forKey: p)?.invalidate()
+        }
+        guard !ending.isEmpty, holders.isEmpty else { return }
+        // Ids, not display names, so a plugin can't pass its lines off as Haunt's or another plugin's.
+        let lines = held.map { n in AgentNotifier.visible(n.from.map { "\($0): \(n.title)" } ?? n.title) }
+        let shown = added.prefix(Self.shownHolders)
+        let summary = Summary(holders: added.map(\.id),
+                              headlines: shown.compactMap { a in a.headline.map { AgentNotifier.visible("\(a.id): \($0)") } },
+                              actions: shown.flatMap { a in a.actions.map { (a.id, $0) } }, lines: lines)
+        held = []
+        added = []
+        if !lines.isEmpty { onRelease?(summary) }
+    }
+
+    /// Whether note `id` waits instead of showing. `plugin`: who posts it, nil for Haunt; a holder's own show.
     func keeps(id: String, title: String, from plugin: String?) -> Bool {
-        guard let o = owner, plugin != o else { return false }
+        guard !holders.isEmpty, !(plugin.map(holders.contains) ?? false) else { return false }
         held.removeAll { $0.id == id }
         held.append((id, title, plugin))
         return true
@@ -45,13 +80,29 @@ final class NotificationHold {
         held.removeAll { ids.contains($0.id) }
     }
 
-    /// The summary, as a plain system notification naming the plugin that held them.
-    static func postSummary(holder: String, titles: [String]) {
+    /// The subtitle naming who held: two by id, then "+n".
+    static func heldBy(_ holders: [String]) -> String {
+        let more = holders.count - shownHolders
+        return "held by " + holders.prefix(shownHolders).joined(separator: ", ") + (more > 0 ? " +\(more)" : "")
+    }
+
+    /// The summary as a system notification; its buttons come back through `SystemNoteCenter.holdAction`.
+    static func post(_ s: Summary) {
         let content = UNMutableNotificationContent()
-        content.title = titles.count == 1 ? "1 notification waited" : "\(titles.count) notifications waited"
-        content.subtitle = "held by \(holder)"
-        content.body = titles.prefix(5).joined(separator: "\n") + (titles.count > 5 ? "\n…" : "")
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "hold.summary", content: content, trigger: nil))
+        content.title = s.lines.count == 1 ? "1 notification waited" : "\(s.lines.count) notifications waited"
+        content.subtitle = heldBy(s.holders)
+        content.body = (s.headlines + s.lines.prefix(5)).joined(separator: "\n") + (s.lines.count > 5 ? "\n…" : "")
+        content.userInfo = [actionsKey: s.actions.map { "\($0.0)\u{1f}\($0.1.id)" }]
+        let center = UNUserNotificationCenter.current()
+        let request = { center.add(UNNotificationRequest(identifier: "hold.summary", content: content, trigger: nil)) }
+        guard !s.actions.isEmpty else { return request() }
+        let category = SystemNoteCenter.pluginCategory(s.actions.enumerated().map { NotifyAction(id: "\($0.offset)", title: $0.element.1.title) },
+                                                       foreground: false)
+        content.categoryIdentifier = category.identifier
+        center.getNotificationCategories { cats in
+            center.setNotificationCategories(cats.filter { $0.identifier != category.identifier }.union([category]))
+            request()
+        }
     }
 }
 

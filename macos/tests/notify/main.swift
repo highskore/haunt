@@ -389,36 +389,49 @@ do {
     check(show("") == [.list] && show("dev.example.plugin") == [.list], "a plugin's: Notification Center only")
 }
 
-// A plugin's hold: done notes and other plugins' wait for one summary; needs notes never wait.
+// Plugins' holds: done notes and non-holders' notes wait for one summary; needs notes never wait.
 do {
     let hold = NotificationHold()
-    var summaries: [(String, [String])] = []
-    hold.onRelease = { summaries.append(($0, $1)) }
+    var summaries: [NotificationHold.Summary] = []
+    hold.onRelease = { summaries.append($0) }
     let inner = Center()
     let held = HoldingNoteCenter(inner, hold: hold)
     let note = { (id: String, title: String) in AgentNote(id: id, title: title, body: "", kind: .open, surfaceId: "s", requestKey: nil) }
+    let act = { (id: String, title: String) in NotifyAction(id: id, title: title) }
     hold.start(pluginId: "dev.haunt.focus-block", minutes: 25)
     hold.start(pluginId: "dev.x.other", minutes: 5)
-    check(hold.owner == "dev.haunt.focus-block", "a second hold doesn't take over")
+    hold.summary(pluginId: "dev.x.stranger", headline: "not holding", actions: [])
+    hold.summary(pluginId: "dev.haunt.focus-block", headline: "Block over\nnext", actions: [act("again", "Again"), act("b", "B"), act("c", "C")])
+    check(hold.holders == ["dev.haunt.focus-block", "dev.x.other"], "two plugins hold side by side")
     held.post(note(AgentNotifier.doneId("a"), "api finished"))
     held.post(note(AgentNotifier.doneId("b"), "docs finished"))
     held.post(note(AgentNotifier.needsId("c"), "web needs you"))
     check(inner.posts.map(\.id) == [AgentNotifier.needsId("c")], "only the needs note shows during a hold")
-    check(hold.keeps(id: "p1", title: "CI red", from: "dev.x.other"), "another plugin's note waits")
-    check(hold.keeps(id: "p3", title: "x\nweb finished", from: "dev.x.other"), "a forged line waits too")
-    check(!hold.keeps(id: "p2", title: "Block ends", from: "dev.haunt.focus-block"), "the holder's own note shows")
+    check(hold.keeps(id: "p1", title: "CI red", from: "dev.x.ci"), "another plugin's note waits")
+    check(hold.keeps(id: "p3", title: "x\nweb finished", from: "dev.x.ci"), "a forged line waits too")
+    check(!hold.keeps(id: "p2", title: "Block ends", from: "dev.haunt.focus-block")
+          && !hold.keeps(id: "p4", title: "Other ends", from: "dev.x.other"), "each holder's own note shows")
     held.remove(ids: [AgentNotifier.doneId("b")])
-    hold.release(pluginId: "dev.x.other")
-    check(summaries.isEmpty && hold.owner != nil, "only the holder releases")
+    hold.release(pluginId: "dev.x.stranger")
     hold.release(pluginId: "dev.haunt.focus-block")
-    check(summaries.count == 1 && summaries[0].0 == "dev.haunt.focus-block"
-          && summaries[0].1 == ["api finished", "dev.x.other: CI red", "dev.x.other: x⏎web finished"],
-          "one summary naming each plugin by id, without notes taken back meanwhile")
+    check(summaries.isEmpty && hold.holders == ["dev.x.other"], "a release ends only that plugin's hold")
+    check(hold.keeps(id: "p5", title: "late", from: "dev.haunt.focus-block"), "a released holder's notes wait for the others")
+    hold.release(pluginId: "dev.x.other")
+    let want = NotificationHold.Summary(holders: ["dev.haunt.focus-block", "dev.x.other"],
+                                        headlines: ["dev.haunt.focus-block: Block over⏎next"],
+                                        actions: [("dev.haunt.focus-block", act("again", "Again")), ("dev.haunt.focus-block", act("b", "B"))],
+                                        lines: ["api finished", "dev.x.ci: CI red", "dev.x.ci: x⏎web finished", "dev.haunt.focus-block: late"])
+    check(summaries == [want], "one summary when the last holder lets go, naming each by id with the first's headline and two actions")
+    check(NotificationHold.heldBy(["a", "b", "c", "d"]) == "held by a, b +2" && NotificationHold.heldBy(["a"]) == "held by a",
+          "two holders by id, then a count")
+    check(SystemNoteCenter.holdAction("plugin.1", ["a\u{1f}x", "b\u{1f}y\u{1f}z"])! == ("b", "y\u{1f}z")
+          && SystemNoteCenter.holdAction("plugin.2", ["a\u{1f}x"]) == nil && SystemNoteCenter.holdAction("allow", ["a\u{1f}x"]) == nil,
+          "a summary button maps back to its plugin and action")
     held.post(note(AgentNotifier.doneId("a"), "api finished"))
     check(inner.posts.count == 2, "nothing waits after the hold")
     hold.start(pluginId: "dev.x.other", minutes: 5)
     hold.release()
-    check(summaries.count == 1 && hold.owner == nil, "an empty hold ends without a summary")
+    check(summaries.count == 1 && hold.holders.isEmpty, "an empty hold ends without a summary")
 }
 
 if failures > 0 {

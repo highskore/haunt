@@ -39,7 +39,7 @@ Every plugin can add palette commands and modes, add entries to a tab's context 
 | `sidebar_top = true` | `top-row.set(row)`: one row of its own above every sidebar group; a click calls `on-action(action, "top")` |
 | `keys = true` | `keys.bind(id, chord)`: a chord with cmd of its own; press and release call `on-action(id, "key-down")` and `"key-up"` |
 | `exec = ["git-status", ...]` | `exec.run(surface, command)`: fixed git and gh commands in the tab's project folder; the result calls `on-exec(job, outcome)` |
-| `notify_hold = true` | `hold.start(minutes)` / `hold.release()`: Haunt's and other plugins' notifications wait, then one summary shows; permission prompts never wait |
+| `notify_hold = true` | `hold.start(minutes)` / `hold.set-summary(headline, actions)` / `hold.release()`: Haunt's and other plugins' notifications wait, then one summary shows once every holder lets go, with your headline and up to 2 actions (`on-action(id, "hold")`); permission prompts never wait |
 | `pty_write = true` | `pty.answer`: Allow or Deny for the surface's pending permission request, nothing else. A verified `permission_seen` haunt can answer carries its `request-key`. |
 | `pty_type = true` | `typing.type-text`: types text, then Return if asked, into the current tab, only while handling a palette command or key the user just ran and never while that tab has a prompt up. No control or invisible characters but a tab. |
 | `fs_read = ["${cwd}/glob", ...]` | `fs.read` (files up to 4 MB) and `fs.list` (at most 4096 names) on matching paths inside agents' project folders; shown in red at install |
