@@ -3,5 +3,6 @@ allowlist ssh://git@github.com/highskore/haunt-allowlist.git 6055d99aed0e83f6c63
 commands ssh://git@github.com/highskore/haunt-commands.git f0bb547ecd63c8e2f423dbc535420e204dd336ea
 decision-log ssh://git@github.com/highskore/haunt-decision-log.git d8f67d1ba422580c07136a3a805a0c36dd7d00b4
 tabs-plus ssh://git@github.com/highskore/haunt-tabs-plus.git 724e2558ed350449318b101e1e8faf73987471b7
-theme-glass ssh://git@github.com/highskore/haunt-theme-glass.git 85cf9a975d4b7dc8df35033f2e5d7c503acbcddf
-theme-sigil ssh://git@github.com/highskore/haunt-theme-sigil.git 1b46ccbfd17fef661c23dac9d0a0fa40555ceaf0
+theme-glass ssh://git@github.com/highskore/haunt-theme-glass.git c9932a2997d660e0ad8f82e00f498e11610c75c9
+theme-sigil ssh://git@github.com/highskore/haunt-theme-sigil.git e88f26c9948eaf6e67b1f2ca5db49be367a8ff2c
+theme-win95 ssh://git@github.com/highskore/haunt-theme-win95.git 374ea62ae903a182107f404f8c25bfbb2eae4447

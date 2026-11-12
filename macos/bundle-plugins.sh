@@ -3,7 +3,7 @@
 # data-only plugin gets its manifest as it is and the files its [contributes.theme] names, and nothing is built.
 # Usage: bundle-plugins.sh [--check] <dest> <names>
 #   names: comma-separated short names from macos/plugins.lock (today allowlist, commands, decision-log,
-#   tabs-plus, theme-glass, theme-sigil), each the repo haunt-plugins/haunt-<name>, or all / none (the default
+#   tabs-plus, theme-glass, theme-sigil, theme-win95), each the repo haunt-plugins/haunt-<name>, or all / none (the default
 #   is none). --check only validates the names, their pins and their manifests' api, before anything is built.
 # Each plugin is built from the commit plugins.lock pins, taken with git archive, never from the working tree,
 # and its manifest's api must be the one this haunt supports. HAUNT_PLUGINS_UNPINNED=1 builds the working
