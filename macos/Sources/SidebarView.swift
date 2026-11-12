@@ -364,7 +364,9 @@ final class SidebarView: NSView, NSTextFieldDelegate {
                                   contentWidth - 2 * pad[1], f, Tok.App.sidebarFootFg)
         let band = pad[0] + lineH + pad[2], top = bounds.height - pad[2] - lineH
         Layers.draw("sidebar.footer", NSRect(x: 0, y: bounds.height - band, width: contentWidth, height: band),
-                    textRun: NSRect(x: pad[1], y: top, width: Draw.width(line), height: lineH), state: Layers.state(self), in: ctx)
+                    textRun: NSRect(x: pad[1], y: top, width: Draw.width(line), height: lineH),
+                    text: [Layers.Run(rect: NSRect(x: pad[1], y: top, width: Draw.width(line), height: lineH), ink: Tok.App.sidebarFootFg)],
+                    state: Layers.state(self), in: ctx)
         Draw.text(line, font: f, x: pad[1], top: top, lineHeight: lineH, in: ctx)
         let frame = Theme.current.app.sidebarFootFrame
         if frame.alphaComponent > 0 {
@@ -471,8 +473,9 @@ final class SidebarView: NSView, NSTextFieldDelegate {
             return l
         }()
         let run = NSRect(x: Tok.Size.labelPad[1], y: top + Tok.Size.labelPad[0], width: Draw.width(line), height: Tok.Size.labelFont * lh)
+        // A boxed or block label sits on its own fill, drawn after.
         Layers.draw("label.group", NSRect(x: 0, y: top, width: contentWidth, height: labelHeight), within: bounds, textRun: run,
-                    state: Layers.state(self), in: ctx)
+                    text: groupBox || block ? [] : [Layers.Run(rect: run, ink: Tok.Color.textLabel)], state: Layers.state(self), in: ctx)
         if groupBox {
             // On the box's top edge, over a gap in it.
             let lineH = Tok.Size.labelFont * lh, x = Theme.current.app.groupPad + Tok.Size.labelPad[1]
@@ -595,6 +598,20 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         return l
     }
 
+    /// A row's text, line by line, in the colours it's drawn in: name and status, then meta and subagents.
+    private func rowRuns(_ row: Row, _ l: RowLines, top: CGFloat, height: CGFloat) -> [Layers.Run] {
+        let x = rowPadX, w = contentWidth - 2 * rowPadX
+        let first = NSRect(x: x, y: top, width: w, height: rowLine1)
+        let rest = NSRect(x: x, y: first.maxY, width: w, height: max(height - rowLine1, 0))
+        var runs = [Layers.Run(rect: first, ink: Tok.Color.textPrimary)]
+        if !(row.needsYou && Theme.current.effects.needsPill) {
+            runs.append(Layers.Run(rect: first, ink: row.needsYou ? Tok.Color.needs : Tok.Color.textMeta))
+        }
+        runs.append(Layers.Run(rect: rest, ink: Tok.Color.textMeta))
+        if !l.subs.isEmpty { runs.append(Layers.Run(rect: rest, ink: Tok.Color.textSub)) }
+        return runs
+    }
+
     private func drawRow(_ row: Row, top: CGFloat, height: CGFloat, ctx: CGContext) {
         let fx = Theme.current.effects
         let box = NSRect(x: fx.rowInset, y: top, width: contentWidth - 2 * fx.rowInset, height: height)
@@ -618,7 +635,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         let l = lines(for: row)
         let hover = hoverId == row.surfaceId, state = Layers.state(self, selected: row.selected, hover: hover)
         let padY = Tok.Size.rowPad[0], padX = rowPadX
-        let text = [NSRect(x: padX, y: top + padY, width: contentWidth - 2 * padX, height: height - 2 * padY)]
+        let text = rowRuns(row, l, top: top + padY, height: height - 2 * padY)
         Layers.draw("row", box, within: bounds, text: text, state: state, in: ctx)
         if row.selected { Layers.draw("row.selected", box, within: bounds, text: text, state: state, in: ctx) }
         if hover && !row.selected { Layers.draw("row.hover", box, within: bounds, text: text, state: state, in: ctx) }
@@ -633,7 +650,9 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         if row.needsYou && !l.hovered {
             let textH = Tok.Size.rowRight * lh
             let run = NSRect(x: right - l.statusW, y: y + (rowLine1 - textH) / 2, width: l.statusW, height: textH)
-            Layers.draw("status.needs", run, within: bounds, textRun: run, state: state, in: ctx)
+            // A pill's text sits on the pill, drawn after.
+            let ink = fx.needsPill ? [] : [Layers.Run(rect: run, ink: Tok.Color.needs)]
+            Layers.draw("status.needs", run, within: bounds, textRun: run, text: ink, state: state, in: ctx)
         }
 
         if l.hovered {

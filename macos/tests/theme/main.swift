@@ -619,18 +619,23 @@ do {
         Layers.resolve([LayerSpec(slot: slot, prims: [p])], images: [], theme: white)
     }
     let primary = white.color.textPrimary.themeHex
-    func drawn(_ slot: String, _ prims: [PrimSpec], text: [CGRect]?, bounds: CGRect = CGRect(x: 10, y: 10, width: 80, height: 40)) -> Int {
+    func drawn(_ slot: String, _ prims: [PrimSpec], text: [CGRect]?, ink: NSColor = white.color.textPrimary,
+               bounds: CGRect = CGRect(x: 10, y: 10, width: 80, height: 40)) -> Int {
         let (l, _) = Layers.resolve([LayerSpec(id: "probe", slot: slot, prims: prims)], images: [], theme: white)
         Layers.set(l, source: LayerSource())
         let c = canvas()
-        Layers.draw(slot, bounds, textRun: bounds, text: text, in: c.ctx)
+        Layers.draw(slot, bounds, textRun: bounds, text: text?.map { Layers.Run(rect: $0, ink: ink) }, in: c.ctx)
         return c.painted()
     }
     let inner = [CGRect(x: 20, y: 20, width: 60, height: 20)]
-    check(resolved("row.selected", PrimSpec(kind: "rect", fill: primary)).0[0].prims[0].unreadable?.contains("color.text.primary") == true,
-          "a fill in the text's own colour is marked unreadable, and says why")
-    check(drawn("row.selected", [PrimSpec(kind: "rect", fill: primary)], text: inner) == 0 && Layers.skipped.contains { $0.contains("probe") },
-          "so its layer is skipped over the text, and logged")
+    check(!resolved("row.selected", PrimSpec(kind: "rect", fill: primary)).0[0].prims[0].backs.isEmpty, "a text slot's shapes keep what they leave under it")
+    check(drawn("row.selected", [PrimSpec(kind: "rect", fill: primary)], text: inner) == 0
+          && Layers.skipped.contains { $0.contains("probe") && $0.contains("text in \(primary)") },
+          "a fill in the text's own colour is skipped over the text, and logged with why")
+    // The text is held to the colour it's drawn in, not the slot's usual ink: a caption title in white.
+    check(drawn("titlebar", [PrimSpec(kind: "rect", fill: "#ffffff")], text: inner, ink: .white) == 0, "white text can't go on a white layer")
+    check(drawn("titlebar", [PrimSpec(kind: "rect", fill: "#ffffff")], text: inner, ink: .black) > 0, "black text can")
+    check(drawn("titlebar", [PrimSpec(kind: "rect", fill: "#ffffff")], text: [], ink: .black) > 0, "and a bar with no text may be any colour")
     check(drawn("row.selected", [PrimSpec(kind: "rect", stroke: primary)], text: [CGRect(x: 5, y: 30, width: 40, height: 10)]) == 0,
           "a 1 pt stroke across the text too")
     check(drawn("row.selected", [PrimSpec(kind: "rect", stroke: primary, width: 0.5)], text: [CGRect(x: 30, y: 25, width: 40, height: 10)]) > 0,
@@ -723,8 +728,8 @@ do {
     Layers.set([], source: LayerSource())
     Layers.recorder = nil
 
-    // The costliest theme core lets through (256 shapes, each slot's 4 shadows and 4 gradients, the rest
-    // 256-command paths at the widest stroke) draws a whole window at 2× quickly.
+    // The costliest theme core lets through: 256 shapes, each slot's 4 shadows and 4 gradients, the rest
+    // 256-command paths at the widest stroke.
     let zigzag = (0..<255).map { i in PrimSpec.Cmd(op: i == 0 ? "M" : "L", pts: [Double(i % 2) * 400, Double(i) * 1.5]) } + [.init(op: "Z", pts: [])]
     var worst: [LayerSpec] = []
     for slot in Layers.slots {
@@ -733,7 +738,8 @@ do {
     }
     let paths = 256 - worst.count * 8
     for k in 0..<paths { worst.append(LayerSpec(slot: Layers.slots[k % Layers.slots.count], prims: [PrimSpec(kind: "path", stroke: "#ffffff08", width: 8, path: zigzag, view: [400, 400])])) }
-    Layers.set(Layers.resolve(worst, images: [], theme: white).0, source: LayerSource())
+    let worstSource = LayerSource(specs: worst)
+    Layers.set(Layers.resolve(worst, images: [], theme: white).0, source: worstSource)
     Layers.terminalSeeThrough = true
     // A window's own backing format.
     let big = CGContext(data: nil, width: 2200, height: 1400, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -760,15 +766,26 @@ do {
     Layers.draw("palette.field", CGRect(x: 700, y: 300, width: 380, height: 40), in: big)
     for r in 0..<8 { Layers.draw(r == 0 ? "palette.row.selected" : "palette.row.hover", CGRect(x: 704, y: 344 + 40 * r, width: 372, height: 36), in: big) }
     }
+    // Too slow to draw: the theme's layers are turned off for the session, said once, and the next redraw is fast.
+    var said: [String] = []
+    Layers.report = { said.append($0) }
     var started = Date()
     drawWindow()
     let first = Date().timeIntervalSince(started) * 1000
+    Layers.endFrame()
+    if first <= Layers.stopMs {
+        drawWindow()
+        Layers.endFrame()
+    }
     started = Date()
-    let hits = Layers.cacheHits
     drawWindow()
     let ms = Date().timeIntervalSince(started) * 1000
-    check(ms < 50 && Layers.cacheHits > hits, "the costliest theme redraws a window in \(Int(ms)) ms")
-    print("worst-case window: first \(Int(first)) ms, then \(Int(ms)) ms")
+    check(Layers.current.isEmpty && said.contains { $0.hasPrefix("layers off: too slow to draw") }, "the costliest theme is turned off: \(said)")
+    check(ms < 5, "and the next redraw takes \(Int(ms)) ms")
+    Layers.set(Layers.resolve(worst, images: [], theme: white).0, source: worstSource)
+    check(Layers.current.isEmpty, "it stays off for the session")
+    print("worst-case window: \(Int(first)) ms, then \(String(format: "%.1f", ms)) ms with layers off")
+    Layers.report = { _ in }
     Layers.set([], source: LayerSource())
     Layers.terminalSeeThrough = false
 

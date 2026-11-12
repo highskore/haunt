@@ -847,17 +847,18 @@ final class PaletteView: NSView {
             Draw.fill(NSRect(x: 0, y: top, width: width, height: h), Tok.Color.paletteSel)
             Draw.fill(NSRect(x: 0, y: top, width: Tok.Size.paletteSelBar, height: h), Tok.Color.paletteInk)
         }
-        if isSel || index == hovered && row.action != .none {
-            let inset = pill ? app.palettePillInset : 0
-            let slot = isSel ? "palette.row.selected" : "palette.row.hover"
-            Layers.draw(slot, NSRect(x: inset, y: top, width: width - 2 * inset, height: h),
-                        within: NSRect(x: -edge, y: -edge, width: bounds.width, height: bounds.height),
-                        state: Layers.state(self, selected: isSel, hover: index == hovered), in: ctx)
-        }
         // A plain mode's selection is inverted: its row is ink, its text whichever of black or white reads on it.
         let inverted = isSel && plainMode ? Tok.Color.paletteInk.readable : nil
         let mute = inverted ?? (isSel && pill ? app.palettePillMute : Tok.Color.paletteMute)
         let ink = inverted ?? (isSel && pill ? app.palettePillInk : Tok.Color.paletteInk)
+        if isSel || index == hovered && row.action != .none {
+            let inset = pill ? app.palettePillInset : 0
+            let slot = isSel ? "palette.row.selected" : "palette.row.hover"
+            let box = NSRect(x: inset, y: top, width: width - 2 * inset, height: h)
+            Layers.draw(slot, box, within: NSRect(x: -edge, y: -edge, width: bounds.width, height: bounds.height),
+                        text: [ink, mute].map { Layers.Run(rect: box.insetBy(dx: max(padX - inset, 0), dy: 0), ink: $0) },
+                        state: Layers.state(self, selected: isSel, hover: index == hovered), in: ctx)
+        }
         let gap = Tok.Size.paletteEntryGap
         let y = top + Tok.Size.paletteEntryPad[0]
         let small = mono(Tok.Size.paletteSmallFont), smallH = Tok.Size.paletteSmallFont * lh

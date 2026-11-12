@@ -311,7 +311,7 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
                 Draw.fill(NSRect(x: 0, y: bounds.height - 3 * Tok.App.hairline, width: bounds.width, height: Tok.App.hairline), Theme.current.app.titlebarRule2)
             }
         }
-        Layers.draw("titlebar", bounds, state: Layers.state(self), in: ctx)
+        Layers.draw("titlebar", bounds, text: titleRuns(), state: Layers.state(self), in: ctx)
 
         if caption { drawCaption(ctx) }
         drawLights()
@@ -388,6 +388,20 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
             }
             x += Draw.width(line)
         }
+    }
+
+    /// The bar's text, in the colours it's drawn in.
+    private func titleRuns() -> [Layers.Run] {
+        func runs(_ r: NSRect, _ inks: [NSColor]) -> [Layers.Run] { inks.map { Layers.Run(rect: r, ink: $0) } }
+        if zen { return hintLayout().parts.flatMap { runs($0.2, [Tok.Color.textLabel]) } }
+        if caption {
+            // The caption's title, in the selection's ink, and the menu row under it.
+            let x = Tok.Size.titlebarPadx, title = NSRect(x: x, y: rowTop, width: max(lightRect(1).minX - 4 - x, 0), height: Tok.Size.titlebarH)
+            return runs(title, [Theme.current.app.rowSelectInk]) + menuLayout().flatMap { runs($0.2, [Tok.Color.textPrimary]) }
+        }
+        if let (_, r) = crumbLayout() { return runs(r, [Tok.Color.textLabel, Tok.Color.textPrimary, Tok.Color.textSub]) }
+        if let (_, r) = titleLayout() { return runs(r, [Tok.App.titleFg, Tok.App.titleMeta]) }
+        return []
     }
 
     /// Centred on the bar and cut short of the lights and the icons.
