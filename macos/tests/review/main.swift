@@ -368,6 +368,26 @@ check(!exists("FILTERED"), "the sandbox stops a filter named after the check")
 sh(["git", "diff", "HEAD"], repo)
 check(exists("FILTERED"), "plain git runs it (test is live)")
 
+// An attribute can't hide a change as binary: `-diff` text still shows, and a NUL still marks a real binary.
+fresh()
+write("a.txt", "one\n")
+write("bin.dat", "x\u{0}y\n")
+sh(["git", "init", "-q", "-b", "main"], repo)
+sh(["git", "add", "-A"], repo)
+sh(["git", "commit", "-q", "-m", "one"], repo)
+write(".git/info/attributes", "a.txt -diff\n")
+write("a.txt", "one\nsneaky\n")
+write("bin.dat", "x\u{0}z\n")
+switch ReviewLoader.load(cwd: repo, headAtStart: nil) {
+case let .success(d):
+    let a = d.files.first { $0.path == "a.txt" }
+    check(a?.binary == false && a?.additions == 1 && a?.hunks.first?.lines.contains { $0.text == "sneaky" } == true, "-diff text is shown \(String(describing: a))")
+    let b = d.files.first { $0.path == "bin.dat" }
+    check(b?.binary == true && b?.hunks.isEmpty == true, "a NUL is binary \(String(describing: b))")
+case let .failure(e):
+    check(false, "load failed: \(e)")
+}
+
 // No sandbox-exec, no git: never run it unsandboxed.
 let realSandbox = GitRunner.sandboxExec
 GitRunner.sandboxExec = "/nonexistent/sandbox-exec"

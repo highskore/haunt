@@ -57,7 +57,13 @@ enum DiffParser {
         var inHunk = false
 
         func finish() {
-            if let f = cur { files.append(f) }
+            // The diff runs with --text, so no attribute can hide a change as binary; a NUL, git's own test, still marks one.
+            if var f = cur {
+                if f.hunks.contains(where: { $0.lines.contains { $0.text.contains("\u{0}") } }) {
+                    (f.binary, f.hunks, f.additions, f.deletions, f.droppedLines) = (true, [], 0, 0, 0)
+                }
+                files.append(f)
+            }
             cur = nil
         }
 
@@ -494,7 +500,7 @@ enum ReviewLoader {
         let range: [String]? = readTree ? [base] : (head.map { base == $0 ? nil : [base, $0] } ?? nil)
         var files: [FileDiff] = []
         if let range {
-            let diffArgs = ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
+            let diffArgs = ["diff", "--text", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
                             "--submodule=short", "--ignore-submodules=dirty", "-M"] + range + ["--"]
             guard let out = git(diffArgs) else { return .failure(.failed("git diff didn't start.")) }
             guard out.status == 0 || out.truncated || out.timedOut else { return .failure(.failed("git diff failed (exit \(out.status)).")) }
@@ -544,7 +550,7 @@ enum ReviewLoader {
                     continue
                 }
                 // Exit status 1 means "differs", the normal case here.
-                guard let d = GitRunner.run(["diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",
+                guard let d = GitRunner.run(["diff", "--no-index", "--text", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",
                                              "--dst-prefix=b/", "--", "/dev/null", p], cwd: root, maxBytes: maxNoIndexBytes),
                       d.status <= 1 || d.truncated else { continue }
                 if d.truncated { notes.append("\(shown)'s diff is over 2 MB and was cut.") }

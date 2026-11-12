@@ -40,7 +40,7 @@ git runs under `/usr/bin/sandbox-exec` with a profile that denies `process-fork`
 - every other configurable program pinned: `core.sshCommand=`, `core.askPass=`, `credential.helper=`, `gpg.program=` (and the openpgp, x509 and ssh variants), and `core.editor=true`/`sequence.editor=true`, since an empty editor would fall back to vi;
 - prefix and quoting options for stable parsing.
 
-Diffs also pass `--no-ext-diff --no-textconv --no-color`, so `diff.<driver>.command` and `textconv` don't run.
+Diffs also pass `--text --no-ext-diff --no-textconv --no-color`, so `diff.<driver>.command` and `textconv` don't run, and no attribute (`-diff`, `binary`) in `.gitattributes` or `.git/info/attributes` can show an agent's text change as "Binary files differ". A file whose diff holds a NUL, git's own test, is still listed as binary (`DiffParser.parse`).
 
 **Filter and diff drivers.** A working-tree diff runs `filter.<name>.clean` or `.process` for any path whose attributes name that filter, and a diff can run `diff.<name>.textconv`, `diff.<name>.command` or `diff.external`. Haunt never builds `-c filter.<name>...` overrides from the repo's names: a name can hold `=`, `.`, quotes or a newline and be misparsed. Instead it reads `git config --show-scope -z --get-regexp '^(filter|diff)\.'` (reading config runs nothing; the `command` scope is Haunt's own pins):
 
