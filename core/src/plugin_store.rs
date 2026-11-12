@@ -1246,6 +1246,13 @@ fn append_audit(path: &Path, lines: &[AuditLine], max: u64) -> std::io::Result<(
         if l.count > 1 {
             v["count"] = l.count.into();
         }
+        if l.truncated {
+            v["truncated"] = true.into();
+        }
+        if l.dropped {
+            v["dropped"] = true.into();
+            v["reason"] = l.reason.clone().into();
+        }
         text.push_str(&v.to_string());
         text.push('\n');
     }
@@ -1327,6 +1334,23 @@ mod tests {
     }
 
     #[test]
+    fn quitting_mid_fold_writes_the_folded_lines() {
+        let dir = std::env::temp_dir().join(format!("haunt-audit-quit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let core = crate::Core::new(dir.join("core"));
+        let mut p = crate::plugins::tests::arming_plugin(&core);
+        for _ in 0..3 {
+            p.audit("fs.read", "src/a.rs", 5);
+        }
+        let set = Mutex::new(PluginSet { plugins: vec![(Capabilities::default(), p)], audit_log: Some(dir.join(AUDIT_LOG)), ..Default::default() });
+        assert_eq!(drain_audit_final(&set).1, None);
+        let row: serde_json::Value = serde_json::from_str(fs::read_to_string(dir.join(AUDIT_LOG)).unwrap().trim()).unwrap();
+        assert_eq!((&row["kind"], &row["detail"], &row["n"], &row["count"]), (&"fs.read".into(), &"src/a.rs".into(), &15.into(), &3.into()));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn audit_lines_append_to_an_owner_only_jsonl() {
         use std::os::unix::fs::PermissionsExt as _;
         let dir = std::env::temp_dir().join(format!("haunt-audit-{}", std::process::id()));
@@ -1342,6 +1366,7 @@ mod tests {
             n,
             count: 1,
             clipped: vec![crate::plugins::AuditClip { field: "surface".into(), len: 90 }],
+            ..AuditLine::default()
         };
         fs::write(&path, "").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
@@ -1355,6 +1380,10 @@ mod tests {
             serde_json::json!({ "ts": 7, "plugin": "dev.x.p", "kind": "exec", "surface": "s\"1", "detail": "git-log", "n": 2, "surface_len": 90 })
         );
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600, "an existing file is made owner-only too");
+        let marked = AuditLine { truncated: true, dropped: true, reason: "trap".into(), clipped: Vec::new(), ..line(3) };
+        append_audit(&path, &[marked], AUDIT_LOG_MAX).unwrap();
+        let last: serde_json::Value = serde_json::from_str(fs::read_to_string(&path).unwrap().lines().last().unwrap()).unwrap();
+        assert_eq!((&last["truncated"], &last["dropped"], &last["reason"]), (&true.into(), &true.into(), &"trap".into()));
 
         // Past the cap the log moves down, three old ones kept.
         for n in 3..=7 {

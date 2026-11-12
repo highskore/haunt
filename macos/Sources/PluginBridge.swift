@@ -76,12 +76,12 @@ final class PluginBridge {
 
     var loadErrors: [String] { plugins?.loadErrors() ?? [] }
 
-    /// `final`: the set is going, so wait out a plugin call in progress rather than lose its lines.
-    private func drainAudit(final: Bool = false) {
+    /// `final`: the set or the app is going, so wait out a plugin call in progress rather than lose its lines.
+    func drainAudit(final: Bool = false) {
         guard let p = plugins else { return }
         let audit = final ? p.drainAuditFinal() : p.drainAudit()
         for l in audit.lines {
-            AppDelegate.logger.notice("plugin audit \(l.plugin, privacy: .public) \(l.kind, privacy: .public) surface=\(l.surface, privacy: .public) \(l.detail, privacy: .public) n=\(l.n) count=\(l.count)")
+            AppDelegate.logger.notice("plugin audit \(l.plugin, privacy: .public) \(l.kind, privacy: .public) surface=\(l.surface, privacy: .public) \(l.detail, privacy: .public) n=\(l.n) count=\(l.count)\(l.truncated ? " truncated" : "")\(l.dropped ? " dropped=\(l.reason)" : "")")
         }
         if let e = audit.error { AppDelegate.logger.error("plugin audit: \(e, privacy: .public)") }
     }

@@ -49,13 +49,17 @@ pub const MAX_KEYS: usize = 8;
 const MAX_LOGS: usize = 1000;
 /// Audit lines kept between drains; past this they are counted, never silently lost.
 const MAX_AUDIT: usize = 1024;
-/// Audit kinds a plugin can repeat cheaply; within one call each folds into one line.
+/// Audit kinds a plugin can repeat cheaply; within one call repeats of one path fold into one line.
 const FOLDED_AUDIT: [&str; 3] = ["fs.read", "fs.list", "fs-list.entries"];
+/// Distinct paths of one folded kind that get their own line in a call; the rest share a `truncated` line.
+const FOLD_PATHS: usize = 16;
+/// Audit kinds whose effect a trapping call loses (`drop_user_effects`).
+const USER_EFFECT_AUDIT: [&str; 3] = ["clipboard.write", "link.open-url", "sidebar.focus"];
 
 /// What the host did for a plugin with the user's terminal or machine, recorded by the host apart from
 /// the plugin's own log, so `log` can't crowd it out. Drained to `plugin-audit.jsonl`.
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuditLine {
     pub ts_ms: u64,
     pub plugin: String,
@@ -69,11 +73,16 @@ pub struct AuditLine {
     /// Lines read, the request answered, bytes typed or moved, the job started, names listed, rows
     /// returned, or lines dropped; summed over `count`.
     pub n: u64,
-    /// Calls this line stands for: repeats of a cheap kind (`FOLDED_AUDIT`) in one plugin call fold
-    /// into one line, `detail` the first one's, so a flood can't rotate older lines out of the file.
+    /// Calls this line stands for: repeats of one path of a cheap kind (`FOLDED_AUDIT`) in one plugin
+    /// call fold into one line, at the first call's place and time, so a flood can't rotate older lines out.
     pub count: u64,
     /// The full length in characters of a string field cut to `AUDIT_STR_MAX`, as (field, length).
     pub clipped: Vec<AuditClip>,
+    /// This line stands for the paths of its kind past the first `FOLD_PATHS` in one call; `detail` is empty.
+    pub truncated: bool,
+    /// Marks an earlier line of this kind whose effect never happened, for `reason` (`trap`).
+    pub dropped: bool,
+    pub reason: String,
 }
 
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
@@ -242,12 +251,18 @@ impl Drop for Kv {
     }
 }
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+}
+
 pub struct HostState {
     id: String,
     name: String,
     logs: Vec<String>,
     audit: Vec<AuditLine>,
     audit_dropped: u64,
+    /// Folded lines in `audit` as (kind, full path, index); the path is `None` for the `truncated` line.
+    audit_folds: Vec<(String, Option<String>, usize)>,
     wasi: WasiCtx,
     table: ResourceTable,
     limits: StoreLimits,
@@ -331,6 +346,7 @@ impl HostState {
             logs: Vec::new(),
             audit: Vec::new(),
             audit_dropped: 0,
+            audit_folds: Vec::new(),
             wasi: WasiCtx::builder().wall_clock(CoarseWall).monotonic_clock(CoarseMono(Instant::now())).build(),
             table: ResourceTable::new(),
             limits: StoreLimitsBuilder::new().memory_size(MEMORY_CAP).instances(16).tables(64).memories(4).build(),
@@ -398,18 +414,25 @@ impl HostState {
 
     fn audit(&mut self, kind: &str, surface: &str, detail: &str, n: u64) {
         // The buffer holds one call's lines: it is drained after every call.
-        if FOLDED_AUDIT.contains(&kind)
-            && let Some(l) = self.audit.iter_mut().find(|l| l.kind == kind)
-        {
-            l.n += n;
-            l.count += 1;
-            return;
+        let mut fold = None;
+        if FOLDED_AUDIT.contains(&kind) {
+            let folds = || self.audit_folds.iter().filter(|f| f.0 == kind);
+            let key = (folds().any(|f| f.1.as_deref() == Some(detail)) || folds().filter(|f| f.1.is_some()).count() < FOLD_PATHS)
+                .then(|| detail.to_string());
+            if let Some(&(_, _, i)) = folds().find(|f| f.1 == key) {
+                let l = &mut self.audit[i];
+                l.n += n;
+                l.count += 1;
+                return;
+            }
+            fold = Some(key);
         }
         if self.audit.len() >= MAX_AUDIT {
             self.audit_dropped += 1;
             return;
         }
-        let ts_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+        let truncated = fold.as_ref().is_some_and(Option::is_none);
+        let detail = if truncated { "" } else { detail };
         let mut clipped = Vec::new();
         let mut cut = |field: &str, v: &str| {
             let len = v.chars().count();
@@ -419,7 +442,7 @@ impl HostState {
             v.chars().take(AUDIT_STR_MAX).collect::<String>()
         };
         let line = AuditLine {
-            ts_ms,
+            ts_ms: now_ms(),
             plugin: cut("plugin", &self.id),
             kind: kind.into(),
             surface: cut("surface", surface),
@@ -427,7 +450,12 @@ impl HostState {
             n,
             count: 1,
             clipped,
+            truncated,
+            ..AuditLine::default()
         };
+        if let Some(key) = fold {
+            self.audit_folds.push((kind.into(), key, self.audit.len()));
+        }
         self.audit.push(line);
     }
 
@@ -464,6 +492,7 @@ impl HostState {
     }
 
     fn take_audit(&mut self) -> Vec<AuditLine> {
+        self.audit_folds.clear();
         let mut out = std::mem::take(&mut self.audit);
         if self.audit_dropped > 0 {
             let n = std::mem::take(&mut self.audit_dropped);
@@ -472,11 +501,9 @@ impl HostState {
                 ts_ms,
                 plugin: self.id.chars().take(AUDIT_STR_MAX).collect(),
                 kind: "audit.dropped".into(),
-                surface: String::new(),
-                detail: String::new(),
                 n,
                 count: 1,
-                clipped: Vec::new(),
+                ..AuditLine::default()
             });
         }
         out
@@ -1208,9 +1235,30 @@ impl HostState {
         Ok(())
     }
 
-    /// A call that trapped doesn't get to change the clipboard, open a link or switch tabs.
-    fn drop_user_effects(&mut self) {
-        self.outbox.retain(|r| !matches!(r, HostRequest::ClipboardWrite { .. } | HostRequest::OpenUrl { .. } | HostRequest::FocusTab { .. }));
+    /// A call that trapped doesn't get to change the clipboard, open a link or switch tabs; its audit lines
+    /// for those stay, each followed by a `dropped` marker. The marks are `outbox` and `audit` at its start.
+    fn drop_user_effects(&mut self, outbox_mark: usize, audit_mark: usize) {
+        let queued = self.outbox.split_off(outbox_mark.min(self.outbox.len()));
+        self.outbox.extend(queued.into_iter().filter(|r| {
+            !matches!(r, HostRequest::ClipboardWrite { .. } | HostRequest::OpenUrl { .. } | HostRequest::FocusTab { .. })
+        }));
+        let ts_ms = now_ms();
+        let markers: Vec<AuditLine> = (self.audit.iter().skip(audit_mark))
+            .filter(|l| USER_EFFECT_AUDIT.contains(&l.kind.as_str()))
+            .map(|l| AuditLine {
+                ts_ms,
+                plugin: l.plugin.clone(),
+                kind: l.kind.clone(),
+                surface: l.surface.clone(),
+                detail: l.detail.clone(),
+                n: l.n,
+                count: 1,
+                dropped: true,
+                reason: "trap".into(),
+                ..AuditLine::default()
+            })
+            .collect();
+        self.audit.extend(markers);
     }
 
     /// A disabled plugin's hold ends, so it can't keep notifications away.
@@ -1712,6 +1760,7 @@ impl LoadedPlugin {
             return Err(PluginError(why.clone()));
         }
         self.store.set_epoch_deadline(CALL_TICKS);
+        let marks = (self.store.data().outbox.len(), self.store.data().audit.len());
         let (bindings, store) = (&self.bindings, &mut self.store);
         let res = self.epoch.ticking(|| f(bindings, store));
         let data = self.store.data_mut();
@@ -1732,7 +1781,7 @@ impl LoadedPlugin {
             data.release_hold();
             data.clear_top_row();
             data.drop_keys();
-            data.drop_user_effects();
+            data.drop_user_effects(marks.0, marks.1);
             PluginError(why)
         })
     }
@@ -1997,6 +2046,11 @@ impl LoadedPlugin {
         self.store.data_mut().take_audit()
     }
 
+    #[cfg(test)]
+    pub(crate) fn audit(&mut self, kind: &str, detail: &str, n: u64) {
+        self.store.data_mut().audit(kind, "", detail, n);
+    }
+
     pub fn take_requests(&mut self) -> Vec<HostRequest> {
         std::mem::take(&mut self.store.data_mut().outbox)
     }
@@ -2160,7 +2214,7 @@ impl PluginHost {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::testdir::TempDir;
 
@@ -2363,7 +2417,7 @@ mod tests {
         }
         st.write("ok".into()).unwrap();
         assert_eq!(st.outbox.len(), 2, "a refused write keeps the click's one copy");
-        st.drop_user_effects();
+        st.drop_user_effects(0, 0);
         assert!(st.outbox.is_empty(), "a trapped call's writes are dropped");
     }
 
@@ -2443,8 +2497,10 @@ mod tests {
         st.open_url(pr.into()).unwrap();
         assert!(st.open_url(pr.into()).is_err(), "once per click");
         assert_eq!(st.outbox, [HostRequest::OpenUrl { plugin_id: "dev.x.links".into(), url: pr.into() }]);
-        st.drop_user_effects();
+        st.drop_user_effects(0, 0);
         assert!(st.outbox.is_empty(), "a trapped call opens nothing");
+        let kinds: Vec<(String, bool)> = st.take_audit().into_iter().map(|l| (l.kind, l.dropped)).collect();
+        assert_eq!(kinds, [("link.open-url".into(), false), ("link.open-url".into(), true)], "and says so");
     }
 
     #[test]
@@ -2887,24 +2943,47 @@ mod tests {
     }
 
     #[test]
-    fn repeated_reads_and_listings_in_one_call_fold_into_one_line() {
+    fn repeated_reads_of_one_path_in_one_call_fold_into_one_line() {
         let mut st = HostState::new("dev.x.fs", &Capabilities::default(), None, None, None);
-        for i in 0..500 {
-            st.audit("fs.read", "", &format!("src/{i}.rs"), 10);
+        for _ in 0..500 {
+            st.audit("fs.read", "", "src/a.rs", 10);
         }
         st.audit("fs.list", "", "src", 3);
         st.audit("fs.write", "", "src/a.rs", 1);
-        st.audit("fs.write", "", "src/b.rs", 1);
-        st.audit("fs.list", "", "docs", 2);
+        st.audit("fs.write", "", "src/a.rs", 1);
+        st.audit("fs.list", "", "src", 2);
+        st.audit("fs.read", "", "src/b.rs", 4);
         let got: Vec<(String, String, u64, u64)> = st.take_audit().into_iter().map(|l| (l.kind, l.detail, l.n, l.count)).collect();
         assert_eq!(got, [
-            ("fs.read".into(), "src/0.rs".into(), 5000, 500),
+            ("fs.read".into(), "src/a.rs".into(), 5000, 500),
             ("fs.list".into(), "src".into(), 5, 2),
             ("fs.write".into(), "src/a.rs".into(), 1, 1),
-            ("fs.write".into(), "src/b.rs".into(), 1, 1),
+            ("fs.write".into(), "src/a.rs".into(), 1, 1),
+            ("fs.read".into(), "src/b.rs".into(), 4, 1),
         ]);
-        st.audit("fs.read", "", "src/next.rs", 4);
-        assert!(matches!(&st.take_audit()[..], [l] if l.detail == "src/next.rs" && l.count == 1), "the next call starts afresh");
+        assert!(st.audit.is_empty() && st.audit_folds.is_empty(), "no fold stays open once the call's lines are drained");
+        st.audit("fs.read", "", "src/a.rs", 4);
+        assert!(matches!(&st.take_audit()[..], [l] if l.detail == "src/a.rs" && l.count == 1), "the next call starts afresh");
+    }
+
+    #[test]
+    fn distinct_paths_in_one_call_each_keep_a_line_up_to_a_marked_overflow() {
+        let mut st = HostState::new("dev.x.fs", &Capabilities::default(), None, None, None);
+        let long = |i: usize| format!("{}/{i}.rs", "d".repeat(AUDIT_STR_MAX));
+        for i in 0..20 {
+            st.audit("fs.read", "", &long(i), 10);
+        }
+        st.audit("fs.read", "", &long(3), 1);
+        st.audit("fs.read", "", &long(19), 1);
+        st.audit("fs.list", "", "src", 2);
+        let lines = st.take_audit();
+        let reads: Vec<_> = lines.iter().filter(|l| l.kind == "fs.read").collect();
+        assert_eq!(reads.len(), FOLD_PATHS + 1, "paths that share their first {AUDIT_STR_MAX} characters are still distinct");
+        assert!(reads[..FOLD_PATHS].iter().all(|l| !l.truncated && l.clipped.len() == 1));
+        assert_eq!((reads[3].n, reads[3].count), (11, 2), "a repeat of a listed path folds into its line");
+        let over = reads[FOLD_PATHS];
+        assert_eq!((over.truncated, over.detail.as_str(), over.n, over.count), (true, "", 41, 5), "the rest are counted on a marked line");
+        assert!(matches!(&lines[..], [.., l] if l.kind == "fs.list" && !l.truncated), "other kinds keep their own 16");
     }
 
     #[test]
@@ -3565,7 +3644,7 @@ mod tests {
 
     /// `ARMING_PLUGIN` as a component of the plugin world, loaded with clipboard, open_url, panel and
     /// sidebar, on `core`.
-    fn arming_plugin(core: &crate::Core) -> LoadedPlugin {
+    pub(crate) fn arming_plugin(core: &crate::Core) -> LoadedPlugin {
         let mut resolve = wit_parser::Resolve::default();
         let pkg = resolve.push_path(Path::new(env!("CARGO_MANIFEST_DIR")).join("../wit/haunt-plugin.wit")).unwrap().0;
         let world = resolve.select_world(&[pkg], Some("plugin")).unwrap();
@@ -3674,6 +3753,29 @@ mod tests {
         let mut p = arming_plugin(&core);
         p.run_command(pr, true).unwrap();
         assert_eq!(effects(&mut p).2, [other], "only a tab that is open now");
+    }
+
+    #[test]
+    fn a_trap_marks_its_own_dropped_effects_and_keeps_an_earlier_calls() {
+        let dir = tempdir("trap-marks");
+        let core = crate::Core::new(&*dir);
+        let tab = core.register_surface("/a").unwrap().surface_id;
+        let mut p = arming_plugin(&core);
+        let trap = "!https://github.com/o/r";
+        let g = show_button(&mut p, trap);
+        p.run_command("https://github.com/o/r/pull/1", true).unwrap();
+        assert!(p.panel_action("p", g, trap).is_err());
+        assert_eq!(effects(&mut p), (vec!["copied".to_string()], vec![], vec![tab]), "the earlier call's copy and focus still happen");
+        let got: Vec<(String, bool, String)> = p.take_audit().into_iter().map(|l| (l.kind, l.dropped, l.reason)).collect();
+        let line = |k: &str, dropped: bool| (k.to_string(), dropped, if dropped { "trap".into() } else { String::new() });
+        assert_eq!(got, [
+            line("clipboard.write", false),
+            line("sidebar.focus", false),
+            line("clipboard.write", false),
+            line("sidebar.focus", false),
+            line("clipboard.write", true),
+            line("sidebar.focus", true),
+        ]);
     }
 
     #[test]

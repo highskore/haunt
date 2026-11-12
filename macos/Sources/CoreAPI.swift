@@ -455,6 +455,9 @@ struct AuditLine: Equatable, Hashable {
     var n: UInt64
     var count: UInt64
     var clipped: [AuditClip]
+    var truncated: Bool
+    var dropped: Bool
+    var reason: String
 }
 
 struct AuditClip: Equatable, Hashable {
