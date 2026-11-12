@@ -914,10 +914,23 @@ fn status_same(w: &[Glyph], p: &[char]) -> bool {
 pub fn says_status(text: &str) -> bool {
     static PHRASES: std::sync::LazyLock<Vec<Vec<char>>> = std::sync::LazyLock::new(|| {
         let waiting = crate::layout::WAITING.split(' ').next();
-        let all = crate::layout::STATUS_TEXTS.iter().copied().chain(waiting).chain(["Allow", "Deny"]);
-        all.map(|p| status_fold(p).iter().filter(|g| status_kept(g)).map(|g| g.c).collect()).collect()
+        status_phrases(crate::layout::STATUS_TEXTS.iter().copied().chain(waiting).chain(["Allow", "Deny"]))
     });
-    let longest = PHRASES.iter().map(Vec::len).max().unwrap_or(0);
+    says_phrase(text, &PHRASES)
+}
+
+/// `says_status` for a theme's words, which also may not read as a permission request.
+pub fn theme_says_status(text: &str) -> bool {
+    static PHRASES: std::sync::LazyLock<Vec<Vec<char>>> = std::sync::LazyLock::new(|| status_phrases(["Permission", "Request"]));
+    says_status(text) || says_phrase(text, &PHRASES)
+}
+
+fn status_phrases<'a>(all: impl IntoIterator<Item = &'a str>) -> Vec<Vec<char>> {
+    all.into_iter().map(|p| status_fold(p).iter().filter(|g| status_kept(g)).map(|g| g.c).collect()).collect()
+}
+
+fn says_phrase(text: &str, phrases: &[Vec<char>]) -> bool {
+    let longest = phrases.iter().map(Vec::len).max().unwrap_or(0);
     let folded = status_fold(text);
     let says = |brk: &dyn Fn(&Glyph) -> bool| {
         let words: Vec<&[Glyph]> = folded.split(|g| brk(g)).filter(|w| !w.is_empty()).collect();
@@ -925,7 +938,7 @@ pub fn says_status(text: &str) -> bool {
             let mut run: Vec<Glyph> = Vec::new();
             words[i..].iter().any(|w| {
                 run.extend_from_slice(w);
-                run.len() <= longest && PHRASES.iter().any(|p| status_same(&run, p))
+                run.len() <= longest && phrases.iter().any(|p| status_same(&run, p))
             })
         })
     };
@@ -3018,9 +3031,12 @@ mod tests {
         for t in ["\u{13A0}one", "done\u{2800}", "needs  you", "\u{410}llow", "Approve", "RUNNING", "ALL IDLE", "a\u{300}llow"] {
             assert!(says_status(t), "{t:?}");
         }
+        for t in ["Permission", "REQUEST", "Re\u{2800}quest", "p\u{435}rmission needed"] {
+            assert!(theme_says_status(t) && !says_status(t), "{t:?}");
+        }
         for t in ["Invoke", "\u{21B5} SUMMON \u{B7} ESC BANISH", "XII \u{B7} XI \u{B7} MMXXVI", "AGENTS III", "Go To", "Open:",
                   "Type the name of a tab, a command or a theme.", "\u{21B5} OPEN \u{B7} ESC BACK", "\u{2514} ", "- "] {
-            assert!(!says_status(t), "{t:?}");
+            assert!(!theme_says_status(t), "{t:?}");
         }
     }
 

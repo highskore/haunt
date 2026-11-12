@@ -51,12 +51,13 @@ extension Theme {
     /// `{agents}` and `{agents.roman}` fill in when drawn.
     static let stringKeys: Set<String> = ["row.sub.prefix", "titlebar.right", "palette.header", "palette.foot", "palette.input.glyph", "palette.message", "sidebar.foot"]
     static let maxStringScalars = 64
-    /// Whether text could pass for an agent's state or a decision: core's check for plugin row labels, so a fix
-    /// there covers themes too. Tests built without the core supply their own.
+    /// Whether text could pass for an agent's state, a decision or a permission request: core's check for plugin
+    /// row labels plus the theme-only words, so a fix there covers themes too. Without the core every string is
+    /// refused; tests supply their own.
     #if HAUNT_REAL_CORE
-    static var statusCheck: (String) -> Bool = { saysStatus(text: $0) }
+    static var statusCheck: (String) -> Bool = { themeSaysStatus(text: $0) }
     #else
-    static var statusCheck: (String) -> Bool = { _ in false }
+    static var statusCheck: (String) -> Bool = { _ in true }
     #endif
     /// More marks than this on one character stack it above and below its line ("zalgo").
     static let maxCombiningMarks = 2
@@ -76,7 +77,8 @@ extension Theme {
         return nil
     }
 
-    /// The theme's words for `key` with its tokens filled in, or nil when it has none.
+    /// The theme's words for `key` with its tokens filled in, or nil when it has none or the filled-in words
+    /// could pass for a status, so the caller draws its own.
     func string(_ key: String, agents: Int = 0, now: Date = Date()) -> String? {
         guard var s = app.strings[key] else { return nil }
         let d = Calendar(identifier: .gregorian).dateComponents([.day, .month, .year], from: now)
@@ -84,7 +86,8 @@ extension Theme {
                            ("{agents.roman}", agents)] {
             s = s.replacingOccurrences(of: token, with: Self.roman(n))
         }
-        return s.replacingOccurrences(of: "{agents}", with: String(agents))
+        s = s.replacingOccurrences(of: "{agents}", with: String(agents))
+        return Self.statusCheck(s) ? nil : s
     }
 
     /// 1–3999 in Roman numerals; anything else in digits.

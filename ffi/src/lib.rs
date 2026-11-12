@@ -18,11 +18,11 @@ pub fn refusal_text(reason: Refusal) -> String {
     reason.text().to_owned()
 }
 
-/// Whether a theme's or plugin's text could pass for one of Haunt's status words.
+/// Whether a theme's text could pass for one of Haunt's status words or a permission request.
 #[cfg(feature = "plugins")]
 #[uniffi::export]
-pub fn says_status(text: String) -> bool {
-    haunt_core::plugins::says_status(&text)
+pub fn theme_says_status(text: String) -> bool {
+    haunt_core::plugins::theme_says_status(&text)
 }
 
 #[uniffi::export]

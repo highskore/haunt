@@ -15,6 +15,9 @@ func write(_ dir: URL, _ name: String, _ text: String) {
     try! text.write(to: dir.appendingPathComponent("\(name).toml"), atomically: true, encoding: .utf8)
 }
 func load(_ name: String?) -> LoadedTheme { LoadedTheme.load(name, userDir: home, bundled: bundled) }
+// Built without the core, every theme string is refused; these tests judge the words with a permissive fake.
+let builtInCheck = Theme.statusCheck
+Theme.statusCheck = { _ in false }
 let bw = Theme()
 
 // The default.
@@ -508,6 +511,11 @@ Theme.statusCheck = { _ in false }
 check(status.theme.app.strings == ["titlebar.right": "Undone"], "what core's check flags is refused, and a foot without the count: \(status.problems)")
 check(status.problems.filter { $0.contains("status words") }.count == 1 && status.problems.contains { $0.contains("must show {agents}") }, "each for its reason")
 check(asked.contains("Needs You") && asked.contains("Undone"), "each string is asked about as written: \(asked)")
+check(builtInCheck("Invoke") && builtInCheck(""), "without the core, every string is refused")
+Theme.statusCheck = { $0 == "AGENTS IV (4)" }
+check(words.theme.string("sidebar.foot", agents: 4) == nil && words.theme.string("sidebar.foot", agents: 3) == "AGENTS III (3)",
+      "the words are checked again once the count is filled in, and drawn as Haunt's own when they fail")
+Theme.statusCheck = { _ in false }
 check(Theme.roman(0) == "0" && Theme.roman(3999) == "MMMCMXCIX" && Theme.roman(1994) == "MCMXCIV", "roman numerals")
 
 // Chrome text is drawn flat unless every stop reads on every background it is drawn over.
