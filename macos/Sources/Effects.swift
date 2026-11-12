@@ -98,6 +98,8 @@ struct Effects: Equatable {
     var iconStyle = "vector"
     /// The palette as a "panel" or a "dialog": a caption with `[strings] palette.header`, a sunken field and list.
     var paletteFrame = "panel"
+    /// The theme UI face's regular text drawn "light" (CSS 300), as a card sets it.
+    var uiWeight = "regular"
 
     enum Key {
         case bool(WritableKeyPath<Effects, Bool>)
@@ -155,6 +157,7 @@ struct Effects: Equatable {
         "titlebar.menu": .bool(\.titlebarMenu),
         "icon.style": .choice(\.iconStyle, ["vector", "pixel"]),
         "palette.frame": .choice(\.paletteFrame, ["panel", "dialog"]),
+        "ui.weight": .choice(\.uiWeight, ["regular", "light"]),
     ]
 
     /// nil when `name` took `value`; otherwise why not.

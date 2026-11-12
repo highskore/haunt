@@ -111,6 +111,7 @@ Some looks need more than colours and sizes. The `[effects]` table switches on e
 | `ornament` | `"none"`, `"sigil"` | artwork drawn in code: a sigil at the sidebar's foot (left out when the rows need its room), marks in the window's corners, and a sigil behind the terminal at `app.ornament.alpha` (0–0.12) when the window and Ghostty's background are both see-through |
 | `palette.inset` | 0–80, default 22 | how far the bottom-right palette stands in from the window's edges |
 | `palette.header`, `palette.input.rules` | bool | `[strings] palette.header` above the input, and rules above and below the input |
+| `ui.weight` | `"regular"`, `"light"` | the theme's UI face's regular text drawn light |
 
 Every effect is off by default, so black and white draws as it did before them.
 

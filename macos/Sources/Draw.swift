@@ -40,6 +40,7 @@ enum Draw {
     private static func themeUI(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont? {
         guard let first = Tok.Font.ui.split(separator: ",").first?.trimmingCharacters(in: CharacterSet(charactersIn: " \"'")),
               !["-apple-system", "BlinkMacSystemFont", "system-ui"].contains(first) else { return nil }
+        let weight = weight == .regular && Theme.current.effects.uiWeight == "light" ? NSFont.Weight.light : weight
         if let f = ThemeFonts.uiFont(family: first, weight: weight, size: size) { return f }
         // NSFontManager weights: 3 light, 5 regular, 6 medium, 8 semibold, 9 bold.
         let w = weight >= .bold ? 9 : weight >= .semibold ? 8 : weight >= .medium ? 6 : weight <= .light ? 3 : 5
