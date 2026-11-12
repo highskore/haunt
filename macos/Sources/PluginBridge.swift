@@ -10,6 +10,8 @@ final class PluginBridge {
     let presence = Presence()
     /// Brings tab `surfaceId` up, for a notification bound to it.
     var openTab: ((String) -> Void)?
+    /// A short note for the sidebar's foot, such as what a plugin copied.
+    var onNote: ((String) -> Void)?
     /// A plugin bound or unbound a key.
     var onKeysChanged: (() -> Void)?
     /// Set once the core has started, so the decision log is loaded before plugins read it.
@@ -105,9 +107,9 @@ final class PluginBridge {
             case .keysChanged:
                 keysChanged = true
                 hover.owner = plugins.hoverHolder()
-            case let .clipboardWrite(_, text):
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
+            case let .clipboardWrite(pluginId, pluginName, text):
+                PluginCopy.write(text, pluginId: pluginId)
+                onNote?(PluginCopy.toast(name: pluginName, text: text))
             case let .openUrl(_, url):
                 // The core checked it (`link_ok`); https is checked again before it leaves the app.
                 guard let u = URL(string: url), u.scheme == "https" else { continue }

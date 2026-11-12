@@ -7,15 +7,19 @@ struct PastePreview: Equatable {
     /// ESC[201~ ends bracketed paste early: whatever follows runs as if typed.
     var hasPasteEnd: Bool
     var hasControls: Bool
+    /// The plugin that copied it (`PluginCopy`), if one did.
+    var fromPlugin: String?
 
     /// Ghostty only asks about line breaks and ESC[201~, and turns ESC and other controls into spaces as it
     /// pastes, so what reached the shell wouldn't be what was copied. Haunt asks itself before any paste with
-    /// an escape, another control or a hidden character; plain text, newlines included, is left to Ghostty.
-    var needsConfirmation: Bool { hasControls }
+    /// an escape, another control or a hidden character; plain text, newlines included, is left to Ghostty,
+    /// except more than one line a plugin copied, which Haunt always shows whatever the paste settings say.
+    var needsConfirmation: Bool { hasControls || (fromPlugin != nil && lines > 1) }
 
     static let pasteEnd = "\u{1B}[201~"
 
-    init(_ s: String) {
+    init(_ s: String, fromPlugin: String? = nil) {
+        self.fromPlugin = fromPlugin
         var out = ""
         var lines = 1
         var controls = false

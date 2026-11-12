@@ -172,7 +172,9 @@ pub enum HostRequest {
     /// The plugin bound or unbound a key: the app rebuilds its key map from `PluginSet::keys`.
     KeysChanged { plugin_id: String },
     /// Plain text for the clipboard, from a button, key or command the user just used.
-    ClipboardWrite { plugin_id: String, text: String },
+    /// The app tags the pasteboard item with the plugin id (`dev.haunt.plugin-copy`) and says
+    /// "<plugin_name> copied N lines".
+    ClipboardWrite { plugin_id: String, plugin_name: String, text: String },
     /// An https link the user clicked a panel button for, checked by `plugins::link_ok`.
     OpenUrl { plugin_id: String, url: String },
 }
@@ -1368,7 +1370,7 @@ const TICK_MAX_SECS: u32 = 86_400;
 
 impl wclip::Host for HostState {
     fn write(&mut self, text: String) -> Result<(), String> {
-        if !std::mem::take(&mut self.copy_ok) {
+        if !self.copy_ok {
             return Err("only once per button, key or command the user just used".into());
         }
         let mut text = plain_lines(&text, CLIPBOARD_LINES, CLIPBOARD_MAX);
@@ -1377,7 +1379,14 @@ impl wclip::Host for HostState {
             end -= 1;
         }
         text.truncate(end);
-        self.request(HostRequest::ClipboardWrite { plugin_id: self.id.clone(), text })
+        // No trailing line break, so a paste never ends by pressing Return; and no blank first line
+        // to hide the rest below a harmless-looking start.
+        let text = text.trim_end_matches('\n').to_owned();
+        if text.split('\n').next().is_none_or(|l| l.trim().is_empty()) {
+            return Err("the copied text's first line is empty".into());
+        }
+        self.copy_ok = false;
+        self.request(HostRequest::ClipboardWrite { plugin_id: self.id.clone(), plugin_name: self.name.clone(), text })
     }
 }
 
@@ -2255,7 +2264,8 @@ mod tests {
         st.copy_ok = true;
         st.write("git push\r\n\u{1b}[2J\u{202e}ok\tthen".into()).unwrap();
         assert!(st.write("again".into()).is_err(), "one write per user action");
-        assert_eq!(st.outbox, [HostRequest::ClipboardWrite { plugin_id: "dev.x.relay".into(), text: "git push\n[2Jok then".into() }]);
+        let relay = |text: &str| HostRequest::ClipboardWrite { plugin_id: "dev.x.relay".into(), plugin_name: "dev.x.relay".into(), text: text.into() };
+        assert_eq!(st.outbox, [relay("git push\n[2Jok then")], "the request names the plugin for the toast");
         st.copy_ok = true;
         st.write("é".repeat(CLIPBOARD_MAX)).unwrap();
         let Some(HostRequest::ClipboardWrite { text, .. }) = st.outbox.last() else { panic!() };
@@ -2264,6 +2274,18 @@ mod tests {
         st.write("x\n".repeat(1000)).unwrap();
         let Some(HostRequest::ClipboardWrite { text, .. }) = st.outbox.last() else { panic!() };
         assert_eq!(text.lines().count(), CLIPBOARD_LINES);
+        assert!(!text.ends_with('\n'), "a 400th line break is cut too");
+
+        st.outbox.clear();
+        st.copy_ok = true;
+        st.write("Goal: ship\nPlan\n\n\r\n".into()).unwrap();
+        assert_eq!(st.outbox, [relay("Goal: ship\nPlan")], "no trailing line break, so a paste can't press Return");
+        st.copy_ok = true;
+        for hidden in ["\nrm -rf ~", " \u{200b}\nrm -rf ~", "\r\nrm -rf ~", "\n\n"] {
+            assert!(st.write(hidden.into()).unwrap_err().contains("first line is empty"), "{hidden:?}");
+        }
+        st.write("ok".into()).unwrap();
+        assert_eq!(st.outbox.len(), 2, "a refused write keeps the click's one copy");
         st.drop_user_effects();
         assert!(st.outbox.is_empty(), "a trapped call's writes are dropped");
     }

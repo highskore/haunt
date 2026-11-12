@@ -10,22 +10,24 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
     /// A paste that Ghostty's paste protection holds for confirmation; nil when it resolves or is replaced.
     var onPasteConfirmation: ((Ghostty.ClipboardConfirmationRequest?) -> Void)?
     /// A paste Haunt holds itself (PastePreview.needsConfirmation); the host asks, then calls `sendPaste`.
-    var onRiskyPaste: ((String) -> Void)?
+    /// The text, and the plugin that copied it (`PluginCopy`) if one did.
+    var onRiskyPaste: ((String, String?) -> Void)?
     /// Whether a middle click pastes the selection, read at each click so config changes apply.
     var middleClickPastes: () -> Bool = { true }
 
     /// True when `text` was held for confirmation instead of going to Ghostty.
-    private func holdIfRisky(_ text: String?) -> Bool {
-        guard let text, let ask = onRiskyPaste, PastePreview(text).needsConfirmation else { return false }
-        ask(text)
+    private func holdIfRisky(_ text: String?, from pb: NSPasteboard) -> Bool {
+        let plugin = PluginCopy.source(pb)
+        guard let text, let ask = onRiskyPaste, PastePreview(text, fromPlugin: plugin).needsConfirmation else { return false }
+        ask(text, plugin)
         return true
     }
 
     /// Pastes the very text that was checked, so the clipboard isn't read a second time: held for Haunt's
     /// sheet if risky, else through Ghostty's paste protection. False when there is no text, for `super`.
-    private func pasteChecked(_ text: String?) -> Bool {
+    private func pasteChecked(_ text: String?, from pb: NSPasteboard) -> Bool {
         guard let text else { return false }
-        if !holdIfRisky(text) { surfaceModel?.pasteText(text) }
+        if !holdIfRisky(text, from: pb) { surfaceModel?.pasteText(text) }
         return true
     }
 
@@ -43,19 +45,19 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
 
     override func paste(_ sender: Any?) {
         onInput?()
-        if pasteChecked(NSPasteboard.general.getOpinionatedStringContents()) { return }
+        if pasteChecked(NSPasteboard.general.getOpinionatedStringContents(), from: .general) { return }
         super.paste(sender)
     }
 
     override func pasteAsPlainText(_ sender: Any?) {
         onInput?()
-        if pasteChecked(NSPasteboard.general.getOpinionatedStringContents()) { return }
+        if pasteChecked(NSPasteboard.general.getOpinionatedStringContents(), from: .general) { return }
         super.pasteAsPlainText(sender)
     }
 
     override func pasteSelection(_ sender: Any?) {
         onInput?()
-        if pasteChecked(NSPasteboard.ghosttySelection.getOpinionatedStringContents()) { return }
+        if pasteChecked(NSPasteboard.ghosttySelection.getOpinionatedStringContents(), from: .ghosttySelection) { return }
         super.pasteSelection(sender)
     }
 
@@ -71,20 +73,20 @@ final class HauntSurfaceView: Ghostty.SurfaceView {
         super.otherMouseDown(with: event)
         if event.buttonNumber == 2, middleClickPastes(), surfaceModel?.mouseCaptured == false {
             onInput?()
-            _ = pasteChecked(NSPasteboard.ghosttySelection.getOpinionatedStringContents())
+            _ = pasteChecked(NSPasteboard.ghosttySelection.getOpinionatedStringContents(), from: .ghosttySelection)
         }
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         onInput?()
-        if holdIfRisky(sender.draggingPasteboard.getOpinionatedStringContents()) { return true }
+        if holdIfRisky(sender.draggingPasteboard.getOpinionatedStringContents(), from: sender.draggingPasteboard) { return true }
         return super.performDragOperation(sender)
     }
 
     /// Services such as "Send to Terminal" write the pasteboard straight into the pty.
     override func readSelection(from pboard: NSPasteboard) -> Bool {
         onInput?()
-        if holdIfRisky(pboard.getOpinionatedStringContents()) { return true }
+        if holdIfRisky(pboard.getOpinionatedStringContents(), from: pboard) { return true }
         return super.readSelection(from: pboard)
     }
 

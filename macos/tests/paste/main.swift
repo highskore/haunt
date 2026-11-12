@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 var failures = 0
 func check(_ ok: Bool, _ what: String, line: Int = #line) {
@@ -60,6 +60,23 @@ for v in UInt32(0)...0x10FFFF where (hiddenChars.format + hiddenChars.ignorable)
     check(PastePreview.hidden(Unicode.Scalar(v)!), "PastePreview.hidden(\(String(v, radix: 16))) per core/hidden-chars.json")
 }
 check(!hiddenChars.shown.contains(where: PastePreview.hidden), "PastePreview keeps the table's shown characters")
+
+// A plugin's copy (clipboard.write): a multi-line one is always shown, naming the plugin.
+check(PastePreview("git status\nrm -rf ~", fromPlugin: "dev.haunt.relay").needsConfirmation, "a plugin's two lines are held")
+check(!PastePreview("git status", fromPlugin: "dev.haunt.relay").needsConfirmation, "a plugin's one plain line is not")
+check(!PastePreview("git status\n", fromPlugin: "dev.haunt.relay").needsConfirmation, "a trailing newline is no second line")
+check(!PastePreview("git status\nrm -rf ~").needsConfirmation, "an untagged multi-line paste is still Ghostty's")
+
+let pb = NSPasteboard(name: NSPasteboard.Name("dev.haunt.paste-test.\(getpid())"))
+PluginCopy.write("Goal\nPlan", pluginId: "dev.haunt.relay", to: pb)
+check(pb.string(forType: .string) == "Goal\nPlan", "the text is plain text")
+check(PluginCopy.source(pb) == "dev.haunt.relay", "tagged with the plugin id")
+pb.clearContents()
+pb.setString("from the user", forType: .string)
+check(PluginCopy.source(pb) == nil, "a later copy drops the tag")
+pb.releaseGlobally()
+check(PluginCopy.toast(name: "Relay", text: "Goal\nPlan\nFiles") == "Relay copied 3 lines", "toast")
+check(PluginCopy.toast(name: "Relay", text: "Goal") == "Relay copied 1 line", "toast, one line")
 
 if failures > 0 { print("paste: \(failures) failed"); exit(1) }
 print("paste: all passed")

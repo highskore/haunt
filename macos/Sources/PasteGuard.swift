@@ -8,6 +8,7 @@ final class PasteGuard {
     private struct Ask {
         weak var view: HauntSurfaceView?
         let text: String
+        var plugin: String? = nil
         let request: Ghostty.ClipboardConfirmationRequest?
         let finish: (Bool) -> Void
     }
@@ -43,10 +44,10 @@ final class PasteGuard {
 
     /// A paste Haunt held itself; it is written, exactly as shown, only if the user says so. The same text
     /// held again on the same surface while it waits is one ask.
-    func hold(_ text: String, on view: HauntSurfaceView) {
+    func hold(_ text: String, plugin: String? = nil, on view: HauntSurfaceView) {
         let same = { (a: Ask) in a.view === view && a.request == nil && a.text == text }
         if queue.contains(where: same) || shown.map({ same($0.ask) }) == true { return }
-        enqueue(Ask(view: view, text: text, request: nil) { [weak view] ok in
+        enqueue(Ask(view: view, text: text, plugin: plugin, request: nil) { [weak view] ok in
             if ok { view?.sendPaste(text) }
         })
     }
@@ -73,7 +74,7 @@ final class PasteGuard {
         guard !queue.isEmpty else { return }
         let ask = queue.removeFirst()
         if let view = ask.view { reveal(view) }
-        let alert = Self.alert(ask.text)
+        let alert = Self.alert(ask.text, plugin: ask.plugin)
         shown = (ask, alert)
         alert.beginSheetModal(for: window) { [weak self] r in
             guard let self, self.shown?.alert === alert else { return }
@@ -85,11 +86,12 @@ final class PasteGuard {
 
     /// The whole paste, read-only and scrollable, with every control character spelled out (PastePreview).
     /// Cancel is the default; pasting takes an explicit click.
-    static func alert(_ text: String) -> NSAlert {
-        let preview = PastePreview(text)
+    static func alert(_ text: String, plugin: String? = nil) -> NSAlert {
+        let preview = PastePreview(text, fromPlugin: plugin)
         let alert = NSAlert()
         alert.messageText = preview.lines == 1 ? "Paste 1 line?" : "Paste \(preview.lines) lines?"
         var notes: [String] = []
+        if let plugin { notes.append("The plugin \(plugin) copied this. Each line runs as a command if the terminal isn't waiting for text.") }
         if preview.hasPasteEnd {
             notes.append("It contains a bracketed paste end (^[[201~), which tries to run the text after it as typed commands. Ghostty pastes its escape as a space, so it won't.")
         }

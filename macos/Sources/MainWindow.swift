@@ -32,7 +32,7 @@ private final class RootView: NSView {
     /// The palette mockup's scrim over everything below the title bar.
     let scrim = NSView()
     let agents = AgentsView()
-    /// What Haunt refused on the user's behalf, at the sidebar's foot so it never covers the terminal.
+    /// What Haunt refused on the user's behalf or a plugin copied, at the sidebar's foot so it never covers the terminal.
     let toast = ToastView()
     /// `[effects] window.material = "glass"`: the desktop, blurred, behind everything.
     let material = NSVisualEffectView()
@@ -222,6 +222,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
         win.delegate = self
         bridge.panels.host = self
         bridge.openTab = { [weak self] id in self?.open(id) }
+        bridge.onNote = { [weak self] line in self?.root.toast.show(line) }
         root.topRow.onClick = { [weak self] plugin in self?.bridge.topRowClicked(pluginId: plugin) }
         root.sidebar.onHover = { [weak self] id in self?.bridge.hover.pointer(over: id) }
         bridge.hover.canHold = { [weak win, weak root] in win?.isKeyWindow == true && root?.sidebar.isHidden == false }
@@ -304,8 +305,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
         view.onPasteConfirmation = { [weak self, weak view] req in
             if let view { self?.pasteGuard.confirm(req, on: view) }
         }
-        view.onRiskyPaste = { [weak self, weak view] text in
-            if let view { self?.pasteGuard.hold(text, on: view) }
+        view.onRiskyPaste = { [weak self, weak view] text, plugin in
+            if let view { self?.pasteGuard.hold(text, plugin: plugin, on: view) }
         }
         view.middleClickPastes = { [weak self] in self?.config.middleClickPaste ?? true }
         // So the surface starts at the pane's real size.
