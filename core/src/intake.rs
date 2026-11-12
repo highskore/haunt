@@ -479,6 +479,46 @@ mod tests {
         assert!(!peer_allowed(&a, uid() + 1));
     }
 
+    /// A real connection from another uid. Switching uid needs root, so it runs in the Linux container.
+    #[test]
+    fn a_connection_from_another_uid_is_refused() {
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } != 0 {
+            eprintln!("skipped: needs root to connect as another uid");
+            return;
+        }
+        const NOBODY: u32 = 65534;
+        let d = TempDir::created("foreign");
+        fs::set_permissions(&*d, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = d.join("s");
+        let listener = UnixListener::bind(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o777)).unwrap();
+        // SAFETY: an all-zero sockaddr_un is valid; the path is filled in below, NUL-terminated.
+        let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+        for (dst, b) in addr.sun_path.iter_mut().zip(path.as_os_str().as_encoded_bytes()) {
+            *dst = *b as libc::c_char;
+        }
+        // SAFETY: the child makes only raw syscalls on memory set up before the fork, then exits.
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            unsafe {
+                let dropped = libc::setgid(NOBODY) == 0 && libc::setuid(NOBODY) == 0;
+                let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+                let len = size_of::<libc::sockaddr_un>() as libc::socklen_t;
+                let connected = dropped && libc::connect(fd, (&raw const addr).cast(), len) == 0;
+                libc::_exit(if connected { 0 } else { 1 });
+            }
+        }
+        let (stream, _) = listener.accept().unwrap();
+        let mut status = 0;
+        // SAFETY: pid is our child.
+        unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert_eq!(status, 0, "the child connected as nobody");
+        assert_eq!(peer_uid(&stream), Some(NOBODY));
+        assert!(!peer_allowed(&stream, uid()));
+    }
+
     #[test]
     fn replaces_a_stale_socket_but_not_a_live_one() {
         let d = dir("stale");
