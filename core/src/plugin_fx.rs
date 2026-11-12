@@ -36,7 +36,7 @@ pub struct DockBatch {
 
 impl Stage {
     /// Queues `plugin`'s images, replacing any of its own still waiting, so the queue holds one batch a plugin.
-    fn queue_dock(&self, plugin: &str, pngs: Vec<(String, Vec<u8>)>) {
+    pub(crate) fn queue_dock(&self, plugin: &str, pngs: Vec<(String, Vec<u8>)>) {
         let mut q = crate::sync::lock(&self.1);
         match q.iter_mut().find(|b| b.plugin_id == plugin) {
             Some(b) => b.pngs = pngs,
@@ -666,11 +666,9 @@ pub(super) mod tests {
         };
         let four: Vec<_> = (0..DOCK_IMAGES_MAX).map(max).collect();
         assert!(four.iter().all(|(_, p)| p.len() == DOCK_PNG_MAX));
-        let t = Instant::now();
-        wdock::Host::images(&mut st, four).unwrap();
-        let took = t.elapsed();
-        assert!(took < Duration::from_millis(25), "{took:?} of the 50 ms budget");
-        assert_eq!(decode_dock(stage.take_dock()).len(), 1);
+        wdock::Host::images(&mut st, four.clone()).unwrap();
+        assert!(st.outbox.is_empty(), "no pixels leave the call");
+        assert_eq!(stage.take_dock(), [DockBatch { plugin_id: "dev.haunt.a".into(), pngs: four }], "the bytes wait as sent, undecoded");
     }
 
     #[test]

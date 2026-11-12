@@ -1107,7 +1107,18 @@ impl PluginSet {
     }
 
     /// The plugins' requests, oldest plugin first, with the right pane's owner applied (`own_right_pane`).
+    /// Every plugin's requests, its Dock images decoded first. The app drains with `take_requests_now`, which
+    /// decodes after letting go of the set's lock.
     pub fn take_requests(&mut self) -> Vec<HostRequest> {
+        let (dock, requests) = self.take_pending();
+        let mut out = crate::plugins::decode_dock(dock);
+        out.extend(requests);
+        out
+    }
+
+    /// The Dock images still to decode, and the other requests.
+    fn take_pending(&mut self) -> (Vec<crate::plugins::DockBatch>, Vec<HostRequest>) {
+        let dock = self.stage.take_dock();
         let all: Vec<HostRequest> = self.plugins.iter_mut().flat_map(|(_, p)| p.take_requests()).collect();
         let (out, displaced) = own_right_pane(&mut self.right_pane, all);
         for (plugin_id, id) in displaced {
@@ -1115,7 +1126,7 @@ impl PluginSet {
                 p.panel_displaced(&id);
             }
         }
-        out
+        (dock, out)
     }
 
     /// Every plugin's audit lines since the last drain, appended to `plugin-audit.jsonl` (owner-only).
@@ -1305,7 +1316,7 @@ pub fn drain_audit_final(set: &Mutex<PluginSet>) -> (Vec<AuditLine>, Option<Stri
 }
 
 pub fn take_requests_now(set: &Mutex<PluginSet>) -> Vec<HostRequest> {
-    let take = |s: &mut PluginSet| (s.stage.take_dock(), s.take_requests());
+    let take = |s: &mut PluginSet| s.take_pending();
     let (dock, requests) = match set.try_lock() {
         Ok(mut s) => take(&mut s),
         Err(std::sync::TryLockError::Poisoned(e)) => take(&mut e.into_inner()),
@@ -1521,6 +1532,18 @@ mod tests {
         release.0.send(()).unwrap();
         th.join().unwrap();
         assert!(take_requests_now(&set).is_empty(), "free again");
+    }
+
+    #[test]
+    fn both_drains_carry_the_dock_images() {
+        let dock = |reqs: Vec<HostRequest>| matches!(&reqs[..], [HostRequest::DockImages { plugin_id, .. }] if plugin_id == "dev.x.a");
+        let mut set = PluginSet::default();
+        set.stage.queue_dock("dev.x.a", Vec::new());
+        assert!(dock(set.take_requests()), "the CLI's");
+        let set = Mutex::new(set);
+        set.lock().unwrap().stage.queue_dock("dev.x.a", Vec::new());
+        assert!(dock(take_requests_now(&set)), "the app's");
+        assert!(take_requests_now(&set).is_empty(), "once each");
     }
 
     fn src(dir: &Path, caps: &str) -> PathBuf {
