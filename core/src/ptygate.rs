@@ -134,6 +134,24 @@ mod tests {
         assert!(c.take_plugin_refusals().is_empty());
     }
 
+    #[test]
+    fn a_request_the_user_typed_into_is_refused_as_in_the_terminal() {
+        use crate::{PluginRefusal, Refusal};
+        let c = Core::new(format!("/tmp/haunt-gate-typed-{}", std::process::id()));
+        let a = c.register_surface("/a").unwrap();
+        let line = format!(
+            r#"{{"v":1,"surface_id":"{}","nonce":"{}","event":"permission_seen","tool_name":"Bash","tool_input":{{"command":"git push"}}}}"#,
+            a.surface_id, a.nonce
+        );
+        c.with_state(|st| st.handle_line(&line, std::time::Instant::now()));
+        let key = c.snapshot().groups[0].rows[0].pending.clone().unwrap().key;
+        c.on_user_input(&a.surface_id);
+        assert_eq!(c.gate_plugin_request(&answer(&a.surface_id, key)), None);
+        assert_eq!(c.gate_plugin_request(&answer(&a.surface_id, key + 1)), None);
+        let refusal = |reason| PluginRefusal { plugin_id: "p".into(), reason };
+        assert_eq!(c.take_plugin_refusals(), [refusal(Refusal::InTerminal), refusal(Refusal::NoRequest)]);
+    }
+
     fn typed(surface: &str, text: &str, enter: bool) -> HostRequest {
         HostRequest::PtyType { plugin_id: "p".into(), surface: surface.into(), text: text.into(), enter }
     }

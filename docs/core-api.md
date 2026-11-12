@@ -49,7 +49,7 @@ record Subrow { label: string, meta: string }
 record Decision { at_ms: u64, surface_id: string, tool: string, preview: string, command: Option<string>, cwd: Option<string>, outcome: Outcome, agent: Agent }
 enum   Agent { Claude, Codex, Other { id: string } }   // "claude", "codex" or the id in decisions.jsonl; absent is Claude
 enum   Outcome { AllowedInHaunt, DeniedInHaunt, AllowedByPlugin { plugin_id: string }, DeniedByPlugin { plugin_id: string }, AnsweredInTerminal, Superseded, RefusedPlugin { plugin_id: string, reason: Refusal } }
-enum   Refusal { NoTab, NoRequest, NotOnScreen, TerminalOnly, NoKeys }   // refusalText(reason:) is the host's own text
+enum   Refusal { NoTab, NoRequest, NotOnScreen, InTerminal, TerminalOnly, NoKeys }   // refusalText(reason:) is the host's own text
 record AllowSuggestion { project: string, command: string, rule: string, approvals: u32, plugin_id: string }
 
 record ReviewTurn {

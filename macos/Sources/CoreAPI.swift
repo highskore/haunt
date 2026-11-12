@@ -77,6 +77,7 @@ func fixturePlugins(_ fixture: Fixture, bundledDir: String?) throws -> PluginsAP
             case .noTab: "no_tab"
             case .noRequest: "no_request"
             case .notOnScreen: "not_on_screen"
+            case .inTerminal: "in_terminal"
             case .terminalOnly: "terminal_only"
             case .noKeys: "no_keys"
             }
@@ -273,7 +274,7 @@ enum Outcome: Equatable, Hashable {
 }
 
 enum Refusal: Equatable, Hashable {
-    case noTab, noRequest, notOnScreen, terminalOnly, noKeys
+    case noTab, noRequest, notOnScreen, inTerminal, terminalOnly, noKeys
 }
 
 struct PluginRefusal: Equatable, Hashable {
@@ -287,6 +288,7 @@ func refusalText(reason: Refusal) -> String {
     case .noTab: "no such tab"
     case .noRequest: "no request is up on that tab"
     case .notOnScreen: "not the request on screen"
+    case .inTerminal: "you are answering it in the terminal"
     case .terminalOnly: "this request is answered in the terminal only"
     case .noKeys: "this agent is answered in the terminal only"
     }

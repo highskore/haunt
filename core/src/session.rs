@@ -72,6 +72,8 @@ pub enum Refusal {
     NoRequest,
     /// The key isn't the request on screen: stale, or never issued.
     NotOnScreen,
+    /// The user typed into the tab, so the terminal is answering the request.
+    InTerminal,
     /// Multi-line, hidden characters, a tool that may touch more than it shows, or an earlier request
     /// that may still be up: only the terminal answers it.
     TerminalOnly,
@@ -85,6 +87,7 @@ impl Refusal {
             Self::NoTab => "no such tab",
             Self::NoRequest => "no request is up on that tab",
             Self::NotOnScreen => "not the request on screen",
+            Self::InTerminal => "you are answering it in the terminal",
             Self::TerminalOnly => "this request is answered in the terminal only",
             Self::NoKeys => "this agent is answered in the terminal only",
         }
@@ -380,7 +383,10 @@ impl Session {
 
     /// Why answering `key` with `allow` would be refused, or None if `answer_as` would take it.
     pub fn refusal(&self, key: u64, allow: bool) -> Option<Refusal> {
-        let Some(p) = self.live_permission() else { return Some(Refusal::NoRequest) };
+        let Some(p) = self.live_permission() else {
+            let typed = self.permission.as_ref().is_some_and(|p| p.in_terminal && p.key() == key);
+            return Some(if typed { Refusal::InTerminal } else { Refusal::NoRequest });
+        };
         if p.key() != key {
             Some(Refusal::NotOnScreen)
         } else if self.terminal_only(p) {
