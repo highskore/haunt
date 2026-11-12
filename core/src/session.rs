@@ -378,21 +378,21 @@ impl Session {
         self.answer_as(key, if allow { Outcome::AllowedInHaunt } else { Outcome::DeniedInHaunt }, now)
     }
 
-    /// `answer`, logging `outcome` (an `…InHaunt` or `…ByPlugin` one).
-    /// Why an answer with `key` would be refused, or None if `answer_as` would take it.
-    pub fn refusal(&self, key: u64) -> Option<Refusal> {
+    /// Why answering `key` with `allow` would be refused, or None if `answer_as` would take it.
+    pub fn refusal(&self, key: u64, allow: bool) -> Option<Refusal> {
         let Some(p) = self.live_permission() else { return Some(Refusal::NoRequest) };
         if p.key() != key {
             Some(Refusal::NotOnScreen)
         } else if self.terminal_only(p) {
             Some(Refusal::TerminalOnly)
-        } else if p.agent.answer_bytes(true).is_none() {
+        } else if p.agent.answer_bytes(allow).is_none() {
             Some(Refusal::NoKeys)
         } else {
             None
         }
     }
 
+    /// `answer`, logging `outcome` (an `…InHaunt` or `…ByPlugin` one).
     pub fn answer_as(&mut self, key: u64, outcome: Outcome, now: Instant) -> bool {
         if self.live_permission().is_none_or(|p| p.key() != key || self.terminal_only(p)) {
             return false;

@@ -634,32 +634,6 @@ impl Core {
     /// answer is queued for `take_plugin_refusals`, and logged against the request when it named the
     /// one on screen.
     pub(crate) fn answer_by(&self, surface_id: &str, request_key: u64, allow: bool, plugin_id: Option<&str>) -> Option<Vec<u8>> {
-        if let Some(id) = plugin_id {
-            let refused = self.update(|st, _| {
-                let why = match st.surface(surface_id) {
-                    None => Refusal::NoTab,
-                    Some(s) => match s.session.refusal(request_key) {
-                        None => return false,
-                        Some(why) => {
-                            let on_screen = s.session.live_permission().filter(|p| p.key() == request_key).cloned();
-                            if let Some(p) = on_screen {
-                                let outcome = Outcome::RefusedPlugin { plugin_id: id.to_owned(), reason: why };
-                                st.decisions.record(Decision::new(surface_id, &p, outcome));
-                            }
-                            why
-                        }
-                    },
-                };
-                if st.refusals.len() == MAX_REFUSALS {
-                    st.refusals.pop_front();
-                }
-                st.refusals.push_back(PluginRefusal { plugin_id: id.to_owned(), reason: why });
-                true
-            });
-            if refused {
-                return None;
-            }
-        }
         let outcome = match (plugin_id, allow) {
             (None, true) => Outcome::AllowedInHaunt,
             (None, false) => Outcome::DeniedInHaunt,
@@ -667,14 +641,34 @@ impl Core {
             (Some(id), false) => Outcome::DeniedByPlugin { plugin_id: id.to_owned() },
         };
         let mut bytes = None;
+        // One lock decides refusal or answer, so the request can't change between the two.
         self.update(|st, now| {
-            bytes = st
-                .with_surface(surface_id, |s| {
-                    let b = s.session.live_permission()?.agent.answer_bytes(allow)?;
-                    s.session.answer_as(request_key, outcome, now).then_some(b)
-                })
-                .flatten();
-            bytes.is_some()
+            let why = match st.surface(surface_id).map(|s| s.session.refusal(request_key, allow)) {
+                None => Refusal::NoTab,
+                Some(Some(why)) => why,
+                Some(None) => {
+                    bytes = st
+                        .with_surface(surface_id, |s| {
+                            let b = s.session.live_permission()?.agent.answer_bytes(allow)?;
+                            s.session.answer_as(request_key, outcome, now).then_some(b)
+                        })
+                        .flatten();
+                    return bytes.is_some();
+                }
+            };
+            let Some(id) = plugin_id else { return false };
+            let on_screen = st
+                .surface(surface_id)
+                .and_then(|s| s.session.live_permission().filter(|p| p.key() == request_key).cloned());
+            if let Some(p) = on_screen {
+                let outcome = Outcome::RefusedPlugin { plugin_id: id.to_owned(), reason: why };
+                st.decisions.record(Decision::new(surface_id, &p, outcome));
+            }
+            if st.refusals.len() == MAX_REFUSALS {
+                st.refusals.pop_front();
+            }
+            st.refusals.push_back(PluginRefusal { plugin_id: id.to_owned(), reason: why });
+            true
         });
         bytes.map(<[u8]>::to_vec)
     }
