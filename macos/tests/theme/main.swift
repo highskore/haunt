@@ -447,7 +447,7 @@ check(!bwfx.windowSquare && !bwfx.windowBorder && !bwfx.titlebarDouble && bwfx.l
       && bwfx.ornament == "none" && bwfx.paletteInset == 22 && !bwfx.paletteHeader && !bwfx.paletteInputRules,
       "every ornament effect is off by default")
 check(bwfx.windowFrame == "none" && bwfx.paneFrame == "none" && bwfx.titlebarStyle == "plain" && !bwfx.titlebarIcon && !bwfx.titlebarMenu
-      && bwfx.iconStyle == "vector" && bwfx.paletteFrame == "panel" && bwapp.titlebarFill.isEmpty && bwapp.paletteOffsetX == 0,
+      && bwfx.iconStyle == "vector" && bwfx.paletteFrame == "panel" && bwapp.titlebarFill.isEmpty && bwapp.paletteOffsetX == 0 && bwapp.paletteRowInset == 0,
       "and every bevel effect")
 check(bwfx.uiWeight == "regular", "and the UI's weight")
 check(bwapp.displayFont.isEmpty && bwapp.textChrome.isEmpty && bwapp.strings.isEmpty && Theme().chromeStops.isEmpty,

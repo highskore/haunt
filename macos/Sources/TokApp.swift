@@ -84,6 +84,8 @@ struct AppTokens: Equatable {
     /// Moves a bottom-right palette right of `palette.inset` (left when negative), for a card whose side and
     /// bottom margins differ.
     var paletteOffsetX: CGFloat = 0
+    /// How much further in than the input's text the palette's entries start.
+    var paletteRowInset: CGFloat = 0
     var groupGap: CGFloat = 18
     /// `titlebar.style = "caption"`: the bar's gradient stops, left to right; and `row.select = "name"`'s text.
     var titlebarFill: [String] = []
@@ -157,6 +159,7 @@ struct AppTokens: Equatable {
         "app.group.pad": .number(\.app.groupPad),
         "app.palette.field": .color(\.app.paletteField),
         "app.palette.offset.x": .number(\.app.paletteOffsetX),
+        "app.palette.row.inset": .number(\.app.paletteRowInset),
         "app.group.gap": .number(\.app.groupGap),
         "app.titlebar.fill": .strings(\.app.titlebarFill),
         "app.row.select.ink": .color(\.app.rowSelectInk),

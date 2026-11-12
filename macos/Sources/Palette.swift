@@ -516,8 +516,8 @@ final class PaletteView: NSView {
     private var icons: Bool { !plainMode && Theme.current.effects.paletteIcons }
     private var width: CGFloat { panelW - 2 * edge }
     private var padX: CGFloat { Tok.Size.paletteInputPad[1] }
-    /// An entry's side margin; a dialog's entries sit in its list, inside the list's 3 pt padding and their own.
-    private var entryX: CGFloat { dialog ? padX + 3 + Tok.Size.paletteEntryPad[1] : padX }
+    /// An entry's side margin: the input's, and `app.palette.row.inset` more.
+    private var entryX: CGFloat { padX + Theme.current.app.paletteRowInset }
     private var inputH: CGFloat {
         if dialog { return Self.fieldH + 8 }
         return Tok.Size.paletteInputPad[0] * 2 + Tok.Size.paletteInputFont * lh + border + (inputRules ? 2 * Self.ruleMargin + border : 0)
