@@ -617,10 +617,11 @@ final class SidebarView: NSView, NSTextFieldDelegate {
         }
         let l = lines(for: row)
         let hover = hoverId == row.surfaceId, state = Layers.state(self, selected: row.selected, hover: hover)
-        Layers.draw("row", box, within: bounds, state: state, in: ctx)
-        if row.selected { Layers.draw("row.selected", box, within: bounds, state: state, in: ctx) }
-        if hover && !row.selected { Layers.draw("row.hover", box, within: bounds, state: state, in: ctx) }
         let padY = Tok.Size.rowPad[0], padX = rowPadX
+        let text = [NSRect(x: padX, y: top + padY, width: contentWidth - 2 * padX, height: height - 2 * padY)]
+        Layers.draw("row", box, within: bounds, text: text, state: state, in: ctx)
+        if row.selected { Layers.draw("row.selected", box, within: bounds, text: text, state: state, in: ctx) }
+        if hover && !row.selected { Layers.draw("row.hover", box, within: bounds, text: text, state: state, in: ctx) }
         let gapY = Tok.Size.rowGap[0], gapX = Tok.Size.rowGap[1]
         let left = padX, right = contentWidth - padX
         let col2 = left + Tok.Size.iconSize + gapX

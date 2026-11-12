@@ -5,6 +5,10 @@ use std::collections::HashMap;
 
 pub const MAX_LAYERS: usize = 64;
 pub const MAX_PRIMS: usize = 16;
+/// Shapes for the whole chain, and the costly ones each slot may have: a slot is drawn once per row.
+pub const MAX_TOTAL_PRIMS: usize = 256;
+pub const MAX_SLOT_SHADOWS: usize = 4;
+pub const MAX_SLOT_GRADIENTS: usize = 4;
 pub const MAX_PATH_CMDS: usize = 256;
 pub const MAX_COORD: f64 = 400.0;
 pub const MAX_IMAGES: usize = 8;
@@ -174,9 +178,11 @@ pub fn parse(text: &str, files: &[ThemeFile]) -> LayerSet {
 pub fn parse_chain(sources: &[ThemeSource]) -> LayerSet {
     let mut out = LayerSet { layers: Vec::new(), images: Vec::new(), problems: Vec::new() };
     let mut decoded = 0;
-    for src in sources {
+    // Every [[layer]] counts, a skipped or replacing one too, so a long file can't make the parser do more.
+    let mut seen = 0;
+    'chain: for src in sources {
         let file = clip(&src.name);
-        let table: toml::Table = match toml::from_str(&src.toml) {
+        let table: toml::Table = match toml::from_str(&layer_tables(&src.toml)) {
             Ok(t) => t,
             Err(e) => {
                 out.problems.push(format!("{file}: layers: the file doesn't parse: {}", e.message()));
@@ -188,9 +194,15 @@ pub fn parse_chain(sources: &[ThemeSource]) -> LayerSet {
             out.problems.push(format!("{file}: layer: not an array of tables ([[layer]])"));
             continue;
         };
-        let mut cx = Cx { files: &src.files, images: &mut out.images, decoded, problems: &mut out.problems, names: HashMap::new() };
+        let mut cx =
+            Cx { files: &src.files, images: &mut out.images, decoded, problems: &mut out.problems, names: HashMap::new(), refused: HashMap::new() };
         for (i, v) in raw.iter().enumerate() {
             let at = format!("{file}: layer {}", i + 1);
+            seen += 1;
+            if seen > MAX_LAYERS {
+                cx.bad(&at, format!("more than {MAX_LAYERS} layers; the rest are skipped"));
+                break 'chain;
+            }
             let Some(t) = v.as_table() else {
                 cx.bad(&at, "not a table");
                 continue;
@@ -198,16 +210,79 @@ pub fn parse_chain(sources: &[ThemeSource]) -> LayerSet {
             let Some(l) = cx.layer(t, &at) else { continue };
             if let Some(old) = l.id.as_ref().and_then(|id| out.layers.iter_mut().find(|o| o.id.as_ref() == Some(id))) {
                 *old = l;
-            } else if out.layers.len() == MAX_LAYERS {
-                cx.bad(&at, format!("more than {MAX_LAYERS} layers; the rest are skipped"));
-                break;
             } else {
                 out.layers.push(l);
             }
         }
         decoded = cx.decoded;
     }
+    budget(&mut out);
     out
+}
+
+/// Drops the shapes over `MAX_TOTAL_PRIMS` for the chain and over each slot's shadow and gradient caps, in
+/// drawing order, then any layer left empty.
+fn budget(out: &mut LayerSet) {
+    let (mut total, mut costly) = (0, HashMap::<(String, &str), usize>::new());
+    for (i, l) in out.layers.iter_mut().enumerate() {
+        let at = format!("layer {} ({})", l.id.as_deref().map(clip).unwrap_or_else(|| (i + 1).to_string()), l.slot);
+        l.prims.retain(|p| {
+            let cap = match p.kind.as_str() {
+                "shadow" => Some(("shadow", MAX_SLOT_SHADOWS)),
+                "gradient" => Some(("gradient", MAX_SLOT_GRADIENTS)),
+                _ => None,
+            };
+            if total == MAX_TOTAL_PRIMS {
+                out.problems.push(format!("{at}: more than {MAX_TOTAL_PRIMS} shapes in the theme; {} skipped", p.kind));
+                return false;
+            }
+            if let Some((kind, max)) = cap {
+                let n = costly.entry((l.slot.clone(), kind)).or_default();
+                if *n == max {
+                    out.problems.push(format!("{at}: more than {max} {kind}s in {}; skipped", l.slot));
+                    return false;
+                }
+                *n += 1;
+            }
+            total += 1;
+            true
+        });
+    }
+    out.layers.retain(|l| !l.prims.is_empty());
+}
+
+/// Only the `[[layer]]` tables of a theme file, other lines blanked so errors keep their line numbers. The rest
+/// is Haunt's flat key syntax, where `ornament` and `ornament.dim` may sit side by side, and isn't strict TOML.
+fn layer_tables(text: &str) -> String {
+    let is_layer = |s: &str| s.strip_prefix("layer").is_some_and(|r| r.is_empty() || r.starts_with(['.', ' ', '=', ']']));
+    let (mut root, mut keep) = (true, false);
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let t = line.trim_start();
+        let header = table_header(line);
+        if let Some(name) = &header {
+            (root, keep) = (false, is_layer(name));
+        }
+        // A root `layer` key, or a broken `[[layer` header, is kept for TOML to refuse.
+        let stray = header.is_none() && (root && is_layer(t) || is_layer(t.trim_start_matches('[')) && t.starts_with('['));
+        if keep || stray {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// The name in a `[table]` or `[[table]]` header line, spaces removed; None for any other line.
+fn table_header(line: &str) -> Option<String> {
+    let t = line.trim();
+    let (open, close) = if t.starts_with("[[") { ("[[", "]]") } else { ("[", "]") };
+    let inner = t.strip_prefix(open)?;
+    let end = inner.find(close)?;
+    let rest = inner[end + close.len()..].trim_start();
+    let name: String = inner[..end].chars().filter(|c| *c != ' ').collect();
+    let plain = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || "_-.\"".contains(c));
+    (plain && (rest.is_empty() || rest.starts_with('#'))).then_some(name)
 }
 
 struct Cx<'a> {
@@ -216,6 +291,8 @@ struct Cx<'a> {
     decoded: usize,
     problems: &'a mut Vec<String>,
     names: HashMap<String, u32>,
+    /// Images already refused, by name: a refusal isn't decoded again for each layer naming it.
+    refused: HashMap<String, String>,
 }
 
 impl Cx<'_> {
@@ -523,6 +600,21 @@ impl Cx<'_> {
         if let Some(&i) = self.names.get(name) {
             return Ok(i);
         }
+        if let Some(why) = self.refused.get(name) {
+            return Err(why.clone());
+        }
+        let decoded = self.load(name);
+        let (width, height, rgba) = decoded.inspect_err(|why| {
+            self.refused.insert(name.to_owned(), why.clone());
+        })?;
+        self.decoded += rgba.len();
+        let i = self.images.len() as u32;
+        self.images.push(LayerImage { name: name.to_owned(), width, height, rgba });
+        self.names.insert(name.to_owned(), i);
+        Ok(i)
+    }
+
+    fn load(&self, name: &str) -> Result<(u32, u32, Vec<u8>), String> {
         if self.images.len() == MAX_IMAGES {
             return Err(format!("more than {MAX_IMAGES} images"));
         }
@@ -530,17 +622,12 @@ impl Cx<'_> {
         if f.bytes.len() > MAX_PNG_BYTES {
             return Err(format!("over {} KB", MAX_PNG_BYTES >> 10));
         }
-        let (width, height, rgba) = decode_png(&f.bytes)?;
-        if self.decoded + rgba.len() > MAX_DECODED_BYTES {
-            return Err(format!("the images come to over {} MB decoded", MAX_DECODED_BYTES >> 20));
-        }
-        self.decoded += rgba.len();
-        let i = self.images.len() as u32;
-        self.images.push(LayerImage { name: name.to_owned(), width, height, rgba });
-        self.names.insert(name.to_owned(), i);
-        Ok(i)
+        decode_png(&f.bytes, MAX_DECODED_BYTES - self.decoded)
+            .map_err(|e| if e == OVER_BUDGET { format!("the images come to over {} MB decoded", MAX_DECODED_BYTES >> 20) } else { e })
     }
 }
+
+const OVER_BUDGET: &str = "over the decoding budget";
 
 /// Slots whose content includes text Haunt draws on top.
 pub fn text_slot(slot: &str) -> bool {
@@ -727,9 +814,10 @@ enum Tok {
     N(f64),
 }
 
-/// `png` decoded to straight-alpha RGBA, at most `MAX_PNG_PIXELS` each way; animated PNGs are refused.
+/// `png` decoded to straight-alpha RGBA, at most `MAX_PNG_PIXELS` each way and `budget` bytes decoded, both
+/// checked before anything is allocated; animated PNGs are refused.
 /// TODO(host-b): share `plugin_fx::decode_png` once it lands.
-pub fn decode_png(png: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+pub fn decode_png(png: &[u8], budget: usize) -> Result<(u32, u32, Vec<u8>), String> {
     let bad = |e: png::DecodingError| format!("a PNG that doesn't decode: {e}");
     let limits = png::Limits { bytes: (MAX_PNG_PIXELS * MAX_PNG_PIXELS * 4) as usize };
     let mut d = png::Decoder::new_with_limits(std::io::Cursor::new(png), limits);
@@ -741,6 +829,9 @@ pub fn decode_png(png: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     }
     if r.info().animation_control.is_some() {
         return Err("an animated PNG".into());
+    }
+    if w as usize * h as usize * 4 > budget {
+        return Err(OVER_BUDGET.into());
     }
     let mut buf = vec![0; r.output_buffer_size().ok_or("a PNG too large to decode")?];
     let info = r.next_frame(&mut buf).map_err(bad)?;
@@ -935,6 +1026,53 @@ glow = true
     }
 
     #[test]
+    fn the_rest_of_the_file_may_use_flat_keys() {
+        let set = parse(
+            "[app]\nornament = \"#ffffff\"\nornament.dim = \"#888888\"\n\n[[layer]] # a comment\nslot = \"sidebar\"\n  [[layer.draw]]\n  kind = \"gradient\"\n  stops = [\n    \"#000000\",\n    \"#ffffff\",\n  ]\n\n[effects]\nrow.select = \"none\"\nrow = 1\n",
+            &[],
+        );
+        assert_eq!(set.layers.len(), 1, "{:?}", set.problems);
+        assert!(set.problems.is_empty(), "{:?}", set.problems);
+        assert_eq!(table_header("[[ layer.draw ]]").as_deref(), Some("layer.draw"));
+        assert_eq!(table_header("  [5, 6]"), None);
+    }
+
+    #[test]
+    fn costly_shapes_and_all_shapes_are_budgeted() {
+        let shapes = |slot: &str, kind: &str, n: usize| {
+            let draw = match kind {
+                "shadow" => "  [[layer.draw]]\n  kind = \"shadow\"\n  color = \"#000000\"\n  blur = 12\n",
+                "gradient" => "  [[layer.draw]]\n  kind = \"gradient\"\n  stops = [\"#000000\", \"#ffffff\"]\n",
+                _ => "  [[layer.draw]]\n  kind = \"rect\"\n  fill = \"#000000\"\n",
+            };
+            format!("[[layer]]\nslot = \"{slot}\"\n{}", draw.repeat(n))
+        };
+        let s = one(&(shapes("row", "shadow", 3) + &shapes("row", "shadow", 3) + &shapes("sidebar", "shadow", 4) + &shapes("row", "gradient", 5)));
+        let count = |slot: &str, kind: &str| s.layers.iter().filter(|l| l.slot == slot).flat_map(|l| &l.prims).filter(|p| p.kind == kind).count();
+        assert_eq!((count("row", "shadow"), count("sidebar", "shadow"), count("row", "gradient")), (4, 4, 4), "{:?}", s.problems);
+        assert_eq!(s.problems.len(), 3);
+        let s = one(&shapes("sidebar", "rect", 16).repeat(17));
+        assert_eq!(s.layers.iter().map(|l| l.prims.len()).sum::<usize>(), MAX_TOTAL_PRIMS);
+        assert_eq!(s.layers.len(), 16, "an emptied layer is dropped");
+    }
+
+    #[test]
+    fn skipped_layers_count_toward_the_cap() {
+        let bad = "[[layer]]\nslot = \"nowhere\"\n".repeat(MAX_LAYERS);
+        let s = one(&(bad + "[[layer]]\nslot = \"sidebar\"\n  [[layer.draw]]\n  kind = \"rect\"\n  fill = \"#000000\"\n"));
+        assert!(s.layers.is_empty() && s.problems.last().unwrap().contains("more than 64 layers"), "{:?}", s.problems.last());
+    }
+
+    #[test]
+    fn a_refused_image_is_refused_once_and_decoding_is_budgeted_first() {
+        let img = |name: &str| format!("[[layer]]\nslot = \"window.bg\"\n  [[layer.draw]]\n  kind = \"image\"\n  file = \"{name}\"\n");
+        let s = parse(&img("x.png").repeat(3), &[ThemeFile { name: "x.png".into(), bytes: b"not a png".to_vec() }]);
+        assert_eq!(s.problems.iter().filter(|p| p.contains("doesn't decode")).count(), 3, "{:?}", s.problems);
+        assert_eq!(decode_png(&png(512, 512), 512 * 512 * 4 - 1), Err(OVER_BUDGET.into()));
+        assert!(decode_png(&png(512, 512), 512 * 512 * 4).is_ok());
+    }
+
+    #[test]
     fn images_are_plain_names_from_the_package_and_capped() {
         let img = |name: &str| format!("[[layer]]\nslot = \"window.bg\"\n  [[layer.draw]]\n  kind = \"image\"\n  file = \"{name}\"\n");
         let ok = [ThemeFile { name: "a.png".into(), bytes: png(2, 2) }];
@@ -984,7 +1122,9 @@ glow = true
     #[test]
     fn a_chain_replaces_by_id_and_caps_the_whole_chain() {
         let src = |name: &str, toml: String, files: Vec<ThemeFile>| ThemeSource { name: name.into(), toml, files };
-        let layer = |id: &str, fill: &str| format!("[[layer]]\nid = \"{id}\"\nslot = \"sidebar\"\n  [[layer.draw]]\n  kind = \"rect\"\n  fill = \"{fill}\"\n");
+        let layer = |id: &str, fill: &str| {
+            format!("[[layer]]\nid = \"{id}\"\nslot = \"sidebar\"\n  [[layer.draw]]\n  kind = \"rect\"\n  fill = \"{fill}\"\n")
+        };
         let s = parse_chain(&[
             src("parent.toml", layer("a", "#111111") + &layer("b", "#222222"), vec![]),
             src("child.toml", layer("a", "#333333") + &layer("c", "#444444"), vec![]),

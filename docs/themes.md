@@ -163,7 +163,7 @@ opacity = 1.0              # 0–1
 | `pane.backdrop` | behind the terminal, at most 12% opaque, only when Ghostty's `background-opacity` is under 1 |
 | `pane.frame` | a 4 pt ring around the terminal, never inside it |
 | `titlebar`, `sidebar`, `sidebar.footer`, `palette`, `palette.field` | those areas |
-| `lights` | each traffic light; `index = 0`–`2` picks one |
+| `lights` | each traffic light, drawn under it (a ring may spill 4 pt past it); `index = 0`–`2` picks one |
 | `label.group` | a group label's line; its text is a text run |
 | `row`, `row.selected`, `row.hover` | a sidebar row's box; they may spill 6 pt past it (shadows), never past the sidebar |
 | `palette.row.selected`, `palette.row.hover` | a palette entry, with the same 6 pt |
@@ -190,8 +190,8 @@ opacity = 1.0              # 0–1
 
 **What Haunt enforces.**
 - **Clipping:** every layer is clipped to its slot; no slot reaches into the terminal, and `pane.backdrop` is under it.
-- **Readable text:** in a slot with text, every fill, gradient stop (and the blend between stops) and stroke wider than 2 pt is laid over the slot's background, and each of the slot's text colours must still read at 3:1 on it; a layer that fails is skipped and logged. Images and patterns in such a slot are drawn at most 12% opaque.
-- **Caps:** 64 layers for the whole `extends` chain, 16 shapes a layer, 8 images a chain, each PNG up to 256 KB and 512×512 px, 4 MB decoded in all. Images are PNG only, with a plain `[a-z0-9-].png` name in the theme's own folder; no SVG, no animated PNG.
+- **Readable text:** in a slot with text, every colour a shape paints (fills, strokes of any width, gradient stops and the blends between them, bevel edges, shadows, pattern dots) is laid over the slot's background, and each of the slot's text colours must still read at 3:1 on it. Wherever a shape with a colour that fails paints over the slot's text, its layer is skipped and logged once; the same shape along an edge clear of the text is drawn. A text slot's images and patterns are drawn together, under its other shapes, at most 12% opaque as a group; so is everything in `pane.backdrop`.
+- **Caps:** 64 `[[layer]]` tables for the whole `extends` chain (skipped ones count), 16 shapes a layer, 256 shapes in all, 4 shadows and 4 gradients a slot, 8 images a chain, each PNG up to 256 KB and 512×512 px, 4 MB decoded in all. Images are PNG only, with a plain `[a-z0-9-].png` name in the theme's own folder; no SVG, no animated PNG.
 - **No animation, no text.**
 - **Bad input:** an unknown slot, kind, state or key, a value out of range or of the wrong type, is logged once per save and skipped: the key, else the shape, else the layer. The rest of the theme still applies.
 

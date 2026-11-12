@@ -5,7 +5,8 @@ import AppKit
 /// in, so a capture never shows on screen. HAUNT_SNAPSHOT=<png> then draws the main window, with the windows
 /// over it (the palette), into that file at 2× and quits.
 enum Offscreen {
-    static let on = ProcessInfo.processInfo.environment["HAUNT_OFFSCREEN"] == "1"
+    /// Only for a fixture: the fixture build without one runs as the app does.
+    static var on: Bool { Fixture.current != nil && ProcessInfo.processInfo.environment["HAUNT_OFFSCREEN"] == "1" }
 
     /// Before any window exists: all ordering goes through `order(_:relativeTo:)`.
     static func install() {
@@ -24,7 +25,7 @@ enum Offscreen {
             out.size = size
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: out)
-            let others = NSApp.orderedWindows.reversed().filter { $0 !== main && $0.isVisible && $0.frame.intersects(main.frame) }
+            let others = NSApp.windows.filter { $0 !== main && $0.isVisible && $0.frame.intersects(main.frame) }.sorted { $0.level.rawValue < $1.level.rawValue }
             for w in [main] + others {
                 guard let v = w.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { continue }
                 v.cacheDisplay(in: v.bounds, to: rep)

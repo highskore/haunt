@@ -116,6 +116,10 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
         if boxes { return drawBoxes() }
         for i in 0..<3 {
             let r = lightRect(i)
+            // Under the light, so a theme can frame it but never hide or recolour it.
+            if let ctx = NSGraphicsContext.current?.cgContext {
+                Layers.draw("lights", r, within: bounds, state: Layers.state(self, hover: lightsHover), index: i, in: ctx)
+            }
             if Theme.current.effects.lightsShape == "squares" && !lightsHover {
                 // Squares in the window's colour edged in the lights'; the close light's filled with it.
                 let hl = Tok.App.hairline, sq = NSBezierPath(rect: r.insetBy(dx: hl / 2, dy: hl / 2))
@@ -140,9 +144,6 @@ final class TitleBarView: NSView, NSViewToolTipOwner {
             }
             (lightsHover || Theme.current.effects.titlebarLights == "color" ? Tok.Lights.fill[i] : Tok.Color.lights).setFill()
             NSBezierPath(ovalIn: r).fill()
-            if let ctx = NSGraphicsContext.current?.cgContext {
-                Layers.draw("lights", r, within: bounds, state: Layers.state(self, hover: lightsHover), index: i, in: ctx)
-            }
             guard lightsHover else { continue }
             Tok.Lights.glyph[i].set()
             let c = NSPoint(x: r.midX, y: r.midY), k = r.width * Tok.Lights.glyphHalf, bar = k * Tok.Lights.barScale

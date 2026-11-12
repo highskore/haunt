@@ -28,6 +28,7 @@ struct Canvas {
         return Int(d[(y * ctx.bytesPerRow) + x * 4 + 3])
     }
     func painted() -> Int { (0..<100).reduce(0) { n, y in n + (0..<100).filter { alpha(x: $0, y: y) > 0 }.count } }
+    func maxAlpha() -> Int { (0..<100).flatMap { y in (0..<100).map { alpha(x: $0, y: y) } }.max() ?? 0 }
 }
 func canvas() -> Canvas {
     let ctx = CGContext(data: nil, width: 100, height: 100, bitsPerComponent: 8, bytesPerRow: 400, space: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -600,21 +601,59 @@ do {
     check(seen[1].files.map(\.0) == ["mark.png"] && seen[1].files[0].1 == Data([1, 2, 3]) && seen[0].files.isEmpty, "only named PNGs are read")
     check(lp.layers.count == 1 && lp.layers[0].prims[0].fill?.themeHex == "#0a0a0aff", "@tokens resolve against the finished theme")
     check(lp.problems.contains("from core") && lp.problems.contains { $0.contains("no.such.token") }, "problems: \(lp.problems)")
+    seen = []
+    let swatch = LoadedTheme.load("lp", userDir: home, bundled: bundled, layers: false)
+    check(seen.isEmpty && swatch.layers.isEmpty, "a swatch neither parses layers nor reads PNGs")
     LoadedTheme.layerParser = nil
 
-    // A flat colour under text must leave the text readable; a thin stroke and a bitmap needn't.
+    // A theme's PNGs are read only as regular files: not through a link, never blocking on a FIFO.
+    try! FileManager.default.createSymbolicLink(at: user.appendingPathComponent("link.png"), withDestinationURL: user.appendingPathComponent("mark.png"))
+    mkfifo(user.appendingPathComponent("pipe.png").path, 0o600)
+    write(user, "lf", "[[layer]]\nslot = \"sidebar\"\n  [[layer.draw]]\n  kind = \"image\"\n  file = \"link.png\"\n  # \"pipe.png\" \"mark.png\"\n")
+    check(LoadedTheme.layerFiles(user.appendingPathComponent("lf.toml")).map(\.0) == ["mark.png"], "links and FIFOs are skipped")
+
+    // Every colour a layer paints over the slot's text must leave it readable, whatever its shape; edges away
+    // from the text may be any colour.
     let white = Theme()
     func resolved(_ slot: String, _ p: PrimSpec) -> ([ResolvedLayer], [String]) {
         Layers.resolve([LayerSpec(slot: slot, prims: [p])], images: [], theme: white)
     }
     let primary = white.color.textPrimary.themeHex
-    check(resolved("row.selected", PrimSpec(kind: "rect", fill: primary)).0.isEmpty, "a fill the size of the text's own colour is dropped")
-    check(resolved("row.selected", PrimSpec(kind: "rect", fill: primary)).1.first?.contains("color.text.primary") == true, "and says why")
-    check(resolved("row.selected", PrimSpec(kind: "rect", stroke: primary)).0.count == 1, "a 1 pt stroke isn't held to it")
-    check(resolved("row.selected", PrimSpec(kind: "rect", stroke: primary, width: 4)).0.isEmpty, "a wide one is")
-    check(resolved("row.selected", PrimSpec(kind: "gradient", stops: [.init(color: "#00000000", at: 0), .init(color: primary, at: 1)])).0.isEmpty,
-          "nor may a gradient's stops")
-    check(resolved("window.bg", PrimSpec(kind: "rect", fill: primary)).0.count == 1, "a slot without text may use any colour")
+    func drawn(_ slot: String, _ prims: [PrimSpec], text: [CGRect]?, bounds: CGRect = CGRect(x: 10, y: 10, width: 80, height: 40)) -> Int {
+        let (l, _) = Layers.resolve([LayerSpec(id: "probe", slot: slot, prims: prims)], images: [], theme: white)
+        Layers.set(l, source: LayerSource())
+        let c = canvas()
+        Layers.draw(slot, bounds, textRun: bounds, text: text, in: c.ctx)
+        return c.painted()
+    }
+    let inner = [CGRect(x: 20, y: 20, width: 60, height: 20)]
+    check(resolved("row.selected", PrimSpec(kind: "rect", fill: primary)).0[0].prims[0].unreadable?.contains("color.text.primary") == true,
+          "a fill in the text's own colour is marked unreadable, and says why")
+    check(drawn("row.selected", [PrimSpec(kind: "rect", fill: primary)], text: inner) == 0 && Layers.skipped.contains { $0.contains("probe") },
+          "so its layer is skipped over the text, and logged")
+    check(drawn("row.selected", [PrimSpec(kind: "rect", stroke: primary)], text: [CGRect(x: 5, y: 30, width: 40, height: 10)]) == 0,
+          "a 1 pt stroke across the text too")
+    check(drawn("row.selected", [PrimSpec(kind: "rect", stroke: primary, width: 0.5)], text: [CGRect(x: 30, y: 25, width: 40, height: 10)]) > 0,
+          "but an edge clear of the text is drawn")
+    check(drawn("row.selected", [PrimSpec(kind: "rect", y: SpanSpec(mode: "top", b: 1), fill: "#ffffff33")], text: inner) > 0,
+          "so is a top highlight above it")
+    check(drawn("row.selected", [PrimSpec(kind: "gradient", stops: [.init(color: "#00000000", at: 0), .init(color: primary, at: 1)])], text: inner) == 0,
+          "a gradient's stops are held to it")
+    check(drawn("row.selected", [PrimSpec(kind: "shadow", radius: 4, blur: 12, color: primary)], text: [CGRect(x: 30, y: 25, width: 40, height: 10)]) > 0,
+          "a shadow paints only outside its shape")
+    check(drawn("row.selected", [PrimSpec(kind: "shadow", x: SpanSpec(mode: "left", b: 4), radius: 2, blur: 12, color: primary)], text: inner) == 0,
+          "and is held to the text it reaches")
+    check(drawn("row.selected", [PrimSpec(kind: "bevel", rings: [[primary, primary, primary, primary]])], text: [CGRect(x: 10, y: 10, width: 80, height: 40)]) == 0,
+          "bevel edges too")
+    let rings = (0..<8).map { i in PrimSpec(kind: "rect", x: SpanSpec(a: Double(i), b: Double(i)), y: SpanSpec(a: Double(i) / 2, b: Double(i) / 2),
+                                            stroke: "@needs", width: 2) }
+    check(drawn("status.needs", rings, text: nil) == 0, "stacked thin strokes can't hide a needs-you status")
+    check(drawn("window.bg", [PrimSpec(kind: "rect", fill: primary)], text: nil) > 0, "a slot without text may use any colour")
+    let glassLike = [PrimSpec(kind: "shadow", radius: 9, blur: 12, offset: [0, 4], color: "#00000007"),
+                     PrimSpec(kind: "rect", x: SpanSpec(a: 6, b: 6), y: SpanSpec(mode: "top", b: 1), fill: "#ffffff33"),
+                     PrimSpec(kind: "rect", radius: 9, stroke: "#ffffff38", width: 0.5)]
+    _ = drawn("row.selected", glassLike, text: inner)
+    check(!Layers.skipped.contains { $0.contains("probe") }, "Glass's raised row draws: \(Layers.skipped)")
 
     // Clipped to the slot (bleed included), never into the excluded terminal, and states pick layers.
     func layer(_ slot: String, _ p: PrimSpec, when: [String] = [], opacity: Double = 1) -> ResolvedLayer {
@@ -636,7 +675,7 @@ do {
     check(c.alpha(x: 5, y: 5) == 255 && c.alpha(x: 45, y: 5) == 0, "and draws, clipped, in a focused one")
 
     // Bitmaps under text, and the backdrop behind the terminal, are kept faint; the backdrop only shows through.
-    let dots = PrimSpec(kind: "pattern", cell: [1, 1], dots: [.init(color: "#ffffff", x: 0, y: 0)])
+    let dots = PrimSpec(kind: "pattern", cell: [1, 1], dots: [.init(color: "#000000", x: 0, y: 0)])
     Layers.set([layer("sidebar", dots), layer("pane.backdrop", everywhere), layer("bar.track", dots)], source: LayerSource())
     c = canvas()
     Layers.draw("sidebar", CGRect(x: 0, y: 0, width: 40, height: 40), in: c.ctx)
@@ -652,6 +691,17 @@ do {
     Layers.terminalSeeThrough = true
     Layers.draw("pane.backdrop", CGRect(x: 0, y: 0, width: 40, height: 40), in: c.ctx)
     check((1...32).contains(c.alpha(x: 5, y: 5)) && c.alpha(x: 45, y: 5) == 0, "behind a see-through one, at most 12%: \(c.alpha(x: 5, y: 5))")
+    // However many shapes stack, a faint slot stays faint as a whole.
+    Layers.set([LayerSpec(slot: "pane.backdrop", prims: Array(repeating: everywhere, count: 16)),
+                LayerSpec(slot: "pane.backdrop", prims: Array(repeating: everywhere, count: 16)),
+                LayerSpec(slot: "sidebar", prims: Array(repeating: dots, count: 16))].flatMap { Layers.resolve([$0], images: [], theme: white).0 },
+               source: LayerSource())
+    c = canvas()
+    Layers.draw("pane.backdrop", CGRect(x: 0, y: 0, width: 100, height: 100), in: c.ctx)
+    check(c.maxAlpha() <= 31, "32 stacked backdrop fills stay at most 12%: \(c.maxAlpha())")
+    c = canvas()
+    Layers.draw("sidebar", CGRect(x: 0, y: 0, width: 100, height: 100), in: c.ctx)
+    check((1...31).contains(c.maxAlpha()), "16 stacked patterns under text too: \(c.maxAlpha())")
     Layers.terminalSeeThrough = false
 
     // Geometry: anchors, text anchors, and corners turning inward.
@@ -672,6 +722,55 @@ do {
     check(c.alpha(x: 3, y: 3) == 0 && c.alpha(x: 60, y: 3) == 0 && c.alpha(x: 32, y: 32) == 0, "pointing into each corner, nowhere else")
     Layers.set([], source: LayerSource())
     Layers.recorder = nil
+
+    // The costliest theme core lets through (256 shapes, each slot's 4 shadows and 4 gradients, the rest
+    // 256-command paths at the widest stroke) draws a whole window at 2× quickly.
+    let zigzag = (0..<255).map { i in PrimSpec.Cmd(op: i == 0 ? "M" : "L", pts: [Double(i % 2) * 400, Double(i) * 1.5]) } + [.init(op: "Z", pts: [])]
+    var worst: [LayerSpec] = []
+    for slot in Layers.slots {
+        worst.append(LayerSpec(slot: slot, prims: Array(repeating: PrimSpec(kind: "shadow", radius: 8, blur: 12, offset: [6, 6], color: "#00000040"), count: 4)
+                               + Array(repeating: PrimSpec(kind: "gradient", angle: 45, stops: [.init(color: "#ffffff10", at: 0), .init(color: "#00000010", at: 1)]), count: 4)))
+    }
+    let paths = 256 - worst.count * 8
+    for k in 0..<paths { worst.append(LayerSpec(slot: Layers.slots[k % Layers.slots.count], prims: [PrimSpec(kind: "path", stroke: "#ffffff08", width: 8, path: zigzag, view: [400, 400])])) }
+    Layers.set(Layers.resolve(worst, images: [], theme: white).0, source: LayerSource())
+    Layers.terminalSeeThrough = true
+    // A window's own backing format.
+    let big = CGContext(data: nil, width: 2200, height: 1400, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)!
+    big.scaleBy(x: 2, y: 2)
+    let window = CGRect(x: 0, y: 0, width: 1100, height: 700), pane = CGRect(x: 262, y: 44, width: 838, height: 656)
+    func drawWindow() {
+    Layers.draw("window.bg", window, exclude: pane, in: big)
+    Layers.draw("pane.backdrop", pane, within: pane, in: big)
+    Layers.draw("pane.frame", pane.insetBy(dx: -4, dy: -4), exclude: pane, in: big)
+    Layers.draw("titlebar", CGRect(x: 0, y: 0, width: 1100, height: 44), in: big)
+    for i in 0..<3 { Layers.draw("lights", CGRect(x: 20 + 20 * i, y: 16, width: 12, height: 12), index: i, in: big) }
+    Layers.draw("sidebar", CGRect(x: 0, y: 44, width: 262, height: 656), in: big)
+    Layers.draw("sidebar.footer", CGRect(x: 0, y: 650, width: 262, height: 50), in: big)
+    for g in 0..<3 { Layers.draw("label.group", CGRect(x: 0, y: 50 + 200 * g, width: 261, height: 40), in: big) }
+    for r in 0..<12 {
+        let box = CGRect(x: 8, y: 90 + 46 * r, width: 245, height: 44)
+        for slot in ["row", r == 0 ? "row.selected" : "row.hover", "status.needs"] { Layers.draw(slot, box, in: big) }
+        Layers.draw("icon", CGRect(x: 16, y: box.minY + 8, width: 18, height: 18), in: big)
+        Layers.draw("bar.track", CGRect(x: 40, y: box.maxY - 6, width: 200, height: 2), in: big)
+        Layers.draw("bar.fill", CGRect(x: 40, y: box.maxY - 6, width: 120, height: 2), in: big)
+    }
+    Layers.draw("palette", CGRect(x: 700, y: 300, width: 380, height: 380), in: big)
+    Layers.draw("palette.field", CGRect(x: 700, y: 300, width: 380, height: 40), in: big)
+    for r in 0..<8 { Layers.draw(r == 0 ? "palette.row.selected" : "palette.row.hover", CGRect(x: 704, y: 344 + 40 * r, width: 372, height: 36), in: big) }
+    }
+    var started = Date()
+    drawWindow()
+    let first = Date().timeIntervalSince(started) * 1000
+    started = Date()
+    let hits = Layers.cacheHits
+    drawWindow()
+    let ms = Date().timeIntervalSince(started) * 1000
+    check(ms < 50 && Layers.cacheHits > hits, "the costliest theme redraws a window in \(Int(ms)) ms")
+    print("worst-case window: first \(Int(first)) ms, then \(Int(ms)) ms")
+    Layers.set([], source: LayerSource())
+    Layers.terminalSeeThrough = false
 
     // Under text by construction: a function that draws slots draws one before any text. Layers are clipped to
     // their slot, so a later slot's layers can't reach text drawn earlier in another.

@@ -378,7 +378,8 @@ struct LoadedTheme {
     /// `name` from `~/.haunt/themes`, else from a theme plugin, else from the app's bundled themes; `extends`
     /// chains apply ancestors first. `activate` gets the chain's plugin fonts before any font token is checked.
     /// An unknown or broken theme falls back to the default, with the reason in `problems`.
-    static func load(_ name: String?, userDir: URL, plugins: [String: PluginTheme] = [:], bundled: URL?,
+    /// `layers` false leaves the theme's layers out, unparsed and their PNGs unread (a picker's swatch).
+    static func load(_ name: String?, userDir: URL, plugins: [String: PluginTheme] = [:], bundled: URL?, layers: Bool = true,
                      activate: (_ registered: [URL], _ uiOnly: [URL]) -> Void = { _, _ in }) -> LoadedTheme {
         var out = LoadedTheme()
         guard let name, name != "bw" else { return out }
@@ -436,7 +437,7 @@ struct LoadedTheme {
         out.problems += out.enforceContrast()
         let opacity = out.ghostty["background-opacity"]?.strings.first.flatMap(Double.init) ?? 1
         out.theme.app.terminalSeeThrough = opacity < 1 && out.theme.color.windowBg.alphaComponent < 1
-        if let parse = layerParser {
+        if layers, let parse = layerParser {
             let sources = chain.reversed().map { _, _, file, url in (name: file, toml: readTheme(url) ?? "", files: layerFiles(url)) }
             let (source, problems) = parse(sources)
             out.problems += problems
@@ -454,11 +455,21 @@ struct LoadedTheme {
         let names = Set(text.matches(of: #/"([a-z0-9-]{1,32}\.png)"/#).map { String($0.output.1) })
         return names.sorted().compactMap { name -> (String, Data)? in
             let file = url.deletingLastPathComponent().appendingPathComponent(name)
-            guard let h = try? FileHandle(forReadingFrom: file) else { return nil }
-            defer { try? h.close() }
-            guard let data = try? h.read(upToCount: maxImageBytes + 1) else { return nil }
-            return (name, data)
+            return regularFile(file.path, max: maxImageBytes).map { (name, $0) }
         }
+    }
+
+    /// A regular file's bytes, not followed through a link and never blocking on a FIFO; up to `max` + 1 bytes,
+    /// so core sees one that is too big as too big.
+    static func regularFile(_ path: String, max: Int) -> Data? {
+        let fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return nil }
+        var buf = [UInt8](repeating: 0, count: min(Int(st.st_size), max + 1))
+        let n = Darwin.read(fd, &buf, buf.count)
+        return n >= 0 ? Data(buf[..<n]) : nil
     }
 
     /// WCAG's ratio for large text and indicators.

@@ -391,7 +391,7 @@ final class HauntConfig {
 
     /// `id`'s tokens, for drawing a preview without switching to it.
     func theme(_ id: String) -> Theme {
-        LoadedTheme.load(id, userDir: dir, plugins: pluginThemes ?? [:], bundled: Self.bundledThemesDir).theme
+        LoadedTheme.load(id, userDir: dir, plugins: pluginThemes ?? [:], bundled: Self.bundledThemesDir, layers: false).theme
     }
 
     /// Reloads with a previewed theme, or with config.toml's again for nil; says what changed.

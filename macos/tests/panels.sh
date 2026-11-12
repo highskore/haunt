@@ -5,5 +5,5 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 mkdir -p build
 swiftc -module-name PanelsTest macos/Sources/PluginPanels.swift macos/Sources/Draw.swift macos/Sources/Tokens.swift \
-  macos/Sources/TokApp.swift macos/Sources/Theme.swift macos/Sources/Effects.swift macos/Sources/Config.swift macos/Sources/Blank.swift macos/Sources/Keys.swift macos/tests/panels/main.swift -o build/panels-test
+  macos/Sources/TokApp.swift macos/Sources/Theme.swift macos/Sources/Layers.swift macos/Sources/Effects.swift macos/Sources/Config.swift macos/Sources/Blank.swift macos/Sources/Keys.swift macos/tests/panels/main.swift -o build/panels-test
 build/panels-test

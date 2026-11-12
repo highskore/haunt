@@ -79,6 +79,9 @@ struct ResolvedLayer {
         var path: CGPath?
         /// A pattern's cell, drawn once.
         var tile: CGImage?
+        /// Why one of its colours would leave the slot's text unreadable; the layer is skipped wherever this
+        /// primitive paints over text.
+        var unreadable: String?
     }
 }
 
@@ -107,12 +110,11 @@ enum Layers {
         return t
     }()
 
-    /// Rows may shadow past their box by this much, still inside the sidebar.
-    static let bleed: [String: CGFloat] = ["row": 6, "row.selected": 6, "row.hover": 6, "palette.row.selected": 6, "palette.row.hover": 6]
-    /// Bitmaps under text, and anything behind the terminal, are kept this faint.
+    /// Rows may shadow past their box by this much, still inside the sidebar; a light may be ringed.
+    static let bleed: [String: CGFloat] = ["row": 6, "row.selected": 6, "row.hover": 6, "palette.row.selected": 6, "palette.row.hover": 6,
+                                           "lights": 4]
+    /// Bitmaps under text, and anything behind the terminal, are kept this faint, all of a slot's together.
     static let faintAlpha: CGFloat = 0.12
-    /// A stroke this thin can't hide a glyph, so its colour isn't held to the text's contrast.
-    static let thinStroke: CGFloat = 2
 
     /// The theme on screen's layers, by slot, in drawing order.
     private(set) static var current: [String: [ResolvedLayer]] = [:]
@@ -120,11 +122,17 @@ enum Layers {
     static var terminalSeeThrough = false
     /// Tests: called with each slot drawn and the clip it was drawn in, before its layers.
     static var recorder: ((String, CGRect) -> Void)?
+    /// Layers skipped while drawing because they would paint an unreadable colour over text, each said once.
+    private(set) static var skipped: Set<String> = []
+    /// Where a skip is said: the theme log.
+    static var report: (String) -> Void = { _ in }
 
     private(set) static var source = LayerSource()
 
     static func set(_ layers: [ResolvedLayer], source: LayerSource) {
         current = Dictionary(grouping: layers, by: \.slot)
+        skipped = []
+        cache = Cache()
         self.source = source
     }
 
@@ -140,9 +148,11 @@ enum Layers {
     }
 
     /// Draws `slot`'s layers into `bounds`, clipped to them (plus the slot's bleed, inside `within`), never into
-    /// `exclude` (the terminal). `textRun` is the slot's text, for text anchors. The caller draws its own text after.
+    /// `exclude` (the terminal). `textRun` is the slot's text, for text anchors; `text` is where the slot's text
+    /// lies (by default its text run, or the whole slot), which no unreadable colour may cover. The caller draws
+    /// its own text after.
     static func draw(_ slot: String, _ bounds: NSRect, within: NSRect? = nil, exclude: NSRect? = nil, textRun: NSRect? = nil,
-                     state: Set<String> = [], index: Int? = nil, in ctx: CGContext) {
+                     text: [NSRect]? = nil, state: Set<String> = [], index: Int? = nil, in ctx: CGContext) {
         guard let layers = current[slot] else { return }
         if slot == "pane.backdrop" && !terminalSeeThrough { return }
         let b = bleed[slot] ?? 0
@@ -150,6 +160,18 @@ enum Layers {
         if let within { clip = clip.intersection(within) }
         guard !clip.isEmpty else { return }
         recorder?(slot, clip)
+        let run = textRun ?? bounds
+        let textRects = Self.text[slot] == nil ? [] : text ?? [textRun ?? bounds]
+        let ids = layers.indices.filter { i in
+            let l = layers[i]
+            guard l.when.isSubset(of: state), l.index == nil || l.index == index else { return false }
+            guard let bad = l.prims.first(where: { p in p.unreadable != nil && covers(p, textRects, slot: bounds, textRun: run) }) else { return true }
+            let why = "\(l.id.map { "layer \($0)" } ?? "a layer") (\(slot)): \(bad.unreadable!) over its text; layer skipped"
+            if skipped.insert(why).inserted { report(why) }
+            return false
+        }
+        let shown = ids.map { layers[$0] }
+        guard !shown.isEmpty else { return }
         ctx.saveGState()
         defer { ctx.restoreGState() }
         if let exclude, exclude.intersects(clip) {
@@ -159,17 +181,135 @@ enum Layers {
         } else {
             ctx.clip(to: clip)
         }
-        let textSlot = text[slot] != nil
-        for layer in layers where layer.when.isSubset(of: state) && (layer.index == nil || layer.index == index) {
-            var alpha = layer.opacity
-            if slot == "pane.backdrop" { alpha = min(alpha, faintAlpha) }
-            for p in layer.prims {
-                let bitmap = p.spec.kind == "image" || p.spec.kind == "pattern"
-                ctx.saveGState()
-                ctx.setAlpha(textSlot && bitmap ? min(alpha, faintAlpha) : alpha)
-                paint(p, in: bounds, textRun: textRun ?? bounds, ctx: ctx)
-                ctx.restoreGState()
+        // Drawn once per size, state and pixel offset, then copied: a slot is drawn for every row and redraw.
+        let t = ctx.userSpaceToDeviceSpaceTransform, scale = (t.a * t.a + t.b * t.b).squareRoot()
+        let device = clip.applying(t).integral, area = device.applying(t.inverted())
+        func rel(_ r: NSRect) -> String { String(format: "%.3f,%.3f,%.3f,%.3f", r.minX - area.minX, r.minY - area.minY, r.width, r.height) }
+        let key = "\(slot)|\(ids)|\(scale)|\(rel(area))|\(rel(bounds))|\(rel(run))"
+        let image = cache.image(key) ?? {
+            let w = Int(device.width), h = Int(device.height)
+            guard w > 0, h > 0, w * h * 4 <= Cache.maxEntry,
+                  let c = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                    bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
+            c.translateBy(x: 0, y: CGFloat(h))
+            c.scaleBy(x: CGFloat(w) / area.width, y: -CGFloat(h) / area.height)
+            c.translateBy(x: -area.minX, y: -area.minY)
+            render(shown, slot: slot, bounds: bounds, run: run, ctx: c)
+            guard let img = c.makeImage() else { return nil }
+            cache.store(key, img)
+            return img
+        }()
+        guard let image else { return render(shown, slot: slot, bounds: bounds, run: run, ctx: ctx) }
+        ctx.translateBy(x: area.minX, y: area.maxY)
+        ctx.scaleBy(x: 1, y: -1)
+        // Pixel for pixel: the image was drawn on this context's pixel grid.
+        ctx.interpolationQuality = .none
+        ctx.draw(image, in: CGRect(origin: .zero, size: area.size))
+    }
+
+    /// Slots drawn already, as images; emptied with the theme.
+    private static var cache = Cache()
+
+    struct Cache {
+        static let maxEntry = 16 << 20, maxBytes = 64 << 20
+        private var entries: [String: (image: CGImage, used: Int)] = [:]
+        private var bytes = 0, clock = 0
+        private(set) var hits = 0
+
+        mutating func image(_ key: String) -> CGImage? {
+            guard let e = entries[key] else { return nil }
+            clock += 1
+            hits += 1
+            entries[key]?.used = clock
+            return e.image
+        }
+
+        mutating func store(_ key: String, _ image: CGImage) {
+            let size = image.bytesPerRow * image.height
+            while bytes + size > Self.maxBytes, let old = entries.min(by: { $0.value.used < $1.value.used }) {
+                bytes -= old.value.image.bytesPerRow * old.value.image.height
+                entries[old.key] = nil
             }
+            clock += 1
+            entries[key] = (image, clock)
+            bytes += size
+        }
+    }
+
+    static var cacheHits: Int { cache.hits }
+
+    /// `shown` into `ctx`, already clipped.
+    private static func render(_ shown: [ResolvedLayer], slot: String, bounds: NSRect, run: NSRect, ctx: CGContext) {
+        func paintAll(_ bitmaps: Bool?) {
+            for layer in shown {
+                for p in layer.prims where bitmaps == nil || isBitmap(p) == bitmaps {
+                    ctx.saveGState()
+                    ctx.setAlpha(layer.opacity)
+                    paint(p, in: bounds, textRun: run, ctx: ctx)
+                    ctx.restoreGState()
+                }
+            }
+        }
+        // A faint slot is one group at `faintAlpha`, however many shapes it stacks; so are a text slot's bitmaps,
+        // drawn first, under its shapes.
+        func faint(_ bitmaps: Bool?) {
+            ctx.saveGState()
+            ctx.setAlpha(faintAlpha)
+            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+            paintAll(bitmaps)
+            ctx.endTransparencyLayer()
+            ctx.restoreGState()
+        }
+        if slot == "pane.backdrop" { return faint(nil) }
+        guard text[slot] != nil else { return paintAll(nil) }
+        if shown.contains(where: { $0.prims.contains(where: isBitmap) }) { faint(true) }
+        paintAll(false)
+    }
+
+    private static func isBitmap(_ p: ResolvedLayer.Prim) -> Bool { p.spec.kind == "image" || p.spec.kind == "pattern" }
+
+    /// Whether `p` paints anywhere over `rects`.
+    static func covers(_ p: ResolvedLayer.Prim, _ rects: [NSRect], slot: NSRect, textRun: NSRect) -> Bool {
+        guard !rects.isEmpty else { return false }
+        let target = CGMutablePath()
+        for r in rects { target.addRect(r) }
+        return painted(p, slot: slot, textRun: textRun).contains { $0.intersects(target, using: .evenOdd) || target.intersects($0, using: .evenOdd) }
+    }
+
+    /// The areas `p` paints in the slot, as filled paths.
+    static func painted(_ p: ResolvedLayer.Prim, slot: NSRect, textRun: NSRect) -> [CGPath] {
+        let s = p.spec, f = frame(s, in: slot, textRun: textRun), w = CGFloat(s.width)
+        let shape = CGPath(roundedRect: f, cornerWidth: min(s.radius, f.width / 2), cornerHeight: min(s.radius, f.height / 2), transform: nil)
+        func stroked(_ path: CGPath) -> CGPath { path.copy(strokingWithWidth: w, lineCap: .butt, lineJoin: .miter, miterLimit: 10) }
+        switch s.kind {
+        case "rect":
+            return (p.fill == nil ? [] : [shape]) + (p.stroke == nil ? [] : [stroked(CGPath(rect: f.insetBy(dx: w / 2, dy: w / 2), transform: nil))])
+        case "line":
+            let line = CGMutablePath()
+            line.addRect(f.insetBy(dx: -w, dy: -w))
+            return [line]
+        case "gradient", "pattern":
+            return [shape]
+        case "bevel":
+            let ring = CGMutablePath()
+            ring.addRect(f)
+            ring.addRect(f.insetBy(dx: CGFloat(p.rings.count), dy: CGFloat(p.rings.count)))
+            return [ring]
+        case "shadow":
+            let reach = CGFloat(s.blur) + abs(CGFloat(s.offset[0])) + abs(CGFloat(s.offset[1]))
+            let ring = CGMutablePath()
+            ring.addRect(f.insetBy(dx: -reach, dy: -reach))
+            ring.addRect(f)
+            return [ring]
+        case "path":
+            guard let path = p.path, s.view.count == 2 else { return [] }
+            return placements(s, f, slot).flatMap { t, r -> [CGPath] in
+                var m = CGAffineTransform(translationX: r.minX, y: r.minY).scaledBy(x: r.width / s.view[0], y: r.height / s.view[1]).concatenating(t)
+                guard let placed = path.copy(using: &m) else { return [] }
+                return (p.fill == nil ? [] : [placed]) + (p.stroke == nil ? [] : [stroked(placed)])
+            }
+        default:
+            return []
         }
     }
 
@@ -308,27 +448,29 @@ enum Layers {
     /// Runs `draw` with the frame `f` in place, or, for `repeat = "corners"`, once per corner of `slot`: turned a
     /// quarter more at each, clockwise from the top left, so a top-left ornament faces inward everywhere.
     private static func corners(_ s: PrimSpec, _ f: NSRect, _ slot: NSRect, _ ctx: CGContext, _ draw: (NSRect) -> Void) {
-        guard s.repeatMode == "corners" else {
+        for (t, r) in placements(s, f, slot) {
             ctx.saveGState()
-            draw(f)
+            ctx.concatenate(t)
+            draw(r)
             ctx.restoreGState()
-            return
         }
+    }
+
+    /// Where `corners` puts the frame `f`: a transform and the frame under it.
+    static func placements(_ s: PrimSpec, _ f: NSRect, _ slot: NSRect) -> [(CGAffineTransform, NSRect)] {
+        guard s.repeatMode == "corners" else { return [(.identity, f)] }
         let local = NSRect(x: f.minX - slot.minX, y: f.minY - slot.minY, width: f.width, height: f.height)
         let pins = [CGPoint(x: slot.minX, y: slot.minY), CGPoint(x: slot.maxX, y: slot.minY), CGPoint(x: slot.maxX, y: slot.maxY), CGPoint(x: slot.minX, y: slot.maxY)]
-        for (i, pin) in pins.enumerated() {
-            ctx.saveGState()
-            ctx.translateBy(x: pin.x, y: pin.y)
-            ctx.rotate(by: CGFloat(i) * .pi / 2)
-            draw(local)
-            ctx.restoreGState()
+        return pins.enumerated().map { i, pin in
+            (CGAffineTransform(rotationAngle: CGFloat(i) * .pi / 2).concatenating(CGAffineTransform(translationX: pin.x, y: pin.y)), local)
         }
     }
 
     // MARK: - Resolving
 
-    /// `specs` with colours resolved against `theme`, each checked against the text it lies under. A colour
-    /// that isn't a colour token, or a layer that would leave text unreadable, is skipped and named in the result.
+    /// `specs` with colours resolved against `theme`, each checked against the slot's text: a primitive that would
+    /// leave it unreadable is marked, and its layer skipped wherever that primitive paints over text. A colour
+    /// that isn't a colour token is skipped and named in the result.
     static func resolve(_ specs: [LayerSpec], images: [CGImage?], theme: Theme) -> ([ResolvedLayer], [String]) {
         var problems: [String] = []
         let base: NSColor = theme.app.appearance == "light" ? .white : .black
@@ -342,7 +484,7 @@ enum Layers {
             return NSColor(themeHex: s).map { $0 }
         }
         var out: [ResolvedLayer] = []
-        layers: for (i, l) in specs.enumerated() {
+        for (i, l) in specs.enumerated() {
             let at = "layer \(i + 1) (\(l.slot))"
             var prims: [ResolvedLayer.Prim] = []
             for s in l.prims {
@@ -372,20 +514,19 @@ enum Layers {
             if prims.isEmpty { continue }
             if let t = text[l.slot] {
                 let under = t.over.compactMap(Theme.colorPath).reduce(base) { theme[keyPath: $1].over($0) }
-                for p in prims {
-                    var flat: [NSColor] = []
-                    if let f = p.fill { flat.append(f) }
-                    if let s = p.stroke, p.spec.width > thinStroke { flat.append(s) }
-                    flat += p.stops.map(\.0)
+                for k in prims.indices {
+                    let p = prims[k]
+                    var flat = [p.fill, p.stroke, p.color].compactMap { $0 } + p.stops.map(\.0) + p.rings.flatMap { $0 } + p.dots.map(\.0)
                     flat += zip(p.stops, p.stops.dropFirst()).map { a, b in a.0.blended(withFraction: 0.5, of: b.0) ?? a.0 }
-                    for c in flat {
-                        let bg = c.withAlphaComponent(c.alphaComponent * CGFloat(l.opacity)).over(under)
+                    let alpha = CGFloat(l.opacity) * (isBitmap(p) ? faintAlpha : 1)
+                    check: for c in flat {
+                        let bg = c.withAlphaComponent(c.alphaComponent * alpha).over(under)
                         for name in t.fg {
                             guard let fg = Theme.colorPath(name) else { continue }
                             let ratio = theme[keyPath: fg].over(bg).contrast(bg)
                             if ratio < LoadedTheme.minContrast {
-                                problems.append("\(at): \(name) would read at \(String(format: "%.1f", ratio)):1 over \(c.themeHex), under \(Int(LoadedTheme.minContrast)):1; layer skipped")
-                                continue layers
+                                prims[k].unreadable = "\(name) would read at \(String(format: "%.1f", ratio)):1 on its \(c.themeHex), under \(Int(LoadedTheme.minContrast)):1"
+                                break check
                             }
                         }
                     }
