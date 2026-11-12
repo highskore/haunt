@@ -1,19 +1,33 @@
+<div align="center">
+
+<img src="docs/img/icon.png" width="128" alt="Haunt's icon: a sleepy ghost in one pane of a four-pane grid">
+
 # Haunt
+
+**A modular, agent-based terminal.**
 
 A native macOS terminal for running many coding agents side by side: Claude Code, Codex and more. Every piece of agent state on screen comes from the agents' own hook events, never from scraping terminal output.
 
-![Haunt](docs/img/haunt.png)
+[![Hackathon entry](https://img.shields.io/badge/start%20here-haunt--hackathon-D97757)](https://github.com/highskore/haunt-hackathon)
+![macOS](https://img.shields.io/badge/macOS-15%2B-111?logo=apple&logoColor=white)
+![Rust core](https://img.shields.io/badge/core-Rust-6b7280?logo=rust&logoColor=white)
+![WASM plugins](https://img.shields.io/badge/plugins-WASM%20components-654ff0?logo=webassembly&logoColor=white)
+![libghostty](https://img.shields.io/badge/terminal-libghostty-111)
+
+<img src="docs/img/hero.png" width="820" alt="Haunt mid-run: two agents need you, web-api runs two subagents against a three-item to-do list, and the finished rows tick through their last tool calls">
+
+</div>
 
 Haunt is a set of repos:
 
 - **haunt** (this repo): the app (Swift/AppKit on libghostty), the shared Rust core and the `haunt` CLI.
-- **Agent adapters:** [haunt-claude](../haunt-plugins/haunt-claude) and [haunt-codex](../haunt-plugins/haunt-codex) turn each agent's hooks into one agent-neutral event stream.
+- **Agent adapters:** [haunt-claude](https://github.com/highskore/haunt-claude) and [haunt-codex](https://github.com/highskore/haunt-codex) turn each agent's hooks into one agent-neutral event stream.
 - **Plugins**, each sandboxed in its own repo:
-  - [haunt-decision-log](../haunt-plugins/haunt-decision-log): a searchable log of every permission decision;
-  - [haunt-allowlist](../haunt-plugins/haunt-allowlist): suggests an allow rule after repeated approvals;
-  - [haunt-tabs-plus](../haunt-plugins/haunt-tabs-plus): tab groups, pins and colours;
-  - [haunt-commands](../haunt-plugins/haunt-commands): your own ⌘K commands that type into a tab;
-  - [haunt-plugin-template](../haunt-plugins/haunt-plugin-template): what `haunt plugin new` scaffolds from.
+  - [haunt-decision-log](https://github.com/highskore/haunt-decision-log): a searchable log of every permission decision;
+  - [haunt-allowlist](https://github.com/highskore/haunt-allowlist): suggests an allow rule after repeated approvals;
+  - [haunt-tabs-plus](https://github.com/highskore/haunt-tabs-plus): tab groups, pins and colours;
+  - [haunt-commands](https://github.com/highskore/haunt-commands): your own ⌘K commands that type into a tab;
+  - [haunt-plugin-template](https://github.com/highskore/haunt-plugin-template): what `haunt plugin new` scaffolds from.
 
 ## What it does
 
@@ -22,7 +36,9 @@ Haunt is a set of repos:
 - **Review changes (⌘⇧R):** an agent's diff, the checks it ran, and an inbox of tabs with changes. Comments go back to the agent as a prompt.
 - **⌘K palette:** tabs, actions, plugin commands and modes. **Agents view (⌘⇧A):** the window shrinks to a narrow strip of agent rows.
 - **Plugins:** WASM components (wasmtime). Each capability is shown and approved at install and pinned in a lockfile. Nothing is installed by default.
-- **Themes (in progress):** black and white with Claude orange by default. Optional theme plugins carry colours, fonts and window effects, and run no code.
+- **Themes:** black and white with Claude orange by default. Theme plugins carry colours, fonts and drawing layers, and run no code. Five ship: Glass, Sigilcore, Windows 95, DMG and Frutiger Aero.
+
+<p align="center"><img src="docs/img/themes.png" width="820" alt="Four of the themes on the same window: Glass, Sigilcore, Windows 95 and DMG"></p>
 
 ## What's different
 
@@ -44,7 +60,7 @@ Claude Code ──hooks──▶ ~/.haunt/sock ──▶ haunt-core (Rust) ─�
                                              └─ WASM plugins (wasmtime)
 ```
 
-- **Agent adapters** live in their own repos and all follow one agent-neutral event spec. The Claude Code adapter, [haunt-claude](../haunt-plugins/haunt-claude), is a Claude Code plugin. It sends session, task, subagent, tool and permission events as JSON lines to a private Unix socket.
+- **Agent adapters** live in their own repos and all follow one agent-neutral event spec. The Claude Code adapter, [haunt-claude](https://github.com/highskore/haunt-claude), is a Claude Code plugin. It sends session, task, subagent, tool and permission events as JSON lines to a private Unix socket.
   - Each tab gets its own surface id and a random nonce in its environment.
   - Events without the right nonce only update status. They can never create a permission request.
 - **`core/`** holds the agent model, sidebar layout, decision log, allowlist suggestions and plugin host. It has no UI code, so future Windows and Linux front ends can share it.
@@ -92,7 +108,7 @@ claude plugin marketplace add ~/.haunt/adapters/claude/<hash>
 claude plugin install haunt@haunt
 ```
 
-For Codex it runs the adapter's own `install.sh`, which adds a marked block of hooks to `$CODEX_HOME/config.toml` and backs the file up first; then trust the hooks with `/hooks` in Codex. See [haunt-codex](../haunt-plugins/haunt-codex).
+For Codex it runs the adapter's own `install.sh`, which adds a marked block of hooks to `$CODEX_HOME/config.toml` and backs the file up first; then trust the hooks with `/hooks` in Codex. See [haunt-codex](https://github.com/highskore/haunt-codex).
 
 The Claude adapter is the haunt-claude repo, cloned next to this one as `../haunt-plugins/haunt-claude`. `make-app.sh` also bundles a copy into `haunt.app/Contents/Resources/adapters/claude` (and haunt-codex into `adapters/codex`): the commit `macos/adapters.lock` pins, taken with `git archive`. It refuses a checkout with uncommitted changes or at another commit; bump the pin after pushing the adapter, or set `HAUNT_ADAPTER_UNPINNED=1` to bundle the working tree while iterating. Set `HAUNT_CLAUDE_ADAPTER` to use a checkout somewhere else. First-party plugins (`--plugins`) are pinned the same way, in `macos/plugins.lock`: each is built from `git archive` of its pinned commit, never the working tree, and make-app refuses one whose manifest `api` isn't the one this haunt supports before it builds anything. The pinned sources are unpacked under `target/plugin-src` and built with this repo's toolchain; a source with a `.cargo` folder, or a `.cargo` or `rust-toolchain` file between it and the checkout, is refused. Bump a pin after pushing the plugin, or set `HAUNT_PLUGINS_UNPINNED=1` to build the working trees. Or try it without installing: `claude --plugin-dir ../haunt-plugins/haunt-claude`. Needs `jq` 1.6+ and `nc`, both on macOS by default.
 
