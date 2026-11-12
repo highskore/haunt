@@ -143,12 +143,14 @@ impl Capabilities {
         for (name, empty) in [
             ("net", self.net.is_empty()),
             ("hid", self.hid.is_empty()),
-            ("exec", self.exec.is_empty()),
             ("clipboard", self.clipboard.as_deref().is_none_or(|c| c == "none")),
         ] {
             if !empty {
                 return err(format!("capability {name} is not supported by this haunt version; remove it from [capabilities]"));
             }
+        }
+        if let Some(x) = self.exec.iter().find(|x| !crate::plugin_exec::NAMES.contains(&x.as_str())) {
+            return err(format!("unknown exec command {x:?}; known: {}", crate::plugin_exec::NAMES.join(", ")));
         }
         for e in &self.events {
             let known = e == "agent.*" || e == "terminal.*" || AGENT_EVENTS.contains(&e.as_str()) || TERMINAL_EVENTS.contains(&e.as_str());
@@ -213,6 +215,16 @@ impl Capabilities {
         if self.pty_write {
             out.push(("can answer permission prompts in your terminal (Allow or Deny, nothing else)".into(), true));
         }
+        if !self.exec.is_empty() {
+            let what: Vec<&str> = crate::plugin_exec::NAMES
+                .iter()
+                .zip(["gh pr checks", "gh pr view", "git status", "git's branch name", "git's HEAD commit", "git log"])
+                .filter(|(n, _)| self.exec.iter().any(|x| x == *n))
+                .map(|(_, w)| w)
+                .collect();
+            let gh = if self.exec.iter().any(|x| x.starts_with("gh-")) { "; gh acts with your GitHub login" } else { "" };
+            out.push((format!("can run {} in your agents' project folders and read the output{gh}", what.join(", ")), true));
+        }
         if self.pty_type {
             out.push(("can type text into the current tab when you run one of its commands".into(), true));
         }
@@ -245,6 +257,7 @@ impl Capabilities {
             keys: self.keys && !old.keys,
             fs_read: self.fs_read.iter().filter(|g| !old.fs_read.contains(g)).cloned().collect(),
             fs_write: self.fs_write.iter().filter(|g| !old.fs_write.contains(g)).cloned().collect(),
+            exec: self.exec.iter().filter(|x| !old.exec.contains(x)).cloned().collect(),
             ..Default::default()
         };
         grown.describe()
@@ -461,6 +474,16 @@ mod tests {
         for want in ["commands you approved", "folders they ran in", "secrets", "nothing is written until you accept"] {
             assert!(allow.contains(want), "{allow}");
         }
+    }
+
+    #[test]
+    fn exec_names_known_commands_in_a_red_line() {
+        let caps = Manifest::parse(&manifest("exec = [\"git-status\", \"gh-pr-checks\"]")).unwrap().capabilities;
+        let lines = caps.describe();
+        assert!(lines.contains(&("can run gh pr checks, git status in your agents' project folders and read the output; gh acts with your GitHub login".into(), true)), "{lines:?}");
+        let more = Capabilities { exec: vec!["git-status".into(), "git-log".into()], ..Default::default() };
+        assert_eq!(more.added_since(&caps), [("can run git log in your agents' project folders and read the output".into(), true)]);
+        assert!(Manifest::parse(&manifest("exec = [\"bash\"]")).unwrap_err().0.contains("unknown exec command"));
     }
 
     #[test]

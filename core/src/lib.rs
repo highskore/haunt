@@ -17,6 +17,7 @@ pub mod layout;
 pub mod model;
 #[cfg(feature = "plugins")]
 pub mod plugin_cache;
+pub mod plugin_exec;
 #[cfg(feature = "plugins")]
 pub mod plugin_fs;
 #[cfg(feature = "plugins")]

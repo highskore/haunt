@@ -158,6 +158,8 @@ pub(crate) struct State {
     /// The plugin holding notifications, until when.
     notify_hold: Option<(String, Instant)>,
     top_row: Option<TopRow>,
+    /// Where `exec` jobs report; set while a plugin set is attached.
+    exec_sink: Option<crate::plugin_exec::ExecSink>,
     /// Canonical chord -> who has it ("haunt" for Haunt's and macOS's, else `[keys]`' "<plugin>/<id>").
     taken_chords: HashMap<String, String>,
 }
@@ -1028,6 +1030,19 @@ impl CoreHandle {
             st.notify_hold = None;
         }
         mine
+    }
+
+    pub fn set_exec_sink(&self, sink: Option<crate::plugin_exec::ExecSink>) {
+        lock(&self.state).exec_sink = sink;
+    }
+
+    pub fn exec_sink(&self) -> Option<crate::plugin_exec::ExecSink> {
+        lock(&self.state).exec_sink.clone()
+    }
+
+    /// The folder the app opened `surface` in, not the cwd events claim.
+    pub fn opened_in(&self, surface: &str) -> Option<String> {
+        lock(&self.state).surfaces.iter().find(|s| s.id == surface).map(|s| s.opened_in.clone())
     }
 
     /// The app's key map changed: every chord in use or reserved, by owner.

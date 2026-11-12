@@ -915,6 +915,13 @@ impl PluginSet {
         self.plugin(plugin_id)?.top_row_clicked()
     }
 
+    /// An `exec` job finished; the plugin that ran it hears it.
+    pub fn exec_done(&mut self, d: crate::plugin_exec::ExecDone) {
+        if let Ok(p) = self.plugin(&d.plugin_id) {
+            let _ = p.exec_done(d.job, d.outcome);
+        }
+    }
+
     /// Every enabled plugin's bound keys.
     pub fn keys(&self) -> Vec<crate::plugins::PluginKey> {
         self.plugins.iter().filter(|(_, p)| p.disabled().is_none()).flat_map(|(_, p)| p.keys()).collect()
@@ -1057,6 +1064,17 @@ pub fn attach(core: &crate::Core, set: &Arc<Mutex<PluginSet>>) {
             crate::sync::lock(set).errors.push(format!("timer ticks are off: {e}"));
         }
     }
+    let (weak, handle) = (Arc::downgrade(set), core.handle());
+    core.handle().set_exec_sink(Some(Arc::new(move |d| {
+        let Some(set) = weak.upgrade() else { return };
+        let mut set = crate::sync::lock(&set);
+        set.exec_done(d);
+        let pending = set.pending_requests() > 0;
+        drop(set);
+        if pending {
+            handle.requests_queued();
+        }
+    })));
     let weak = Arc::downgrade(set);
     core.set_event_tap(Some(Arc::new(move |t: &Tapped| {
         let Some(set) = weak.upgrade() else { return false };

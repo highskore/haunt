@@ -27,7 +27,7 @@ mod bindings {
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
-    allowlist as wallow, clock as wclock, hold as whold, keys as wkeys, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
+    allowlist as wallow, clock as wclock, exec as wexec, hold as whold, keys as wkeys, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
     sidebar as wside, theme as wtheme, timer as wtimer, typing as wtyping, types as wit,
 };
 pub(crate) use bindings::haunt::plugin::panel as wpanel;
@@ -252,6 +252,10 @@ pub struct HostState {
     typing_into: Option<String>,
     /// (id, canonical chord) from `keys.bind`.
     keys: Vec<(String, String)>,
+    /// The manifest's `exec` names.
+    exec: Vec<String>,
+    /// Jobs started and not yet reported.
+    exec_jobs: Vec<u64>,
 }
 
 impl Drop for HostState {
@@ -296,6 +300,8 @@ impl HostState {
             theme: Theme::default_shared(),
             typing_into: None,
             keys: Vec::new(),
+            exec: caps.exec.clone(),
+            exec_jobs: Vec::new(),
             events: EventGrant { details: caps.event_details, answers: caps.pty_write },
         }
     }
@@ -744,6 +750,40 @@ impl wkeys::Host for HostState {
     }
 }
 
+static NEXT_JOB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+impl wexec::Host for HostState {
+    fn run(&mut self, surface: String, command: wexec::Command) -> Result<u64, String> {
+        use crate::plugin_exec::{self as px, ExecCommand as C, ExecDone};
+        let cmd = match command {
+            wexec::Command::GhPrChecks => C::GhPrChecks,
+            wexec::Command::GhPrView => C::GhPrView,
+            wexec::Command::GitStatus => C::GitStatus,
+            wexec::Command::GitBranch => C::GitBranch,
+            wexec::Command::GitHead => C::GitHead,
+            wexec::Command::GitLog(n) => C::GitLog(n),
+        };
+        if !self.exec.iter().any(|x| x == cmd.name()) {
+            return Err(format!("{} is not in this plugin's exec list", cmd.name()));
+        }
+        if self.exec_jobs.len() >= px::MAX_RUNNING {
+            return Err(format!("at most {} commands at a time", px::MAX_RUNNING));
+        }
+        let core = self.core.as_ref().ok_or("no haunt core")?;
+        let opened = core.opened_in(&surface).ok_or("no such tab")?;
+        let dir = self.fs.project_folder(&opened).ok_or("the tab's folder is not a project folder inside your home folder")?;
+        let sink = core.exec_sink().ok_or("commands are off")?;
+        let job = NEXT_JOB.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let plugin_id = self.id.clone();
+        std::thread::Builder::new()
+            .name("haunt-exec".into())
+            .spawn(move || sink(ExecDone { plugin_id, job, outcome: px::run(&cmd, &dir) }))
+            .map_err(|e| e.to_string())?;
+        self.exec_jobs.push(job);
+        Ok(job)
+    }
+}
+
 pub const HOLD_MAX_MINUTES: u32 = 240;
 
 impl whold::Host for HostState {
@@ -1025,6 +1065,15 @@ impl LoadedPlugin {
         self.call(|b, s| b.call_on_tick(s, ms)).map(|()| true)
     }
 
+    /// A job this instance started finished: `on-exec(job, outcome)`. Another instance's job is dropped.
+    pub fn exec_done(&mut self, job: u64, outcome: Result<crate::plugin_exec::ExecOutput, String>) -> Result<(), PluginError> {
+        let jobs = &mut self.store.data_mut().exec_jobs;
+        let Some(i) = jobs.iter().position(|j| *j == job) else { return Ok(()) };
+        jobs.remove(i);
+        let outcome = outcome.map(|o| wexec::Output { status: o.status, stdout: o.stdout, stderr: o.stderr, truncated: o.truncated });
+        self.call(|b, s| b.call_on_exec(s, job, outcome.as_ref().map_err(String::as_str)))
+    }
+
     /// The user pressed a button on show `generation` of panel `id`, or closed it (`action` empty):
     /// `on-action(action, "panel:<id>")`. Anything but that show's own button is refused.
     pub fn panel_action(&mut self, id: &str, generation: u64, action: &str) -> Result<(), PluginError> {
@@ -1211,6 +1260,9 @@ impl PluginHost {
         }
         if caps.keys {
             wkeys::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if !caps.exec.is_empty() {
+            wexec::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.pty_write {
             wpty::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
@@ -1698,6 +1750,20 @@ mod tests {
         assert!(core.snapshot().top.is_none(), "a dropped plugin's row goes");
         other.set(Some(top("mine", None))).unwrap();
         assert!(!core.snapshot().top.unwrap().clickable && other.top_action.is_none());
+    }
+
+    #[test]
+    fn exec_runs_only_granted_commands_in_a_tabs_project_folder() {
+        use wexec::Host as _;
+        let core = crate::Core::new(&*tempdir("exec"));
+        let caps = Capabilities { exec: vec!["git-status".into()], ..Default::default() };
+        let mut p = HostState::new("dev.x.ci", &caps, None, None, Some(core.handle()));
+        let tab = core.register_surface("/tmp").unwrap().surface_id;
+        assert!(p.run(tab.clone(), wexec::Command::GitHead).unwrap_err().contains("not in this plugin's exec list"));
+        assert_eq!(p.run("nope".into(), wexec::Command::GitStatus).unwrap_err(), "no such tab");
+        assert!(p.run(tab, wexec::Command::GitStatus).unwrap_err().contains("not a project folder"), "/tmp is outside home");
+        p.exec_jobs = vec![1, 2];
+        assert!(p.run("nope".into(), wexec::Command::GitStatus).unwrap_err().contains("at most 2"));
     }
 
     #[test]

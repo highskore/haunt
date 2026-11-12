@@ -98,14 +98,20 @@ impl FsScope {
     /// the haunt dir or containing it: those hold keys, app data or haunt's own lockfile. Without a
     /// known `$HOME` nothing is added.
     pub fn add_cwd(&mut self, cwd: &str) {
-        let Some(home) = &self.home else { return };
-        let Ok(c) = Path::new(cwd).canonicalize() else { return };
-        let Some(rel) = c.strip_prefix(home).ok().filter(|r| r.components().next().is_some()) else { return };
-        let private = rel.components().any(|p| p.as_os_str().as_bytes().starts_with(b".")) || rel.starts_with("Library");
-        let haunt = c.starts_with(&self.haunt) || self.haunt.starts_with(&c);
-        if !private && !haunt && !self.cwds.contains(&c) && self.cwds.len() < MAX_CWDS {
+        let Some(c) = self.project_folder(cwd) else { return };
+        if !self.cwds.contains(&c) && self.cwds.len() < MAX_CWDS {
             self.cwds.push(c);
         }
+    }
+
+    /// `cwd`, canonical, if it may be a `${cwd}` (see `add_cwd`); `exec` runs only in such a folder.
+    pub fn project_folder(&self, cwd: &str) -> Option<PathBuf> {
+        let home = self.home.as_ref()?;
+        let c = Path::new(cwd).canonicalize().ok()?;
+        let rel = c.strip_prefix(home).ok().filter(|r| r.components().next().is_some())?;
+        let private = rel.components().any(|p| p.as_os_str().as_bytes().starts_with(b".")) || rel.starts_with("Library");
+        let haunt = c.starts_with(&self.haunt) || self.haunt.starts_with(&c);
+        (!private && !haunt).then_some(c)
     }
 
     fn patterns(&self, globs: &[String]) -> Vec<Vec<Vec<u8>>> {
