@@ -475,8 +475,8 @@ interface terminal {
   read: func(surface: string, lines: u32) -> result<list<string>, string>;
 }
 
-// Capability `clipboard = "write"`. Puts text on the clipboard, made plain (one line, no hidden
-// characters) and cut to 16 KB. Only once per button, key or palette command the user just used.
+// Capability `clipboard = "write"`. Puts text on the clipboard: "\n" is kept, CR goes, each line is made
+// plain (no tabs or hidden characters); at most 400 lines and 16 KB. Only once per button, key or palette command the user just used.
 // There is no read.
 interface clipboard {
   write: func(text: string) -> result<_, string>;

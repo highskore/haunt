@@ -81,6 +81,8 @@ pub const AUDIT_STR_MAX: usize = 64;
 const MAX_STR: usize = 4096;
 /// Bytes a `clipboard.write` keeps.
 pub const CLIPBOARD_MAX: usize = 16 * 1024;
+/// Lines a `clipboard.write` keeps.
+pub const CLIPBOARD_LINES: usize = 400;
 /// Characters, not bytes, of a registered command or mode title.
 const MAX_TITLE: usize = 80;
 const MAX_DECISIONS: u32 = 1000;
@@ -1332,7 +1334,7 @@ impl wclip::Host for HostState {
         if !std::mem::take(&mut self.copy_ok) {
             return Err("only once per button, key or command the user just used".into());
         }
-        let mut text = plain(&text, CLIPBOARD_MAX);
+        let mut text = plain_lines(&text, CLIPBOARD_LINES, CLIPBOARD_MAX);
         let mut end = text.len().min(CLIPBOARD_MAX);
         while !text.is_char_boundary(end) {
             end -= 1;
@@ -1418,6 +1420,11 @@ pub const EVENT_TEXT: usize = 1024;
 /// One line of plain text: whitespace becomes a space, other hidden characters go, at most `max` characters.
 pub fn plain(s: &str, max: usize) -> String {
     s.chars().map(|c| if c.is_whitespace() { ' ' } else { c }).filter(|&c| !is_hidden(c)).take(max).collect()
+}
+
+/// Text kept as lines: CR goes, then each line is `plain` and cut to `line_max`; at most `max_lines`.
+pub fn plain_lines(s: &str, max_lines: usize, line_max: usize) -> String {
+    s.split('\n').take(max_lines).map(|l| plain(&l.replace('\r', ""), line_max)).collect::<Vec<_>>().join("\n")
 }
 
 /// `s` as haunt shows it, hidden characters spelled out, at most `max` characters.
@@ -2194,13 +2201,17 @@ mod tests {
         let mut st = HostState::new("dev.x.relay", &caps, None, None, None);
         assert!(st.write("x".into()).unwrap_err().contains("only once per button"));
         st.copy_ok = true;
-        st.write("git push\n\u{1b}[2J\u{202e}ok".into()).unwrap();
+        st.write("git push\r\n\u{1b}[2J\u{202e}ok\tthen".into()).unwrap();
         assert!(st.write("again".into()).is_err(), "one write per user action");
-        assert_eq!(st.outbox, [HostRequest::ClipboardWrite { plugin_id: "dev.x.relay".into(), text: "git push [2Jok".into() }]);
+        assert_eq!(st.outbox, [HostRequest::ClipboardWrite { plugin_id: "dev.x.relay".into(), text: "git push\n[2Jok then".into() }]);
         st.copy_ok = true;
         st.write("é".repeat(CLIPBOARD_MAX)).unwrap();
         let Some(HostRequest::ClipboardWrite { text, .. }) = st.outbox.last() else { panic!() };
         assert_eq!(text.len(), CLIPBOARD_MAX);
+        st.copy_ok = true;
+        st.write("x\n".repeat(1000)).unwrap();
+        let Some(HostRequest::ClipboardWrite { text, .. }) = st.outbox.last() else { panic!() };
+        assert_eq!(text.lines().count(), CLIPBOARD_LINES);
         st.drop_user_effects();
         assert!(st.outbox.is_empty(), "a trapped call's writes are dropped");
     }

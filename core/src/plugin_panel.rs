@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
-use crate::plugins::{plain, wpanel};
+use crate::plugins::{plain, plain_lines, wpanel};
 
 pub const MAX_NODES: usize = 512;
 pub const MAX_DEPTH: usize = 8;
@@ -176,7 +176,7 @@ fn text(s: String) -> String {
 }
 
 fn lines(s: String) -> String {
-    s.split('\n').take(MAX_LINES).map(|l| plain(l, MAX_TEXT)).collect::<Vec<_>>().join("\n")
+    plain_lines(&s, MAX_LINES, MAX_TEXT)
 }
 
 fn key(s: String) -> String {
@@ -371,7 +371,7 @@ mod tests {
         let p = build("p".into(), Placement::Card, String::new(), vec![node(None, txt(&many)), node(None, txt(&long))]).unwrap();
         let PanelNodeKind::Text { text, .. } = &p.nodes[0].kind else { panic!() };
         assert_eq!(text.lines().count(), MAX_LINES);
-        assert!(text.starts_with("0 \n1 \n") && text.ends_with("39 "), "{text:?}");
+        assert!(text.starts_with("0\n1\n") && text.ends_with("\n39"), "CR and hidden characters go: {text:?}");
         let PanelNodeKind::Text { text, .. } = &p.nodes[1].kind else { panic!() };
         assert_eq!(text.split('\n').map(|l| l.chars().count()).collect::<Vec<_>>(), [MAX_TEXT, 3]);
     }
