@@ -7,6 +7,8 @@ final class Presence {
     static let every: TimeInterval = 5
     /// (locked or asleep, seconds since the last input)
     var report: ((Bool, UInt64) -> Void)?
+    /// Haunt became the active app: a sheet a plugin asked for on the user's return may show now.
+    var activated: (() -> Void)?
     private var locked = false, asleep = false
     private var timer: Timer?
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
@@ -26,6 +28,8 @@ final class Presence {
             on(dnc, "com.apple.screenIsUnlocked") { $0.locked = false },
             on(ws, NSWorkspace.screensDidSleepNotification.rawValue) { $0.asleep = true },
             on(ws, NSWorkspace.screensDidWakeNotification.rawValue) { $0.asleep = false },
+            (NotificationCenter.default, NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.activated?() }),
         ]
         timer = Timer.scheduledTimer(withTimeInterval: Self.every, repeats: true) { [weak self] _ in self?.tick() }
     }

@@ -41,6 +41,7 @@ final class PluginBridge {
         presence.report = { [weak self] locked, idle in
             self?.run("plugins presence") { $0.presence(locked: locked, idleSecs: idle) }
         }
+        presence.activated = { [weak self] in self?.run("plugins app activated") { $0.appActivated() } }
         hover.onHold = { [weak self] plugin, held, surface in
             self?.run("plugin \(plugin) hover-hold") { try $0.hoverHold(pluginId: plugin, held: held, surfaceId: surface) }
         }

@@ -996,6 +996,15 @@ impl PluginSet {
         Some((back_ms.is_none(), back_ms.unwrap_or(0)))
     }
 
+    /// Haunt became the active app: sheets held from the user's return show now.
+    pub fn app_activated(&mut self) {
+        for (caps, p) in &mut self.plugins {
+            if caps.away && p.disabled().is_none() {
+                let _ = p.app_activated();
+            }
+        }
+    }
+
     /// What was wrong with the user's plugin settings at the last load or `set_config`.
     pub fn settings_problems(&self) -> &[String] {
         &self.settings_problems

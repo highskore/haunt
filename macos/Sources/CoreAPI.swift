@@ -37,6 +37,7 @@ protocol PluginsAPI: AnyObject {
     func keyAction(pluginId: String, id: String, down: Bool, terminalShown: Bool) throws
     func hoverHolder() -> String?
     func presence(locked: Bool, idleSecs: UInt64)
+    func appActivated()
     func hoverHold(pluginId: String, held: Bool, surfaceId: String) throws
     func notifyAction(pluginId: String, actionId: String, binding: String) throws
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws
@@ -144,6 +145,7 @@ final class NoPlugins: PluginsAPI {
     func keyAction(pluginId: String, id: String, down: Bool, terminalShown: Bool) throws {}
     func hoverHolder() -> String? { nil }
     func presence(locked: Bool, idleSecs: UInt64) {}
+    func appActivated() {}
     func hoverHold(pluginId: String, held: Bool, surfaceId: String) throws {}
     func notifyAction(pluginId: String, actionId: String, binding: String) throws {}
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}
@@ -173,6 +175,7 @@ final class FixturePlugins: PluginsAPI {
     func keyAction(pluginId: String, id: String, down: Bool, terminalShown: Bool) throws {}
     func hoverHolder() -> String? { nil }
     func presence(locked: Bool, idleSecs: UInt64) {}
+    func appActivated() {}
     func hoverHold(pluginId: String, held: Bool, surfaceId: String) throws {}
     func notifyAction(pluginId: String, actionId: String, binding: String) throws {}
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}

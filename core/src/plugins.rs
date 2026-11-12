@@ -259,6 +259,10 @@ pub struct HostState {
     keys: Vec<(String, String)>,
     /// `terminal.read` calls left in the command or key the user just used; 0 outside one.
     reads_left: u32,
+    /// Set while the plugin hears that the user came back.
+    returning: bool,
+    /// The sheet it asked for then, until the user switches to Haunt.
+    return_sheet: Option<Panel>,
     /// Set while this plugin has `keys.hover-hold`.
     hover_hold: bool,
     /// Action ids of this plugin's latest hold summary: the only `"hold"` replies `notify_action` takes.
@@ -316,6 +320,8 @@ impl HostState {
             keys: Vec::new(),
             hold_actions: Vec::new(),
             hover_hold: false,
+            returning: false,
+            return_sheet: None,
             reads_left: 0,
             exec: caps.exec.clone(),
             exec_jobs: Vec::new(),
@@ -715,10 +721,31 @@ impl wpanel::Host for HostState {
         if self.outbox.len() >= MAX_OUTBOX {
             return Err("too many pending requests".into());
         }
-        // Unasked, a sheet would take the keys the user is typing; it comes up as a card instead.
+        // Unasked, a sheet would take the keys the user is typing; it comes up as a card instead. One
+        // asked for as the user comes back waits for them to switch to Haunt (`show_return_sheet`).
         if panel.placement == PanelPlacement::Sheet && !self.user_call {
+            if self.returning {
+                self.return_sheet = Some(panel);
+                return Ok(());
+            }
             panel.placement = PanelPlacement::Card;
         }
+        self.show_panel(panel)
+    }
+
+    fn close(&mut self, id: String) {
+        if self.return_sheet.as_ref().is_some_and(|p| p.id == id) {
+            self.return_sheet = None;
+        }
+        self.release_sheet(&id);
+        if self.panels.close(&id) {
+            let _ = self.request(HostRequest::ClosePanel { plugin_id: self.id.clone(), id });
+        }
+    }
+}
+
+impl HostState {
+    fn show_panel(&mut self, mut panel: Panel) -> Result<(), String> {
         let was_sheet = self.panels.placement(&panel.id) == Some(PanelPlacement::Sheet);
         if let Some(c) = self.core.as_ref().filter(|_| panel.placement == PanelPlacement::Sheet) {
             c.claim_sheet(&self.id, &panel.id)?;
@@ -736,10 +763,11 @@ impl wpanel::Host for HostState {
         self.request(HostRequest::ShowPanel { plugin_id: self.id.clone(), plugin_name, panel })
     }
 
-    fn close(&mut self, id: String) {
-        self.release_sheet(&id);
-        if self.panels.close(&id) {
-            let _ = self.request(HostRequest::ClosePanel { plugin_id: self.id.clone(), id });
+    /// The user switched to Haunt: the sheet the plugin asked for as they came back shows now.
+    fn show_return_sheet(&mut self) -> Result<(), String> {
+        match self.return_sheet.take() {
+            Some(p) => self.show_panel(p),
+            None => Ok(()),
         }
     }
 }
@@ -1217,12 +1245,22 @@ impl LoadedPlugin {
     }
 
     /// The user stepped away (`back_ms` None) or came back after `back_ms`: `on-away-changed`. Coming
-    /// back counts as a user call, so the plugin may show a sheet then.
+    /// back isn't a user gesture (they may be typing into another app): a sheet asked for then waits
+    /// for `app_activated`.
     pub fn away_changed(&mut self, back_ms: Option<u64>) -> Result<(), PluginError> {
-        match back_ms {
-            None => self.call(|b, s| b.call_on_away_changed(s, true, 0)),
-            Some(ms) => self.user_call(|p| p.call(|b, s| b.call_on_away_changed(s, false, ms))),
-        }
+        let Some(ms) = back_ms else {
+            self.store.data_mut().return_sheet = None;
+            return self.call(|b, s| b.call_on_away_changed(s, true, 0));
+        };
+        self.store.data_mut().returning = true;
+        let res = self.call(|b, s| b.call_on_away_changed(s, false, ms));
+        self.store.data_mut().returning = false;
+        res
+    }
+
+    /// The user switched to Haunt, a gesture of theirs: a sheet held from their return shows.
+    pub fn app_activated(&mut self) -> Result<(), PluginError> {
+        self.store.data_mut().show_return_sheet().map_err(PluginError)
     }
 
     /// A job this instance started finished: `on-exec(job, outcome)`. Another instance's job is dropped.
@@ -2252,6 +2290,28 @@ mod tests {
         a.show("w".into(), wpanel::Placement::Sheet, "Hi".into(), vec![]).unwrap();
         drop(a);
         b.show("s".into(), wpanel::Placement::Sheet, "Me".into(), vec![]).unwrap();
+    }
+
+    #[test]
+    fn a_sheet_asked_for_on_return_waits_for_the_user_to_switch_to_haunt() {
+        use wpanel::Host as _;
+        let core = crate::Core::new(&*tempdir("return"));
+        let mut a = HostState::new("dev.x.welcome", &Capabilities { panel: true, away: true, ..Default::default() }, None, None, Some(core.handle()));
+        a.returning = true;
+        a.show("hi".into(), wpanel::Placement::Sheet, "Welcome back".into(), vec![]).unwrap();
+        a.show("note".into(), wpanel::Placement::Card, "Note".into(), vec![]).unwrap();
+        a.returning = false;
+        assert!(matches!(&a.outbox[..], [HostRequest::ShowPanel { panel, .. }] if panel.id == "note"), "no sheet while they may be typing elsewhere");
+        a.show_return_sheet().unwrap();
+        assert!(matches!(a.outbox.last(), Some(HostRequest::ShowPanel { panel, .. }) if panel.id == "hi" && panel.placement == PanelPlacement::Sheet));
+        a.show_return_sheet().unwrap();
+        assert_eq!(a.outbox.len(), 2, "once");
+        a.returning = true;
+        a.show("hi".into(), wpanel::Placement::Sheet, "Again".into(), vec![]).unwrap();
+        a.returning = false;
+        a.close("hi".into());
+        a.show_return_sheet().unwrap();
+        assert!(!a.outbox.iter().any(|r| matches!(r, HostRequest::ShowPanel { panel, .. } if panel.title == "Again")), "closed before it showed");
     }
 
     #[test]

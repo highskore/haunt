@@ -295,6 +295,11 @@ impl HauntPlugins {
         haunt_core::sync::lock(&self.set).presence(locked, idle_secs, std::time::Instant::now());
     }
 
+    /// Haunt became the active app (`NSApplication.didBecomeActive`).
+    pub fn app_activated(&self) {
+        haunt_core::sync::lock(&self.set).app_activated();
+    }
+
     /// The plugin that has `keys.hover-hold`, if any.
     pub fn hover_holder(&self) -> Option<String> {
         haunt_core::sync::lock(&self.set).hover_holder()
