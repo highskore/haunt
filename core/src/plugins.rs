@@ -58,7 +58,8 @@ pub struct AuditLine {
     pub ts_ms: u64,
     pub plugin: String,
     /// `terminal.read`, `pty.answer`, `pty.type`, `exec`, `fs.read`, `fs.list`, `fs.write`,
-    /// `decisions.query`, or `audit.dropped` for lines past `MAX_AUDIT`.
+    /// `decisions.query`, `clipboard.write`, `link.open-url`, `sidebar.focus`, `fs-list.entries`,
+    /// `fs-list.tree`, or `audit.dropped` for lines past `MAX_AUDIT`.
     pub kind: String,
     pub surface: String,
     /// The command's name, the path inside the project folder, or the query's text.
@@ -334,8 +335,8 @@ pub struct HostState {
     exec: Vec<String>,
     /// Jobs started and not yet reported.
     exec_jobs: Vec<u64>,
-    /// `fs-list.tree` walks started and not yet reported.
-    tree_jobs: Vec<u64>,
+    /// `fs-list.tree` walks started and not yet reported, with the folder as audited.
+    tree_jobs: Vec<(u64, String)>,
 }
 
 impl Drop for HostState {
@@ -852,7 +853,9 @@ impl wside::Host for HostState {
         if !self.core.as_ref().is_some_and(|c| c.has_surface(&surface)) {
             return Err(format!("no open tab {:?}", visible(&surface).chars().take(64).collect::<String>()));
         }
-        self.request(HostRequest::FocusTab { plugin_id: self.id.clone(), surface })
+        self.request(HostRequest::FocusTab { plugin_id: self.id.clone(), surface: surface.clone() })?;
+        self.audit("sidebar.focus", &surface, "", 1);
+        Ok(())
     }
 }
 
@@ -1416,7 +1419,11 @@ impl wclip::Host for HostState {
             return Err("the copied text's first line is empty".into());
         }
         self.copy_ok = false;
-        self.request(HostRequest::ClipboardWrite { plugin_id: self.id.clone(), plugin_name: self.name.clone(), text })
+        let (bytes, lines) = (text.len() as u64, text.split('\n').count());
+        self.request(HostRequest::ClipboardWrite { plugin_id: self.id.clone(), plugin_name: self.name.clone(), text })?;
+        // Never the text: its size only.
+        self.audit("clipboard.write", "", &format!("{lines} lines"), bytes);
+        Ok(())
     }
 }
 
@@ -1426,6 +1433,8 @@ impl wfslist::Host for HostState {
             return Err(format!("fs-list rate limit ({FS_LIST_PER_SEC}/s)"));
         }
         let entries = self.fs.entries(&dir)?;
+        let rel = self.in_project(&dir);
+        self.audit("fs-list.entries", "", &rel, entries.len() as u64);
         Ok(entries.into_iter().map(|e| wfslist::Entry { name: e.name, size: e.size, dir: e.dir }).collect())
     }
     /// The walk runs on a thread of its own, off the plugin set's lock, and reports through the core's
@@ -1444,9 +1453,13 @@ impl wfslist::Host for HostState {
         let (fs, job, plugin_id) = (self.fs.clone(), NEXT_JOB.fetch_add(1, std::sync::atomic::Ordering::Relaxed), self.id.clone());
         std::thread::Builder::new()
             .name("haunt-fs-tree-job".into())
-            .spawn(move || sink(ExecDone { plugin_id, job, outcome: JobOutcome::Tree(fs.tree(&dir, depth)) }))
+            .spawn({
+                let dir = dir.clone();
+                move || sink(ExecDone { plugin_id, job, outcome: JobOutcome::Tree(fs.tree(&dir, depth)) })
+            })
             .map_err(|e| e.to_string())?;
-        self.tree_jobs.push(job);
+        let rel = self.in_project(&dir);
+        self.tree_jobs.push((job, rel));
         Ok(job)
     }
 }
@@ -1458,7 +1471,11 @@ impl wlink::Host for HostState {
             return Err("the url must be the clicked button's action, which its tooltip shows".into());
         }
         link_ok(&url, &self.links)?;
-        self.request(HostRequest::OpenUrl { plugin_id: self.id.clone(), url })
+        let host = link_host(&url).unwrap_or_default().to_owned();
+        self.request(HostRequest::OpenUrl { plugin_id: self.id.clone(), url })?;
+        // The domain only: a path or query can carry what the plugin read.
+        self.audit("link.open-url", "", &host, 1);
+        Ok(())
     }
 }
 
@@ -1785,15 +1802,19 @@ impl LoadedPlugin {
     pub fn exec_done(&mut self, job: u64, outcome: crate::plugin_exec::JobOutcome) -> Result<(), PluginError> {
         use crate::plugin_exec::JobOutcome;
         let data = self.store.data_mut();
-        let jobs = if matches!(outcome, JobOutcome::Exec(_)) { &mut data.exec_jobs } else { &mut data.tree_jobs };
-        let Some(i) = jobs.iter().position(|j| *j == job) else { return Ok(()) };
-        jobs.remove(i);
         match outcome {
             JobOutcome::Exec(o) => {
+                let Some(i) = data.exec_jobs.iter().position(|j| *j == job) else { return Ok(()) };
+                data.exec_jobs.remove(i);
                 let o = o.map(|o| wexec::Output { status: o.status, stdout: o.stdout, stderr: o.stderr, truncated: o.truncated });
                 self.call(|b, s| b.call_on_exec(s, job, o.as_ref().map_err(String::as_str)))
             }
             JobOutcome::Tree(t) => {
+                let Some(i) = data.tree_jobs.iter().position(|(j, _)| *j == job) else { return Ok(()) };
+                let (_, rel) = data.tree_jobs.remove(i);
+                if let Ok(t) = &t {
+                    data.audit("fs-list.tree", "", &rel, t.folders.iter().map(|f| u64::from(f.files)).sum());
+                }
                 let t = t.map(|t| wfslist::TreeResult {
                     folders: t.folders.into_iter().map(|f| wfslist::Folder { path: f.path, files: f.files, bytes: f.bytes }).collect(),
                     truncated: t.truncated,
@@ -2839,6 +2860,38 @@ mod tests {
     }
 
     #[test]
+    fn the_user_action_effects_and_listings_are_audited_without_their_content() {
+        use {wclip::Host as _, wfslist::Host as _, wlink::Host as _, wside::Host as _};
+        let home = tempdir("audit-fx-home");
+        std::fs::create_dir_all(home.join("code/p/.git")).unwrap();
+        std::fs::create_dir_all(home.join("code/p/src")).unwrap();
+        std::fs::write(home.join("code/p/src/a.rs"), "fn a() {}").unwrap();
+        let core = crate::Core::new(&*tempdir("audit-fx-core"));
+        let tab = core.register_surface(home.to_str().unwrap()).unwrap().surface_id;
+        let caps = Capabilities {
+            clipboard: Some("write".into()), open_url: vec!["github.com".into()], sidebar: true, fs_list: true, ..Default::default()
+        };
+        let mut st = HostState::new("dev.x.fx", &caps, None, None, Some(core.handle()));
+        st.fs.set_home(&home);
+        assert!(st.fs.add_cwd(home.join("code/p").to_str().unwrap()));
+        let pr = "https://github.com/o/r/pull/1?token=secret";
+        st.arm(true, Some(pr));
+        st.write("Goal: the secret plan\nstep two".into()).unwrap();
+        st.open_url(pr.into()).unwrap();
+        st.focus(tab.clone()).unwrap();
+        st.entries(home.join("code/p/src").to_str().unwrap().into()).unwrap();
+        let got: Vec<(String, String, String, u64)> = st.take_audit().into_iter().map(|l| (l.kind, l.surface, l.detail, l.n)).collect();
+        assert_eq!(got, [
+            ("clipboard.write".into(), String::new(), "2 lines".into(), 30),
+            ("link.open-url".into(), String::new(), "github.com".into(), 1),
+            ("sidebar.focus".into(), tab, String::new(), 1),
+            ("fs-list.entries".into(), String::new(), "src".into(), 1),
+        ]);
+        assert!(st.write("again".into()).is_err());
+        assert!(st.take_audit().is_empty(), "a refused effect is not audited");
+    }
+
+    #[test]
     fn audit_lines_name_what_was_touched_and_cut_long_strings() {
         use wpty::Host as _;
         let home = tempdir("audit-home");
@@ -3004,6 +3057,8 @@ mod tests {
         assert_eq!(t.folders.iter().find(|f| f.path == "src").map(|f| (f.files, f.bytes)), Some((1, 3)));
         p.exec_done(d.job, d.outcome.clone()).unwrap();
         assert!(p.store.data().tree_jobs.is_empty(), "on-fs-tree heard it");
+        let walks: Vec<_> = p.store.data_mut().take_audit().into_iter().filter(|l| l.kind == "fs-list.tree").map(|l| (l.detail, l.n)).collect();
+        assert_eq!(walks, [(String::new(), 1)], "the walk is audited as it reports: the project root and the files it counted");
         p.exec_done(d.job, JobOutcome::Exec(Err("x".into()))).unwrap();
         assert!(p.store.data().exec_jobs.is_empty(), "a tree job's id is no exec job");
     }
