@@ -500,6 +500,14 @@ interface link {
 interface fs-list {
   record entry { name: string, size: u64, dir: bool }
   entries: func(dir: string) -> result<list<entry>, string>;
+
+  // The folders under `dir` (scoped like `entries`) down to `depth` levels (0 to 5), sorted by path
+  // ("" is `dir` itself), each with its regular files and their bytes; files deeper than `depth` count
+  // toward their folder at `depth`. Dot entries and symlinks are skipped. After 50,000 entries or
+  // 1.5 s it returns what it counted with `truncated`. One call per 10 s.
+  record folder { path: string, files: u32, bytes: u64 }
+  record tree-result { folders: list<folder>, truncated: bool }
+  tree: func(dir: string, depth: u8) -> result<tree-result, string>;
 }
 
 world plugin {

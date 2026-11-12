@@ -41,6 +41,7 @@ const TICK: Duration = Duration::from_millis(10);
 const CALL_TICKS: u64 = 5;
 const PTY_PER_SEC: usize = 10;
 const FS_LIST_PER_SEC: usize = 20;
+const TREE_EVERY: Duration = Duration::from_secs(10);
 const MAX_PALETTE: usize = 64;
 const MAX_OUTBOX: usize = 256;
 const MAX_NOTIFIED: usize = 64;
@@ -280,6 +281,8 @@ pub struct HostState {
     fs: FsScope,
     pty_times: VecDeque<Instant>,
     list_times: VecDeque<Instant>,
+    /// When `fs-list.tree` last ran.
+    last_tree: Option<Instant>,
     core: Option<CoreHandle>,
     /// Set while this instance may arrange the sidebar.
     sidebar: Option<SidebarToken>,
@@ -357,6 +360,7 @@ impl HostState {
             fs: FsScope::new(&cwd_globs(&caps.fs_read), &cwd_globs(&caps.fs_write), haunt_dir),
             pty_times: VecDeque::new(),
             list_times: VecDeque::new(),
+            last_tree: None,
             sidebar: match &core {
                 Some(c) if caps.sidebar => Some(c.attach_sidebar()),
                 Some(c) => {
@@ -1385,6 +1389,16 @@ impl wfslist::Host for HostState {
         let entries = self.fs.entries(&dir)?;
         Ok(entries.into_iter().map(|e| wfslist::Entry { name: e.name, size: e.size, dir: e.dir }).collect())
     }
+    fn tree(&mut self, dir: String, depth: u8) -> Result<wfslist::TreeResult, String> {
+        let now = Instant::now();
+        if self.last_tree.is_some_and(|t| now.duration_since(t) < TREE_EVERY) {
+            return Err(format!("fs-list.tree runs once per {} s", TREE_EVERY.as_secs()));
+        }
+        self.last_tree = Some(now);
+        let t = self.fs.tree(&dir, depth)?;
+        let folders = t.folders.into_iter().map(|f| wfslist::Folder { path: f.path, files: f.files, bytes: f.bytes }).collect();
+        Ok(wfslist::TreeResult { folders, truncated: t.truncated })
+    }
 }
 
 impl wlink::Host for HostState {
@@ -2273,6 +2287,8 @@ mod tests {
             assert!(st.entries("/".into()).unwrap_err().contains("not inside"), "no project folder seen");
         }
         assert!(st.entries("/".into()).unwrap_err().contains("rate limit"));
+        assert!(st.tree("/".into(), 2).unwrap_err().contains("not inside"));
+        assert!(st.tree("/".into(), 2).unwrap_err().contains("once per 10 s"), "a refused walk still spends the call");
     }
 
     #[test]

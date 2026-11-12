@@ -316,6 +316,28 @@ impl FsScope {
     }
 }
 
+/// Entries `FsScope::tree` looks at, at most, before it stops with `truncated`.
+pub const TREE_SCAN: usize = 50_000;
+pub const TREE_DEPTH: u8 = 5;
+/// After this a walk stops with what it counted; past `TREE_GIVE_UP` a stuck one is left behind.
+const TREE_TIME: std::time::Duration = std::time::Duration::from_millis(1500);
+const TREE_GIVE_UP: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A folder `FsScope::tree` counted: `path` relative to the walk's root ("" for the root itself),
+/// with the regular files in it and their bytes, folders past the depth included.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Folder {
+    pub path: String,
+    pub files: u32,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Tree {
+    pub folders: Vec<Folder>,
+    pub truncated: bool,
+}
+
 /// One entry `FsScope::entries` returns: never anything of a file but its name and size.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
@@ -362,6 +384,105 @@ impl FsScope {
         out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
     }
+}
+
+impl FsScope {
+    /// The folders under `path` (scoped like `entries`) down to `depth` levels (at most 5), breadth
+    /// first, each with its files and bytes; files deeper down count toward their folder at `depth`.
+    /// Dot entries and symlinks are skipped, never followed. Past `TREE_SCAN` entries or 1.5 s it
+    /// returns what it counted with `truncated`. The walk runs on its own thread, so a stuck
+    /// filesystem costs the caller at most 3 s.
+    pub fn tree(&self, path: &str, depth: u8) -> Result<Tree, String> {
+        if depth > TREE_DEPTH {
+            return Err(format!("depth is at most {TREE_DEPTH}"));
+        }
+        let full = canonical(path)?;
+        if self.root_of(&full).is_none() || full.starts_with(&self.haunt) {
+            return Err(format!("{path}: not inside an agent's project folder"));
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("haunt-fs-tree".into())
+            .spawn(move || {
+                let _ = tx.send(walk(&full, depth, TREE_SCAN, std::time::Instant::now() + TREE_TIME));
+            })
+            .map_err(|e| e.to_string())?;
+        rx.recv_timeout(TREE_GIVE_UP).map_err(|_| format!("{path}: the folder didn't answer in time"))?.map_err(|e| io_err(path, e))
+    }
+}
+
+fn walk(root: &Path, depth: u8, scan: usize, deadline: std::time::Instant) -> io::Result<Tree> {
+    let mut tree = Tree::default();
+    let mut seen = 0usize;
+    // (path relative to root, levels below root, index of the folder its files count toward)
+    let mut queue = std::collections::VecDeque::from([(PathBuf::new(), 0u8, 0usize)]);
+    tree.folders.push(Folder { path: String::new(), files: 0, bytes: 0 });
+    while let Some((rel, level, owner)) = queue.pop_front() {
+        let Ok(fd) = open_dir_nofollow(&root.join(&rel)) else { continue };
+        let stop = each_entry(fd, |name, st| {
+            seen += 1;
+            if seen > scan || std::time::Instant::now() > deadline {
+                tree.truncated = true;
+                return false;
+            }
+            match st.st_mode & libc::S_IFMT {
+                libc::S_IFREG => {
+                    let f = &mut tree.folders[owner];
+                    f.files = f.files.saturating_add(1);
+                    f.bytes = f.bytes.saturating_add(st.st_size as u64);
+                }
+                libc::S_IFDIR => {
+                    let child = rel.join(std::ffi::OsStr::from_bytes(name));
+                    let owner = if level < depth {
+                        tree.folders.push(Folder { path: child.to_string_lossy().into_owned(), files: 0, bytes: 0 });
+                        tree.folders.len() - 1
+                    } else {
+                        owner
+                    };
+                    queue.push_back((child, level.saturating_add(1), owner));
+                }
+                _ => {}
+            }
+            true
+        })?;
+        if !stop {
+            break;
+        }
+    }
+    tree.folders.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(tree)
+}
+
+/// Calls `f(name, stat)` for each entry of the open folder `fd` but `.`, `..` and dot names, without
+/// following a symlink, until `f` returns false; returns whether it went through them all.
+fn each_entry(fd: OwnedFd, mut f: impl FnMut(&[u8], &libc::stat) -> bool) -> io::Result<bool> {
+    use std::os::fd::IntoRawFd;
+    let dir = unsafe { libc::fdopendir(fd.into_raw_fd()) };
+    if dir.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    let dfd = unsafe { libc::dirfd(dir) };
+    let mut all = true;
+    loop {
+        let e = unsafe { libc::readdir(dir) };
+        if e.is_null() {
+            break;
+        }
+        let name = unsafe { std::ffi::CStr::from_ptr((*e).d_name.as_ptr()) };
+        if name.to_bytes().starts_with(b".") {
+            continue;
+        }
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstatat(dfd, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+            continue;
+        }
+        if !f(name.to_bytes(), &st) {
+            all = false;
+            break;
+        }
+    }
+    unsafe { libc::closedir(dir) };
+    Ok(all)
 }
 
 fn denied(path: &str) -> String {
@@ -556,6 +677,45 @@ mod tests {
         std::fs::write(root.join("notes.txt"), "x").unwrap();
         assert!(s.read(root.join("notes.txt").to_str().unwrap()).is_err());
         assert!(s.entries(root.join("proj").to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn a_tree_counts_folders_skips_dots_and_never_follows_a_symlink() {
+        let root = tempdir("tree");
+        let s = scope(&root);
+        let proj = root.join("proj");
+        for d in ["src/api/deep/deeper", "docs", ".hidden", "src/.cache"] {
+            std::fs::create_dir_all(proj.join(d)).unwrap();
+        }
+        std::fs::write(proj.join("README.md"), "12345").unwrap();
+        std::fs::write(proj.join("src/api/a.rs"), "abc").unwrap();
+        std::fs::write(proj.join("src/api/deep/deeper/b.rs"), "abcd").unwrap();
+        std::fs::write(proj.join(".hidden/secret"), "x").unwrap();
+        std::fs::write(proj.join("src/.cache/c"), "x").unwrap();
+        symlink(&proj, proj.join("src/loop")).unwrap();
+        symlink(root.join(".."), proj.join("docs/up")).unwrap();
+
+        let t = s.tree(proj.to_str().unwrap(), 2).unwrap();
+        let got: Vec<(&str, u32, u64)> = t.folders.iter().map(|f| (f.path.as_str(), f.files, f.bytes)).collect();
+        assert_eq!(got, [("", 1, 5), ("docs", 0, 0), ("src", 0, 0), ("src/api", 2, 7)], "deeper files count toward src/api");
+        assert!(!t.truncated);
+        assert_eq!(s.tree(proj.to_str().unwrap(), 0).unwrap().folders, [Folder { path: String::new(), files: 3, bytes: 12 }]);
+        assert!(s.tree(proj.to_str().unwrap(), TREE_DEPTH + 1).is_err());
+        assert!(s.tree(root.to_str().unwrap(), 1).unwrap_err().contains("not inside"));
+        assert!(s.tree(proj.join(".hidden").to_str().unwrap(), 1).is_err());
+    }
+
+    #[test]
+    fn a_tree_past_its_scan_cap_is_truncated() {
+        let root = tempdir("tree-cap");
+        let proj = root.join("proj");
+        for i in 0..30 {
+            std::fs::write(proj.join(format!("f{i}")), "x").unwrap();
+        }
+        let t = walk(&proj.canonicalize().unwrap(), 3, 10, std::time::Instant::now() + TREE_TIME).unwrap();
+        assert!(t.truncated && t.folders[0].files == 10, "{t:?}");
+        let t = walk(&proj.canonicalize().unwrap(), 3, 10, std::time::Instant::now()).unwrap();
+        assert!(t.truncated && t.folders[0].files == 0, "past the deadline: {t:?}");
     }
 
     #[test]
