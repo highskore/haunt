@@ -131,7 +131,7 @@ fn show(p: &Prompt) {
             println!("  - {line}");
         }
     }
-    if p.update_from.is_none() {
+    if p.update_from.is_none() && !p.always.is_empty() {
         println!("  - {}", p.always);
     }
 }

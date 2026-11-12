@@ -36,7 +36,8 @@ pub struct PluginMeta {
     pub name: String,
     pub version: String,
     pub api: String,
-    pub entry: String,
+    /// The component; a plugin without one carries data only (see `plugin_pack`).
+    pub entry: Option<String>,
     /// One line for the setup sheet and Settings.
     pub description: Option<String>,
     pub license: Option<String>,
@@ -60,6 +61,8 @@ pub struct Capabilities {
     pub exec: Vec<String>,
     pub terminal_read: bool,
     pub clipboard: Option<String>,
+    /// Data only: contributes a theme in `[contributes.theme]`.
+    pub theme: bool,
 }
 
 const AGENT_EVENTS: &[&str] = &[
@@ -155,6 +158,9 @@ impl Capabilities {
     /// Plain-word lines for the install prompt; the bool marks the ones shown in red.
     pub fn describe(&self) -> Vec<(String, bool)> {
         let mut out = Vec::new();
+        if self.theme {
+            out.push(("adds a theme: colours, fonts and window effects. Its fonts can change how text, including the terminal, is drawn. Runs no code".into(), false));
+        }
         if !self.events.is_empty() {
             out.push((
                 format!("can see agent events ({}): commands, file paths and prompts, which can contain secrets", self.events.join(", ")),
@@ -198,6 +204,7 @@ impl Capabilities {
             decisions_read: self.decisions_read && !old.decisions_read,
             allowlist_suggest: self.allowlist_suggest && !old.allowlist_suggest,
             sidebar: self.sidebar && !old.sidebar,
+            theme: self.theme && !old.theme,
             fs_read: self.fs_read.iter().filter(|g| !old.fs_read.contains(g)).cloned().collect(),
             fs_write: self.fs_write.iter().filter(|g| !old.fs_write.contains(g)).cloned().collect(),
             ..Default::default()
@@ -268,11 +275,13 @@ impl Manifest {
         if !api_supported(&p.api) {
             return Err(ManifestError(format!("plugin needs haunt:plugin api {}, this haunt supports {}.{}", p.api, API.0, API.1)));
         }
-        let entry = std::path::Path::new(&p.entry);
-        let plain = entry.components().all(|c| matches!(c, std::path::Component::Normal(_)));
-        if p.entry.is_empty() || !plain {
-            return Err(ManifestError(format!("entry {:?} must be a relative path inside the plugin folder", p.entry)));
+        if let Some(e) = &p.entry {
+            let plain = std::path::Path::new(e).components().all(|c| matches!(c, std::path::Component::Normal(_)));
+            if e.is_empty() || !plain {
+                return Err(ManifestError(format!("entry {e:?} must be a relative path inside the plugin folder")));
+            }
         }
+        crate::plugin_pack::validate_data_only(self)?;
         if !plain_line(&p.name, NAME_MAX) || p.name.trim().is_empty() {
             return Err(ManifestError(format!("name must be one line of at most {NAME_MAX} plain characters")));
         }

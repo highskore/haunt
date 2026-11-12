@@ -449,6 +449,32 @@ fn plugins_dry_run_shows_each_plugins_capabilities_and_changes_nothing() {
 }
 
 #[test]
+fn a_bundled_theme_previews_without_writing_then_installs() {
+    let Some(a) = adapters() else { return };
+    let e = Env::new("plugins-theme", a);
+    let p = e.root.join("bundle/dev.haunt.theme-glass");
+    std::fs::create_dir_all(&p).unwrap();
+    let manifest = "[plugin]\nid = \"dev.haunt.theme-glass\"\nname = \"Glass\"\nversion = \"0.1.0\"\napi = \"0.4\"\n\
+        [capabilities]\ntheme = true\n[contributes.theme]\nid = \"glass\"\nfile = \"theme.toml\"\n";
+    std::fs::write(p.join("haunt-plugin.toml"), manifest).unwrap();
+    std::fs::write(p.join("theme.toml"), "name = \"Glass\"\n").unwrap();
+    let b = e.root.join("bundle");
+
+    let o = e.with_bundle(&b, &["setup", "--plugins", "theme-glass", "--dry-run"], "");
+    let out = text(&o);
+    assert!(o.status.success(), "{out}");
+    assert!(out.contains("Install the bundled plugin Glass (dev.haunt.theme-glass) 0.1.0. It:\n  - adds a theme: colours, fonts and window effects. Its fonts can change how text, including the terminal, is drawn. Runs no code\n"), "{out}");
+    assert!(!out.contains("  - \n"), "a data-only plugin has no code plugin line: {out}");
+    assert_eq!(e.lock(), String::new());
+    assert!(!e.root.join("haunt/plugins/dev.haunt.theme-glass").exists());
+
+    let o = e.with_bundle(&b, &["setup", "--plugins", "all", "--yes"], "");
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(e.lock().contains("id = \"dev.haunt.theme-glass\"") && e.lock().contains("source = \"bundled\""), "{}", e.lock());
+    assert!(e.root.join("haunt/plugins/dev.haunt.theme-glass/theme.toml").is_file());
+}
+
+#[test]
 fn plugins_install_and_remove_with_yes() {
     let Some(a) = adapters() else { return };
     let e = Env::new("plugins-yes", a);

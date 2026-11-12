@@ -222,6 +222,7 @@ Installed with `haunt plugin install <path>` (cli/), which shows the capabilitie
 | `setTheme(name:tokens:)` | the app switched theme: plugins read `name` and the `ThemeToken`s through `theme`, then get `on-theme-changed()`. A name that isn't lowercase letters, digits, `.` and `-` errors; tokens with a bad name or value are dropped. |
 | `settingsProblems()` | the `[plugins]` entries ignored at load or by the last `setConfig`, worded for the log |
 | `setConfig(configToml:)` | config.toml changed: if its `[plugins]` did, every plugin whose settings JSON is now different gets `on-settings-changed` (see Plugin settings). Returns `ConfigApplied { changed, problems }`: whether `[plugins]` changed, so palette commands may have, and `settingsProblems()`. |
+| `themes()` | the themes installed theme plugins carry: `ThemeContribution { pluginId, id, file, fonts }`, with absolute paths checked to be inside the plugin's folder. See Theme plugins. |
 | `HauntCore.gatePluginRequest(request:)` | the only way to turn a `.ptyAnswer` or `.ptyType` into bytes (`core/src/ptygate.rs`); returns `PtyWrite { surfaceId, bytes, enter }` or `nil` |
 
 Each call runs under a 50 ms CPU budget and 64 MB of memory; a trap or timeout disables that plugin until the next load.
@@ -259,6 +260,26 @@ An ungranted import is absent: a component that imports it fails to link at inst
 - `haunt setup --plugins <names>` (or the setup sheet, or Settings) installs one after showing its capabilities. The FFI's `installBundledPlugin` does it without a prompt, only in the fixtures build (the `fixtures` feature). It goes through `Store::install_bundled_plugin`, pinned with `source = "bundled"`. `Store::preview_bundled_plugin` gives the plan without writing anything (`Preview::Unchanged` only when the copy on disk still matches the lockfile; otherwise installing again rewrites it), and the install goes ahead only if it asks for exactly the capabilities the preview showed. `--remove-plugins` removes it; a copy from another source is left to `haunt plugin remove`.
 - On launch, `Store::install_bundled` only updates the bundled plugins already installed. When the app ships a different build of one, it is updated in place, unless it asks for a capability the pinned one wasn't granted. Then the new files go on disk unpinned, the plugin stops loading ("does not match the lockfile"), and `haunt plugin approve <id>` shows the full prompt.
 - A copy installed from another source is never replaced. Removing a bundled plugin adds its id to the lockfile's `removed_bundled`, so launches never touch it again, until `haunt setup --plugins` installs it again.
+
+**Theme plugins** (data only, `plugin_pack.rs`): a manifest with no `entry` runs no code. Its only capability is `theme = true` (consent line: "adds a theme: colours, fonts and window effects. Its fonts can change how text, including the terminal, is drawn. Runs no code"), and it names its files in `[contributes.theme]`:
+
+```toml
+[capabilities]
+theme = true
+
+[contributes.theme]
+id = "glass"                      # what `theme = "glass"` in config.toml names; not "bw"
+file = "theme.toml"               # the theme file, as in docs/themes.md
+fonts = ["fonts/Exo2.ttf"]        # .ttf, .otf or .ttc
+licenses = ["OFL.txt"]            # required with fonts
+```
+
+- Paths are relative and plain (no `..`, no absolute path). A file that is a symlink, or sits in a folder that leads out of the plugin's folder, is refused.
+- Caps: 256 KB for the theme file and each licence, 8 MB a font, 24 MB in all.
+- `install` copies exactly the manifest and those files into `plugins/<id>/` and pins one digest over them (`sha256_files` in the lockfile, with `sha256_wasm` empty). `load_all` re-hashes them, so a changed file stops the theme loading until `haunt plugin approve <id>`.
+- Two plugins with the same theme id: the second one is a load error.
+- The app registers a theme's fonts for its own process only (`CTFontManager`, `.process` scope), and only while that theme or one it extends is on screen. A theme in `~/.haunt/themes` with the same id wins over the plugin's.
+- Themes installed while the app runs show up after a relaunch.
 
 **fs grants**: `${cwd}` in an `fs_read`/`fs_write` glob expands only to cwds of verified events. A cwd that is `$HOME`, an ancestor of it, inside the haunt dir or containing it is ignored, and if `$HOME` can't be resolved `${cwd}` expands to nothing. No path inside the haunt dir is ever readable, writable or listable, whatever the globs say.
 

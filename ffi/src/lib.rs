@@ -146,6 +146,8 @@ pub use haunt_core::plugins::{HostRequest, Mark, NotifyAction, PaletteItem, RowM
 #[cfg(feature = "plugins")]
 pub use haunt_core::plugin_theme::ThemeToken;
 #[cfg(feature = "plugins")]
+pub use haunt_core::plugin_pack::ThemeContribution;
+#[cfg(feature = "plugins")]
 pub use haunt_core::ptygate::PtyWrite;
 
 #[cfg(feature = "plugins")]
@@ -214,6 +216,11 @@ impl HauntPlugins {
 
     pub fn load_errors(&self) -> Vec<String> {
         haunt_core::sync::lock(&self.set).errors().to_vec()
+    }
+
+    /// The themes installed data-only plugins carry, with absolute paths inside each plugin's folder.
+    pub fn themes(&self) -> Vec<ThemeContribution> {
+        haunt_core::sync::lock(&self.set).themes().to_vec()
     }
 
     /// Settings from config.toml's `[plugins."<id>"]` that were ignored, at load or the last `set_config`.

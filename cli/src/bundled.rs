@@ -21,8 +21,10 @@ pub fn short(id: &str) -> &str {
     id.strip_prefix(FIRST_PARTY).unwrap_or(id)
 }
 
-/// `$HAUNT_BUNDLED_PLUGINS`, else haunt.app/Contents/Resources/plugins beside this CLI (resolved through symlinks).
+/// haunt.app/Contents/Resources/plugins beside this CLI (resolved through symlinks). Debug builds, which tests
+/// run, may point elsewhere with `$HAUNT_BUNDLED_PLUGINS`; a release build trusts only its own app bundle.
 pub fn dir() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
     if let Some(d) = std::env::var_os("HAUNT_BUNDLED_PLUGINS") {
         return Some(PathBuf::from(d));
     }
@@ -174,7 +176,7 @@ impl Plugins {
         for (line, _) in &prompt.lines {
             text += &format!("  - {}\n", e(line));
         }
-        if !matches!(what, Installed::Updated { .. }) {
+        if !matches!(what, Installed::Updated { .. }) && !prompt.always.is_empty() {
             text += &format!("  - {}\n", prompt.always);
         }
         let lines = prompt.lines.into_iter().map(|(l, _)| l).collect();

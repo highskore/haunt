@@ -15,6 +15,7 @@ use crate::ids::hex;
 use crate::model::CoreHandle;
 use crate::plugin_cache::{CwasmCache, check_dir, write_atomic};
 use crate::plugin_manifest::{ALWAYS, Capabilities, MANIFEST, Manifest, valid_id};
+use crate::plugin_pack::{self, ThemeContribution};
 use crate::plugin_settings::PluginConfig;
 use crate::plugin_theme::{Theme, ThemeToken};
 use crate::plugins::{Decoration, HostRequest, HostState, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost, RowMenuItem};
@@ -60,6 +61,9 @@ pub struct LockEntry {
     pub sha256_wasm: String,
     pub sha256_manifest: String,
     pub granted: Capabilities,
+    /// A data-only plugin's files (`plugin_pack::files_digest`); its `sha256_wasm` is empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sha256_files: String,
 }
 
 /// `source` of a plugin that ships inside the app.
@@ -82,6 +86,7 @@ pub struct Prompt {
     pub version: String,
     /// Plain-word capability lines; `true` marks the dangerous ones.
     pub lines: Vec<(String, bool)>,
+    /// What every code plugin may do; empty for a data-only one, which runs none.
     pub always: &'static str,
     /// Set on an update; `lines` then holds only the added capabilities.
     pub update_from: Option<String>,
@@ -115,6 +120,9 @@ struct Checked {
     wasm: Vec<u8>,
     sha256_wasm: String,
     sha256_manifest: String,
+    /// A data-only plugin's files and their digest; empty for a component.
+    files: Vec<(String, Vec<u8>)>,
+    sha256_files: String,
     source: String,
     prompt: Prompt,
     prompted: bool,
@@ -241,7 +249,11 @@ impl Store {
         if c.prompted && !approve(&c.prompt) {
             return Err(StoreError::Declined);
         }
-        self.put(&c.id, &c.manifest_bytes, &c.wasm)?;
+        if c.sha256_files.is_empty() {
+            self.put(&c.id, &c.manifest_bytes, &c.wasm)?;
+        } else {
+            self.put_data(&c.id, &c.manifest_bytes, &c.files)?;
+        }
         let entry = LockEntry {
             id: c.id.clone(),
             version: c.version,
@@ -250,6 +262,7 @@ impl Store {
             sha256_wasm: c.sha256_wasm,
             sha256_manifest: c.sha256_manifest,
             granted: c.caps,
+            sha256_files: c.sha256_files,
         };
         let mut lock = self.read_lock()?;
         lock.plugins.retain(|p| p.id != c.id);
@@ -269,13 +282,16 @@ impl Store {
         let src = src.canonicalize()?;
         let manifest_bytes = read_capped(&src.join(MANIFEST))?;
         let manifest = Manifest::parse(&String::from_utf8_lossy(&manifest_bytes))?;
-        let wasm = read_capped(&src.join(&manifest.plugin.entry))?;
-        let caps = &manifest.capabilities;
         let id = manifest.plugin.id.clone();
         // launch updates find a bundled plugin by its folder name.
         if bundled && src.file_name() != Some(id.as_ref()) {
             return Err(StoreError::Invalid(format!("its manifest is for {id}")));
         }
+        let Some(entry) = manifest.plugin.entry.clone() else {
+            return self.check_data(&src, bundled, manifest, manifest_bytes);
+        };
+        let wasm = read_capped(&src.join(&entry))?;
+        let caps = &manifest.capabilities;
 
         let wasm_digest = digest(&wasm);
         let cache = CwasmCache::open(&self.cache_dir())?;
@@ -326,6 +342,8 @@ impl Store {
             wasm,
             sha256_wasm: wasm_sha,
             sha256_manifest: manifest_sha,
+            files: Vec::new(),
+            sha256_files: String::new(),
             source,
             prompt,
             prompted,
@@ -349,7 +367,7 @@ impl Store {
         Ok(())
     }
 
-    /// Updates the plugins shipped in `dir` (`<dir>/<id>/haunt-plugin.toml` and `plugin.wasm`) that are already
+    /// Updates the plugins shipped in `dir` (`<dir>/<id>/haunt-plugin.toml` and `plugin.wasm`, or a theme's files) that are already
     /// installed from the bundle, without asking: they come inside the signed app. It never installs a new
     /// one (`haunt setup --plugins` does). A bundled update that asks for more than was granted is put on
     /// disk unpinned, so it stays off until `haunt plugin approve`. A copy installed from elsewhere, or
@@ -390,6 +408,9 @@ impl Store {
             return Ok(false);
         }
         let manifest_bytes = read_capped(&src.join(MANIFEST))?;
+        if !src.join(WASM).exists() {
+            return self.bundled_data_one(src, id, &manifest_bytes, lock, i);
+        }
         let wasm = read_capped(&src.join(WASM))?;
         let wasm_digest = digest(&wasm);
         let (wasm_sha, manifest_sha) = (hex(&wasm_digest), sha(&manifest_bytes));
@@ -422,6 +443,7 @@ impl Store {
             sha256_wasm: wasm_sha,
             sha256_manifest: manifest_sha,
             granted: manifest.capabilities,
+            sha256_files: String::new(),
         };
         lock.plugins[i] = entry;
         Ok(true)
@@ -435,11 +457,14 @@ impl Store {
             return Err(StoreError::NotInstalled(id.to_owned()));
         };
         let manifest_bytes = read_capped(&dir.join(MANIFEST))?;
-        let wasm = read_capped(&dir.join(WASM))?;
         let manifest = Manifest::parse(&String::from_utf8_lossy(&manifest_bytes))?;
         if manifest.plugin.id != id {
             return Err(StoreError::Invalid(format!("installed manifest is for {}, not {id}", manifest.plugin.id)));
         }
+        if manifest.plugin.entry.is_none() {
+            return self.approve_data(&mut lock, pos, &dir, &manifest, &manifest_bytes, approve);
+        }
+        let wasm = read_capped(&dir.join(WASM))?;
         let wasm_digest = digest(&wasm);
         let (wasm_sha, manifest_sha) = (hex(&wasm_digest), sha(&manifest_bytes));
         let cache = CwasmCache::open(&self.cache_dir())?;
@@ -484,7 +509,15 @@ impl Store {
     }
 
     pub fn list(&self) -> Result<Vec<Listing>, StoreError> {
-        Ok(self.read_lock()?.plugins.into_iter().map(|entry| Listing { problem: self.verify(&entry).err().map(|e| e.to_string()), entry }).collect())
+        Ok(self
+            .read_lock()?
+            .plugins
+            .into_iter()
+            .map(|entry| {
+                let problem = if entry.sha256_wasm.is_empty() { self.verify_data(&entry).err() } else { self.verify(&entry).err().map(|e| e.to_string()) };
+                Listing { problem, entry }
+            })
+            .collect())
     }
 
     /// The installed manifest and wasm, only if both still hash to what was approved.
@@ -520,6 +553,14 @@ impl Store {
         // Plugins with the same grants share a linker.
         let mut linkers: Vec<(Capabilities, Linker<HostState>)> = Vec::new();
         for e in self.read_lock()?.plugins {
+            if e.sha256_wasm.is_empty() {
+                match self.verify_data(&e) {
+                    Ok(t) if set.themes.iter().any(|o| o.id == t.id) => set.errors.push(format!("{}: theme {} is already installed", e.id, t.id)),
+                    Ok(t) => set.themes.push(t),
+                    Err(err) => set.errors.push(format!("{}: {err}", e.id)),
+                }
+                continue;
+            }
             let loaded = self.verify(&e).and_then(|(manifest, wasm, wasm_digest)| {
                 let cache = cache.as_ref().map_err(|err| StoreError::Invalid(err.to_string()))?;
                 let data = self.data_dir(&e.id);
@@ -556,6 +597,188 @@ impl Store {
     }
 }
 
+/// Data-only plugins: their files are copied and pinned like a component, and nothing runs.
+impl Store {
+    fn check_data(&self, src: &Path, bundled: bool, manifest: Manifest, manifest_bytes: Vec<u8>) -> Result<Checked, StoreError> {
+        let pack = plugin_pack::theme_pack(&manifest)?.ok_or_else(|| StoreError::Invalid("no [contributes.theme]".into()))?;
+        let files = plugin_pack::read_files(src, &pack).map_err(StoreError::Invalid)?;
+        let id = manifest.plugin.id.clone();
+        let caps = manifest.capabilities.clone();
+        let old = self.read_lock()?.plugins.into_iter().find(|p| p.id == id);
+        let source = if bundled { BUNDLED.to_owned() } else { src.display().to_string() };
+        let (files_sha, manifest_sha) = (plugin_pack::files_digest(&files), sha(&manifest_bytes));
+        let mut prompt = Prompt {
+            id: id.clone(),
+            name: manifest.plugin.name.clone(),
+            version: manifest.plugin.version.clone(),
+            lines: caps.describe(),
+            always: "",
+            update_from: None,
+            changed_on_disk: false,
+            replaces: None,
+        };
+        let same = old.as_ref().is_some_and(|o| o.source == source && o.sha256_files == files_sha && o.sha256_manifest == manifest_sha);
+        let intact = same && old.as_ref().is_some_and(|o| self.verify_data(o).is_ok());
+        prompt.changed_on_disk = same && !intact;
+        let prompted = match &old {
+            Some(o) if o.source == source => {
+                prompt.update_from = Some(o.version.clone());
+                prompt.lines = caps.added_since(&o.granted);
+                let new = self.new_fonts(&id, &pack, &files);
+                if new > 0 {
+                    prompt.lines.push((format!("adds or changes {new} font file(s) in its theme, which can change how text, including the terminal, is drawn"), false));
+                }
+                !prompt.lines.is_empty()
+            }
+            Some(o) => {
+                prompt.replaces = Some(o.source.clone());
+                true
+            }
+            None => true,
+        };
+        let installed = match &old {
+            Some(o) if prompt.replaces.is_some() => Installed::Replaced { old_source: o.source.clone() },
+            Some(_) => Installed::Updated { prompted },
+            None => Installed::New,
+        };
+        Ok(Checked {
+            id,
+            version: manifest.plugin.version.clone(),
+            caps,
+            manifest_bytes,
+            wasm: Vec::new(),
+            sha256_wasm: String::new(),
+            sha256_manifest: manifest_sha,
+            files,
+            sha256_files: files_sha,
+            source,
+            prompt,
+            prompted,
+            installed,
+            unchanged: intact,
+        })
+    }
+
+    /// `bundled_one` for a data-only plugin: the same rules, with its files pinned instead of a component.
+    fn bundled_data_one(&self, src: &Path, id: &str, manifest_bytes: &[u8], lock: &mut Lock, i: usize) -> Result<bool, StoreError> {
+        let manifest = Manifest::parse(&String::from_utf8_lossy(manifest_bytes))?;
+        if manifest.plugin.id != id {
+            return Err(StoreError::Invalid(format!("its manifest is for {}", manifest.plugin.id)));
+        }
+        let pack = plugin_pack::theme_pack(&manifest)?.ok_or_else(|| StoreError::Invalid("no [contributes.theme]".into()))?;
+        let files = plugin_pack::read_files(src, &pack).map_err(StoreError::Invalid)?;
+        let (files_sha, manifest_sha) = (plugin_pack::files_digest(&files), sha(manifest_bytes));
+        if lock.plugins[i].sha256_files == files_sha && lock.plugins[i].sha256_manifest == manifest_sha {
+            return Ok(false);
+        }
+        let dest = self.plugin_dir(id)?;
+        let grew = !manifest.capabilities.added_since(&lock.plugins[i].granted).is_empty() || self.new_fonts(id, &pack, &files) > 0;
+        let on_disk = read_capped(&dest.join(MANIFEST)).is_ok_and(|m| m == manifest_bytes)
+            && plugin_pack::read_files(&dest, &pack).is_ok_and(|f| plugin_pack::files_digest(&f) == files_sha);
+        if grew && on_disk {
+            return Ok(false);
+        }
+        self.put_data(id, manifest_bytes, &files)?;
+        if grew {
+            return Ok(false);
+        }
+        lock.plugins[i] = LockEntry {
+            id: id.to_owned(),
+            version: manifest.plugin.version.clone(),
+            source: BUNDLED.into(),
+            commit: None,
+            sha256_wasm: String::new(),
+            sha256_manifest: manifest_sha,
+            granted: manifest.capabilities,
+            sha256_files: files_sha,
+        };
+        Ok(true)
+    }
+
+    /// How many of `pack`'s fonts, as read into `files`, the installed copy of `id` doesn't have byte for byte;
+    /// all of them if it can't be read. A font swapped under the same name counts.
+    fn new_fonts(&self, id: &str, pack: &plugin_pack::ThemePack, files: &[(String, Vec<u8>)]) -> usize {
+        let old: BTreeMap<String, Vec<u8>> = self
+            .plugin_dir(id)
+            .ok()
+            .and_then(|d| {
+                let m = Manifest::parse(&String::from_utf8_lossy(&read_capped(&d.join(MANIFEST)).ok()?)).ok()?;
+                let old = plugin_pack::theme_pack(&m).ok().flatten()?;
+                let read = plugin_pack::read_files(&d, &old).ok()?;
+                Some(read.into_iter().filter(|(rel, _)| old.fonts.contains(rel)).map(|(rel, b)| (rel, Sha256::digest(b).to_vec())).collect())
+            })
+            .unwrap_or_default();
+        pack.fonts
+            .iter()
+            .filter(|f| {
+                let now = files.iter().find(|(rel, _)| rel == *f).map(|(_, b)| Sha256::digest(b).to_vec());
+                now.is_none() || old.get(*f) != now.as_ref()
+            })
+            .count()
+    }
+
+    fn put_data(&self, id: &str, manifest_bytes: &[u8], files: &[(String, Vec<u8>)]) -> Result<(), StoreError> {
+        let dest = self.plugins_dir().join(id);
+        let staging = self.plugins_dir().join(format!(".{id}.staging"));
+        let _ = fs::remove_dir_all(&staging);
+        mkdir_private(&staging)?;
+        write_atomic(&staging.join(MANIFEST), manifest_bytes)?;
+        for (rel, bytes) in files {
+            let path = staging.join(rel);
+            if let Some(parent) = path.parent() {
+                mkdir_private(parent)?;
+            }
+            write_atomic(&path, bytes)?;
+        }
+        if dest.exists() {
+            fs::remove_dir_all(&dest)?;
+        }
+        fs::rename(&staging, &dest)?;
+        Ok(())
+    }
+
+    fn approve_data(&self, lock: &mut Lock, pos: usize, dir: &Path, manifest: &Manifest, manifest_bytes: &[u8], approve: &mut dyn FnMut(&Prompt) -> bool) -> Result<(), StoreError> {
+        let pack = plugin_pack::theme_pack(manifest)?.ok_or_else(|| StoreError::Invalid("no [contributes.theme]".into()))?;
+        let files_sha = plugin_pack::files_digest(&plugin_pack::read_files(dir, &pack).map_err(StoreError::Invalid)?);
+        let manifest_sha = sha(manifest_bytes);
+        let e = &mut lock.plugins[pos];
+        let prompt = Prompt {
+            id: e.id.clone(),
+            name: manifest.plugin.name.clone(),
+            version: manifest.plugin.version.clone(),
+            lines: manifest.capabilities.describe(),
+            always: "",
+            update_from: None,
+            changed_on_disk: e.sha256_files != files_sha || e.sha256_manifest != manifest_sha,
+            replaces: None,
+        };
+        if !approve(&prompt) {
+            return Err(StoreError::Declined);
+        }
+        e.version = manifest.plugin.version.clone();
+        e.sha256_wasm = String::new();
+        e.sha256_manifest = manifest_sha;
+        e.sha256_files = files_sha;
+        e.granted = manifest.capabilities.clone();
+        self.write_lock(lock)
+    }
+
+    /// The installed theme, only if its manifest and files still hash to what was approved.
+    fn verify_data(&self, e: &LockEntry) -> Result<ThemeContribution, String> {
+        let dir = self.plugin_dir(&e.id).map_err(|err| err.to_string())?;
+        let manifest_bytes = read_capped(&dir.join(MANIFEST)).map_err(|err| err.to_string())?;
+        if sha(&manifest_bytes) != e.sha256_manifest {
+            return Err(format!("manifest does not match the lockfile; run `haunt plugin approve {}`", e.id));
+        }
+        let manifest = Manifest::parse(&String::from_utf8_lossy(&manifest_bytes)).map_err(|err| err.to_string())?;
+        let pack = plugin_pack::theme_pack(&manifest).map_err(|err| err.to_string())?.ok_or("no [contributes.theme]")?;
+        if plugin_pack::files_digest(&plugin_pack::read_files(&dir, &pack)?) != e.sha256_files {
+            return Err(format!("the theme's files do not match the lockfile; run `haunt plugin approve {}`", e.id));
+        }
+        plugin_pack::contribution(&e.id, &dir, &pack, e.source == BUNDLED)
+    }
+}
+
 /// The user's installed plugins, loaded.
 #[derive(Default)]
 pub struct PluginSet {
@@ -566,6 +789,7 @@ pub struct PluginSet {
     settings_problems: Vec<String>,
     /// The `[plugins]` tables last applied; None until a config.toml that parses.
     config_tables: Option<BTreeMap<String, toml::Table>>,
+    themes: Vec<ThemeContribution>,
 }
 
 /// The most settings JSON one plugin gets.
@@ -582,6 +806,11 @@ fn capped_settings(config: &PluginConfig, id: &str, schema: &toml::Table, proble
 }
 
 impl PluginSet {
+    /// The themes installed data-only plugins contribute.
+    pub fn themes(&self) -> &[ThemeContribution] {
+        &self.themes
+    }
+
     /// Plugins that were not loaded, with the reason (hash mismatch, link failure, trap in `init`).
     pub fn errors(&self) -> &[String] {
         &self.errors

@@ -22,6 +22,8 @@ pub mod plugin_manifest;
 #[cfg(feature = "plugins")]
 pub mod plugin_store;
 #[cfg(feature = "plugins")]
+pub mod plugin_pack;
+#[cfg(feature = "plugins")]
 pub mod plugin_settings;
 #[cfg(feature = "plugins")]
 pub mod plugin_theme;
