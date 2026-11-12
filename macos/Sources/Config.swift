@@ -265,11 +265,14 @@ final class HauntConfig {
         var agentsView = false
         /// Written by `haunt setup`; nil until it has run, which is when the first-launch picker shows.
         var agents: [String]?
+        /// The right pane's width per plugin id, in points.
+        var rightPaneWidths: [String: Double] = [:]
 
         enum CodingKeys: String, CodingKey {
             case sidebarHidden = "sidebar_hidden"
             case agentsView = "agents_view"
             case agents
+            case rightPaneWidths = "right_pane_widths"
         }
 
         init() {}
@@ -280,6 +283,7 @@ final class HauntConfig {
             sidebarHidden = try c.decodeIfPresent(Bool.self, forKey: .sidebarHidden) ?? false
             agentsView = try c.decodeIfPresent(Bool.self, forKey: .agentsView) ?? false
             agents = try c.decodeIfPresent([String].self, forKey: .agents)
+            rightPaneWidths = try c.decodeIfPresent([String: Double].self, forKey: .rightPaneWidths) ?? [:]
         }
     }
 
@@ -313,6 +317,7 @@ final class HauntConfig {
         var file = loadState()
         file.sidebarHidden = state.sidebarHidden
         file.agentsView = state.agentsView
+        file.rightPaneWidths = state.rightPaneWidths
         state.agents = file.agents
         saveState(file)
     }

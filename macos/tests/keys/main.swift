@@ -141,6 +141,10 @@ sc.flushState()
 let merged = HauntConfig(dir: stateDir).loadState()
 check(merged.sidebarHidden && merged.agents == ["codex"], "flush merges the app's keys into the file")
 check(sc.state.agents == ["codex"], "flush picks up the file's agents")
+sc.updateState { $0.rightPaneWidths["dev.haunt.code-map"] = 400 }
+sc.flushState()
+check(HauntConfig(dir: stateDir).loadState().rightPaneWidths == ["dev.haunt.code-map": 400], "the right pane's width is kept per plugin")
+check(old.rightPaneWidths.isEmpty, "older state.json has no pane widths")
 try? FileManager.default.removeItem(at: stateDir)
 // Shifted digits and punctuation match as the shifted character; delete is forward delete.
 check(Shortcut.parse("cmd+shift+1")?.keyEquivalent == "!", "cmd+shift+1 matches as !")

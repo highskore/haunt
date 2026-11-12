@@ -4,6 +4,9 @@ import AppKit
 protocol PanelHost: AnyObject {
     var window: NSWindow? { get }
     func setRightPane(_ view: NSView?)
+    /// The right pane's width the user last chose for a plugin, kept across launches.
+    func rightPaneWidth(plugin: String) -> CGFloat?
+    func setRightPaneWidth(_ width: CGFloat, plugin: String)
 }
 
 /// Shows the panels plugins describe (`HostRequest.showPanel`), drawn natively from the core's checked
@@ -11,6 +14,7 @@ protocol PanelHost: AnyObject {
 /// No show takes focus: a plugin's timer can call `show`.
 final class PluginPanels {
     static let rightWidth: CGFloat = 320
+    static let rightWidths: ClosedRange<CGFloat> = 280...480
     private static let cardWidth: CGFloat = 300
     private static let sheetWidth: CGFloat = 420
     private static let windowWidth: CGFloat = 480
@@ -57,7 +61,9 @@ final class PluginPanels {
         switch panel.placement {
         case .right:
             rightOwner = key
-            host?.setRightPane(frame)
+            let pane = RightPane(frame, width: host?.rightPaneWidth(plugin: pluginId) ?? Self.rightWidth)
+            pane.onResized = { [weak self] w in self?.host?.setRightPaneWidth(w, plugin: pluginId) }
+            host?.setRightPane(pane)
         case .sheet:
             let w = PanelWindow(contentRect: NSRect(x: 0, y: 0, width: Self.sheetWidth, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
             w.contentView = frame
@@ -431,6 +437,73 @@ private final class CanvasView: NSView {
                 let t = Draw.line(text, Draw.ui(11), PanelFrame.color(tone))
                 Draw.text(t, font: Draw.ui(11), x: CGFloat(x), top: CGFloat(y), lineHeight: 16, in: NSGraphicsContext.current!.cgContext)
             }
+        }
+    }
+}
+
+/// The right pane: a plugin's panel with a grip on its left edge that sets its width, 280 to 480 pt.
+final class RightPane: NSView {
+    private(set) var width: CGFloat
+    /// The user let go of the grip at this width.
+    var onResized: ((CGFloat) -> Void)?
+    private let grip = Grip()
+    private static let gripW: CGFloat = 6
+
+    override var isFlipped: Bool { true }
+
+    init(_ content: NSView, width: CGFloat) {
+        self.width = min(max(width, PluginPanels.rightWidths.lowerBound), PluginPanels.rightWidths.upperBound)
+        super.init(frame: .zero)
+        addSubview(content)
+        addSubview(grip)
+        grip.onDrag = { [weak self] dx in self?.drag(dx) }
+        grip.onEnd = { [weak self] in if let self { self.onResized?(self.width) } }
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        subviews.first { $0 !== grip }?.frame = bounds
+        grip.frame = NSRect(x: 0, y: 0, width: Self.gripW, height: bounds.height)
+    }
+
+    /// Dragging left widens the pane.
+    private func drag(_ dx: CGFloat) {
+        let w = min(max(width - dx, PluginPanels.rightWidths.lowerBound), PluginPanels.rightWidths.upperBound)
+        guard w != width else { return }
+        width = w
+        superview?.needsLayout = true
+    }
+
+    /// A hairline divider with a small handle at 40% of its height, as in the mockup.
+    private final class Grip: NSView {
+        var onDrag: ((CGFloat) -> Void)?
+        var onEnd: (() -> Void)?
+        private var lastX: CGFloat?
+
+        override var isFlipped: Bool { true }
+
+        override func draw(_ dirtyRect: NSRect) {
+            Tok.Color.floatBorder.setFill()
+            NSRect(x: 0, y: 0, width: Tok.App.hairline, height: bounds.height).fill()
+            Tok.Color.textMeta.setFill()
+            NSBezierPath(roundedRect: NSRect(x: 0, y: bounds.height * 0.4, width: 4, height: 18), xRadius: 2, yRadius: 2).fill()
+        }
+
+        override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeLeftRight) }
+
+        override func mouseDown(with event: NSEvent) { lastX = event.locationInWindow.x }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard let x = lastX else { return }
+            onDrag?(event.locationInWindow.x - x)
+            lastX = event.locationInWindow.x
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            lastX = nil
+            onEnd?()
         }
     }
 }

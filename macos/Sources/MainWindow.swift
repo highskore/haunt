@@ -132,7 +132,8 @@ private final class RootView: NSView {
         toast.frame = sidebarHidden
             ? toast.frame(in: NSRect(x: bounds.width / 2, y: 0, width: bounds.width / 2, height: top))
             : toast.frame(in: sidebar.frame)
-        let rightW = rightPane == nil ? 0 : min(PluginPanels.rightWidth, max(bounds.width - w - Tok.App.minPaneW, 0))
+        let paneW = (rightPane as? RightPane)?.width ?? PluginPanels.rightWidth
+        let rightW = rightPane == nil ? 0 : min(paneW, max(bounds.width - w - Tok.App.minPaneW, 0))
         pane.frame = NSRect(x: w, y: top, width: bounds.width - w - rightW, height: bounds.height - top)
         rightPane?.frame = NSRect(x: bounds.width - rightW, y: top, width: rightW, height: bounds.height - top)
         review?.frame = reviewCoversSidebar ? NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top) : pane.frame
@@ -603,6 +604,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
     func drainPluginRequests() { bridge.drain() }
 
     func setRightPane(_ view: NSView?) { root.rightPane = view }
+    func rightPaneWidth(plugin: String) -> CGFloat? { config.state.rightPaneWidths[plugin].map { CGFloat($0) } }
+    func setRightPaneWidth(_ width: CGFloat, plugin: String) {
+        if fixture == nil { config.updateState { $0.rightPaneWidths[plugin] = Double(width) } }
+    }
 
     // MARK: Title bar
 
