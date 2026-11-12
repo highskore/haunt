@@ -699,7 +699,7 @@ final class PaletteView: NSView {
         }
         let close = dialogClose
         Draw.bevel(close, "button")
-        Layers.draw("button", close, text: [], state: state, in: ctx)
+        Layers.draw("button", close, text: [Layers.Run(rect: close.insetBy(dx: 4.5, dy: 4), ink: .black)], state: state, in: ctx)
         let x = NSBezierPath(), c = close.insetBy(dx: 4.5, dy: 4)
         x.move(to: NSPoint(x: c.minX, y: c.minY)); x.line(to: NSPoint(x: c.maxX, y: c.maxY))
         x.move(to: NSPoint(x: c.maxX, y: c.minY)); x.line(to: NSPoint(x: c.minX, y: c.maxY))
