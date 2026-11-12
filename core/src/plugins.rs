@@ -49,6 +49,8 @@ pub const MAX_KEYS: usize = 8;
 const MAX_LOGS: usize = 1000;
 /// Audit lines kept between drains; past this they are counted, never silently lost.
 const MAX_AUDIT: usize = 1024;
+/// Audit kinds a plugin can repeat cheaply; within one call each folds into one line.
+const FOLDED_AUDIT: [&str; 3] = ["fs.read", "fs.list", "fs-list.entries"];
 
 /// What the host did for a plugin with the user's terminal or machine, recorded by the host apart from
 /// the plugin's own log, so `log` can't crowd it out. Drained to `plugin-audit.jsonl`.
@@ -65,8 +67,11 @@ pub struct AuditLine {
     /// The command's name, the path inside the project folder, or the query's text.
     pub detail: String,
     /// Lines read, the request answered, bytes typed or moved, the job started, names listed, rows
-    /// returned, or lines dropped.
+    /// returned, or lines dropped; summed over `count`.
     pub n: u64,
+    /// Calls this line stands for: repeats of a cheap kind (`FOLDED_AUDIT`) in one plugin call fold
+    /// into one line, `detail` the first one's, so a flood can't rotate older lines out of the file.
+    pub count: u64,
     /// The full length in characters of a string field cut to `AUDIT_STR_MAX`, as (field, length).
     pub clipped: Vec<AuditClip>,
 }
@@ -392,6 +397,14 @@ impl HostState {
     }
 
     fn audit(&mut self, kind: &str, surface: &str, detail: &str, n: u64) {
+        // The buffer holds one call's lines: it is drained after every call.
+        if FOLDED_AUDIT.contains(&kind)
+            && let Some(l) = self.audit.iter_mut().find(|l| l.kind == kind)
+        {
+            l.n += n;
+            l.count += 1;
+            return;
+        }
         if self.audit.len() >= MAX_AUDIT {
             self.audit_dropped += 1;
             return;
@@ -412,6 +425,7 @@ impl HostState {
             surface: cut("surface", surface),
             detail: cut("detail", detail),
             n,
+            count: 1,
             clipped,
         };
         self.audit.push(line);
@@ -461,6 +475,7 @@ impl HostState {
                 surface: String::new(),
                 detail: String::new(),
                 n,
+                count: 1,
                 clipped: Vec::new(),
             });
         }
@@ -2864,6 +2879,27 @@ mod tests {
         ]);
         assert!(st.write("again".into()).is_err());
         assert!(st.take_audit().is_empty(), "a refused effect is not audited");
+    }
+
+    #[test]
+    fn repeated_reads_and_listings_in_one_call_fold_into_one_line() {
+        let mut st = HostState::new("dev.x.fs", &Capabilities::default(), None, None, None);
+        for i in 0..500 {
+            st.audit("fs.read", "", &format!("src/{i}.rs"), 10);
+        }
+        st.audit("fs.list", "", "src", 3);
+        st.audit("fs.write", "", "src/a.rs", 1);
+        st.audit("fs.write", "", "src/b.rs", 1);
+        st.audit("fs.list", "", "docs", 2);
+        let got: Vec<(String, String, u64, u64)> = st.take_audit().into_iter().map(|l| (l.kind, l.detail, l.n, l.count)).collect();
+        assert_eq!(got, [
+            ("fs.read".into(), "src/0.rs".into(), 5000, 500),
+            ("fs.list".into(), "src".into(), 5, 2),
+            ("fs.write".into(), "src/a.rs".into(), 1, 1),
+            ("fs.write".into(), "src/b.rs".into(), 1, 1),
+        ]);
+        st.audit("fs.read", "", "src/next.rs", 4);
+        assert!(matches!(&st.take_audit()[..], [l] if l.detail == "src/next.rs" && l.count == 1), "the next call starts afresh");
     }
 
     #[test]

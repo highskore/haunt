@@ -1243,6 +1243,9 @@ fn append_audit(path: &Path, lines: &[AuditLine], max: u64) -> std::io::Result<(
         for c in &l.clipped {
             v[format!("{}_len", c.field)] = c.len.into();
         }
+        if l.count > 1 {
+            v["count"] = l.count.into();
+        }
         text.push_str(&v.to_string());
         text.push('\n');
     }
@@ -1337,6 +1340,7 @@ mod tests {
             surface: "s\"1".into(),
             detail: "git-log".into(),
             n,
+            count: 1,
             clipped: vec![crate::plugins::AuditClip { field: "surface".into(), len: 90 }],
         };
         fs::write(&path, "").unwrap();

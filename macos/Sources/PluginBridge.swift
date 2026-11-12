@@ -81,7 +81,7 @@ final class PluginBridge {
         guard let p = plugins else { return }
         let audit = final ? p.drainAuditFinal() : p.drainAudit()
         for l in audit.lines {
-            AppDelegate.logger.notice("plugin audit \(l.plugin, privacy: .public) \(l.kind, privacy: .public) surface=\(l.surface, privacy: .public) \(l.detail, privacy: .public) n=\(l.n)")
+            AppDelegate.logger.notice("plugin audit \(l.plugin, privacy: .public) \(l.kind, privacy: .public) surface=\(l.surface, privacy: .public) \(l.detail, privacy: .public) n=\(l.n) count=\(l.count)")
         }
         if let e = audit.error { AppDelegate.logger.error("plugin audit: \(e, privacy: .public)") }
     }

@@ -453,6 +453,7 @@ struct AuditLine: Equatable, Hashable {
     var surface: String
     var detail: String
     var n: UInt64
+    var count: UInt64
     var clipped: [AuditClip]
 }
 
