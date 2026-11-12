@@ -97,11 +97,11 @@ let app = NSApplication.shared
 app.setActivationPolicy(.prohibited)
 let render = ProcessInfo.processInfo.environment["HAUNT_DOCK_RENDER"]
 let haunt = tile()
-let (sleepy, open, needs, blink) = (dockImage("sleepy", fill: .darkGray), dockImage("open", fill: .gray),
+let (sleepy, awake, needs, blink) = (dockImage("sleepy", fill: .darkGray), dockImage("open", fill: .gray),
                                     dockImage("needs", fill: .lightGray), dockImage("blink", fill: .white))
 let dock = PluginDock()
 let p = "dev.haunt.dock-ghost"
-dock.register(pluginId: p, images: [sleepy, open, needs, blink])
+dock.register(pluginId: p, images: [sleepy, awake, needs, blink])
 
 dock.show(pluginId: p, image: "sleepy", badge: nil, blink: nil)
 let idle = tile()
@@ -134,7 +134,7 @@ check(tile() == working, "and turning it on again shows the plugin's")
 
 dock.register(pluginId: p, images: [sleepy, needs, blink, DockImage(id: "open", width: needs.width, height: needs.height, rgba: needs.rgba)])
 check(tile() != working, "new pixels under the shown id show at once")
-dock.register(pluginId: p, images: [sleepy, needs, blink, open])
+dock.register(pluginId: p, images: [sleepy, needs, blink, awake])
 
 let other = "dev.haunt.other"
 dock.register(pluginId: other, images: [DockImage(id: "short", width: 64, height: 64, rgba: Data(count: 64 * 64 * 4 - 1)),
