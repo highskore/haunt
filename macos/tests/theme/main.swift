@@ -469,6 +469,8 @@ check(words.theme.app.strings["palette.foot"] == nil && words.problems.contains 
       "a bidi override is refused")
 check(words.theme.app.strings["row.sub.prefix"] == nil && words.problems.contains { $0.contains("strings.row.sub.prefix: longer") }, "so is a long one")
 check(words.problems.contains { $0.contains("strings.palette.input.glyph: more than 2 combining marks") }, "and a stack of marks")
+write(user, "ignorable", "[strings]\npalette.header = \"In\u{3164}voke\"\nrow.sub.prefix = \"\u{E0041}\"\n")
+check(load("ignorable").theme.app.strings.isEmpty && load("ignorable").problems.count == 2, "default-ignorables are hidden too: \(load("ignorable").problems)")
 check(words.theme.app.strings["command"] == nil && words.problems.contains { $0.contains("strings.command: unknown string") }, "and an unknown place")
 let day = DateComponents(calendar: Calendar(identifier: .gregorian), year: 2026, month: 11, day: 4).date!
 check(words.theme.string("titlebar.right", now: day) == "IV · XI · MMXXVI", "dates come from the clock, in Roman numerals")
