@@ -17,7 +17,7 @@ final class PluginBridge {
     /// Set once the core has started, so the decision log is loaded before plugins read it.
     var plugins: PluginsAPI? {
         // The old set's audit lines are written before it goes.
-        willSet { drainAudit() }
+        willSet { drainAudit(final: true) }
         didSet {
             panels.closeAll()
             hold.release()
@@ -76,8 +76,10 @@ final class PluginBridge {
 
     var loadErrors: [String] { plugins?.loadErrors() ?? [] }
 
-    private func drainAudit() {
-        guard let audit = plugins?.drainAudit() else { return }
+    /// `final`: the set is going, so wait out a plugin call in progress rather than lose its lines.
+    private func drainAudit(final: Bool = false) {
+        guard let p = plugins else { return }
+        let audit = final ? p.drainAuditFinal() : p.drainAudit()
         for l in audit.lines {
             AppDelegate.logger.notice("plugin audit \(l.plugin, privacy: .public) \(l.kind, privacy: .public) surface=\(l.surface, privacy: .public) \(l.detail, privacy: .public) n=\(l.n)")
         }

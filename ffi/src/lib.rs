@@ -292,6 +292,12 @@ impl HauntPlugins {
         AuditDrain { lines, error }
     }
 
+    /// `drain_audit` before this set is dropped or replaced: waits briefly for a plugin call in progress.
+    pub fn drain_audit_final(&self) -> AuditDrain {
+        let (lines, error) = haunt_core::plugin_store::drain_audit_final(&self.set);
+        AuditDrain { lines, error }
+    }
+
     /// Plugin entries for a row's context menu, built when the menu opens.
     pub fn row_menu_items(&self, surface_id: String) -> Vec<RowMenuItem> {
         haunt_core::sync::lock(&self.set).row_menu(&surface_id)

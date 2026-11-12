@@ -1271,6 +1271,25 @@ pub fn drain_audit_now(set: &Mutex<PluginSet>) -> (Vec<AuditLine>, Option<String
     }
 }
 
+/// How long `drain_audit_final` waits out a plugin call in progress; a call is cut off well before this.
+pub const FINAL_DRAIN_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// `drain_audit` before the set goes: waits up to `FINAL_DRAIN_WAIT` for a plugin call to finish
+/// instead of losing its lines, and says so if one outlasts it.
+pub fn drain_audit_final(set: &Mutex<PluginSet>) -> (Vec<AuditLine>, Option<String>) {
+    let start = std::time::Instant::now();
+    loop {
+        match set.try_lock() {
+            Ok(mut s) => return s.drain_audit(),
+            Err(std::sync::TryLockError::Poisoned(e)) => return e.into_inner().drain_audit(),
+            Err(std::sync::TryLockError::WouldBlock) if start.elapsed() < FINAL_DRAIN_WAIT => std::thread::sleep(std::time::Duration::from_millis(2)),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return (Vec::new(), Some(format!("{AUDIT_LOG}: a plugin call outlasted {} ms; its lines are lost", FINAL_DRAIN_WAIT.as_millis())));
+            }
+        }
+    }
+}
+
 pub fn take_requests_now(set: &Mutex<PluginSet>) -> Vec<HostRequest> {
     match set.try_lock() {
         Ok(mut s) => s.take_requests(),
@@ -1281,6 +1300,29 @@ pub fn take_requests_now(set: &Mutex<PluginSet>) -> Vec<HostRequest> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_final_drain_waits_out_a_plugin_call_but_not_forever() {
+        let set = Arc::new(Mutex::new(PluginSet::default()));
+        let hold_for = |d: std::time::Duration| {
+            let held = set.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let t = std::thread::spawn(move || {
+                let _g = held.lock().unwrap();
+                tx.send(()).unwrap();
+                std::thread::sleep(d);
+            });
+            rx.recv().unwrap();
+            t
+        };
+        let t = hold_for(std::time::Duration::from_millis(100));
+        assert_eq!(drain_audit_now(&set), (Vec::new(), None), "the per-call drain doesn't wait");
+        assert_eq!(drain_audit_final(&set).1, None, "the final one waits for the call to end");
+        t.join().unwrap();
+        let t = hold_for(FINAL_DRAIN_WAIT * 2);
+        assert!(drain_audit_final(&set).1.is_some_and(|e| e.contains("lost")), "nor forever");
+        t.join().unwrap();
+    }
+
     #[test]
     fn audit_lines_append_to_an_owner_only_jsonl() {
         use std::os::unix::fs::PermissionsExt as _;

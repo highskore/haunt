@@ -31,6 +31,7 @@ protocol PluginsAPI: AnyObject {
     func invokePaletteItem(pluginId: String, itemId: String, terminalShown: Bool) throws
     func takeRequests() -> [HostRequest]
     func drainAudit() -> AuditDrain
+    func drainAuditFinal() -> AuditDrain
     func rowMenuItems(surfaceId: String) -> [RowMenuItem]
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws
     func topRowClicked(pluginId: String) throws
@@ -144,6 +145,7 @@ final class NoPlugins: PluginsAPI {
     func invokePaletteItem(pluginId: String, itemId: String, terminalShown: Bool) throws {}
     func takeRequests() -> [HostRequest] { [] }
     func drainAudit() -> AuditDrain { AuditDrain(lines: [], error: nil) }
+    func drainAuditFinal() -> AuditDrain { AuditDrain(lines: [], error: nil) }
     func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
     func topRowClicked(pluginId: String) throws {}
@@ -179,6 +181,7 @@ final class FixturePlugins: PluginsAPI {
     func invokePaletteItem(pluginId: String, itemId: String, terminalShown: Bool) throws {}
     func takeRequests() -> [HostRequest] { [] }
     func drainAudit() -> AuditDrain { AuditDrain(lines: [], error: nil) }
+    func drainAuditFinal() -> AuditDrain { AuditDrain(lines: [], error: nil) }
     func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
     func topRowClicked(pluginId: String) throws {}

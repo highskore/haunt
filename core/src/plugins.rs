@@ -1080,6 +1080,11 @@ impl HostState {
         self.activated_at = None;
     }
 
+    /// Haunt stopped being active before the held sheet was due: it waits for the next activation.
+    fn return_resigned(&mut self) {
+        self.activated_at = None;
+    }
+
     /// Haunt became active: a held sheet is due `RETURN_SHEET_DELAY` later.
     fn return_activated(&mut self, now: Instant) {
         self.expire_return_sheet(now);
@@ -1759,7 +1764,7 @@ impl LoadedPlugin {
 
     /// Haunt stopped being the active app before a held sheet was due: it waits for the next activation.
     pub fn app_resigned(&mut self) {
-        self.store.data_mut().activated_at = None;
+        self.store.data_mut().return_resigned();
     }
 
     /// Shows a held sheet whose delay has passed, or drops it if the user `typed` into Haunt meanwhile.
@@ -3372,6 +3377,17 @@ mod tests {
         assert!(shown(&a, "Welcome back"));
         a.return_sheet_due(t + RETURN_SHEET_DELAY * 2, false).unwrap();
         assert_eq!(a.outbox.len(), 2, "once");
+
+        held(&mut a, "Left again");
+        let t = Instant::now();
+        a.return_activated(t);
+        a.return_resigned();
+        a.return_sheet_due(t + RETURN_SHEET_DELAY, false).unwrap();
+        assert!(!shown(&a, "Left again"), "leaving before it was due keeps it waiting");
+        let t = t + RETURN_SHEET_DELAY * 3;
+        a.return_activated(t);
+        a.return_sheet_due(t + RETURN_SHEET_DELAY, false).unwrap();
+        assert!(shown(&a, "Left again"), "the next activation shows it");
 
         held(&mut a, "Typed over");
         let t = Instant::now();
