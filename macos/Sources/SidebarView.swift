@@ -14,6 +14,8 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     /// Plugin entries for a row's context menu, built when it opens, and the one chosen.
     var rowMenu: ((String) -> [RowMenuItem])?
     var onRowMenu: ((RowMenuItem, String) -> Void)?
+    /// The row under the pointer changed.
+    var onHover: ((String?) -> Void)?
     /// A drag dropped the row into a group (`SidebarGroup.id`) above a row, or at its end; nil turns dragging off.
     var onRowMoved: ((_ surfaceId: String, _ groupId: String, _ before: String?) -> Void)?
 
@@ -32,6 +34,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     private var hoverId: String? {
         didSet {
             guard hoverId != oldValue else { return }
+            onHover?(hoverId)
             invalidateRow(oldValue)
             invalidateRow(hoverId)
             // Other plugins' labels that lost the row to `row_labels` order.

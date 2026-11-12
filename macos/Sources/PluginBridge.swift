@@ -6,6 +6,7 @@ import UserNotifications
 final class PluginBridge {
     let panels = PluginPanels()
     let hold = NotificationHold()
+    let hover = HoverHold()
     /// Brings tab `surfaceId` up, for a notification bound to it.
     var openTab: ((String) -> Void)?
     /// A plugin bound or unbound a key.
@@ -15,6 +16,7 @@ final class PluginBridge {
         didSet {
             panels.closeAll()
             hold.release()
+            hover.owner = nil
         }
     }
     private let core: CoreAPI
@@ -34,6 +36,9 @@ final class PluginBridge {
             }
         }
         hold.onRelease = NotificationHold.post
+        hover.onHold = { [weak self] plugin, held, surface in
+            self?.run("plugin \(plugin) hover-hold") { try $0.hoverHold(pluginId: plugin, held: held, surfaceId: surface) }
+        }
     }
 
     /// A plugin's key went down or up. `terminalShown` as for `invoke`.
@@ -79,6 +84,7 @@ final class PluginBridge {
                 panels.close(pluginId: pluginId, id: id)
             case .keysChanged:
                 keysChanged = true
+                hover.owner = plugins.hoverHolder()
             case .ptyAnswer, .ptyType:
                 guard let w = core.gatePluginRequest(request: req), let route = PtyRoute(req, w) else { continue }
                 write(route)

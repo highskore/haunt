@@ -931,6 +931,15 @@ impl PluginSet {
         self.plugin(plugin_id)?.key_action(id, down, terminal_shown)
     }
 
+    /// The enabled plugin that has `keys.hover-hold`.
+    pub fn hover_holder(&self) -> Option<String> {
+        self.plugins.iter().find(|(_, p)| p.disabled().is_none() && p.hover_holds()).map(|(_, p)| p.id().to_owned())
+    }
+
+    pub fn hover_hold(&mut self, plugin_id: &str, held: bool, surface: &str) -> Result<(), PluginError> {
+        self.plugin(plugin_id)?.hover_hold(held, surface)
+    }
+
     /// The user chose an action on one of `plugin_id`'s notifications.
     pub fn notify_action(&mut self, plugin_id: &str, action_id: &str, binding: &str) -> Result<(), PluginError> {
         self.plugin(plugin_id)?.notify_action(action_id, binding)

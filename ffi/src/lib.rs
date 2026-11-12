@@ -278,6 +278,16 @@ impl HauntPlugins {
         Ok(haunt_core::sync::lock(&self.set).key_action(&plugin_id, &id, down, terminal_shown)?)
     }
 
+    /// The plugin that has `keys.hover-hold`, if any.
+    pub fn hover_holder(&self) -> Option<String> {
+        haunt_core::sync::lock(&self.set).hover_holder()
+    }
+
+    /// The user started (`held`) or stopped hover-holding on sidebar row `surface_id`.
+    pub fn hover_hold(&self, plugin_id: String, held: bool, surface_id: String) -> Result<(), HostError> {
+        Ok(haunt_core::sync::lock(&self.set).hover_hold(&plugin_id, held, &surface_id)?)
+    }
+
     /// The user clicked the sidebar's top row, which `plugin_id` set.
     pub fn top_row_clicked(&self, plugin_id: String) -> Result<(), HostError> {
         Ok(haunt_core::sync::lock(&self.set).top_row_clicked(&plugin_id)?)

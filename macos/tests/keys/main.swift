@@ -354,5 +354,57 @@ let movedMap = KeyMap(table: TOML.parse("[keys]\n\"dev.x.ptt/talk\" = \"cmd+opt+
 pk.update(keys: [PluginKey(pluginId: "dev.x.ptt", id: "talk", chord: "cmd+shift+u")], map: movedMap)
 check(pk.handle(key(.keyDown, "U", 32, cs)) != nil && pk.handle(key(.keyDown, "t", 17, [.command, .option])) == nil, "[keys] moves it")
 
+
+// Hover-hold: ⌥ alone over a row, after a delay; never consumes a key.
+let hh = HoverHold()
+var hovers: [String] = []
+var later: [() -> Void] = []
+var windowKey = true
+hh.onHold = { p, held, row in hovers.append("\(p) \(held ? "start" : "end") \(row)") }
+hh.after = { _, f in later.append(f) }
+hh.canHold = { windowKey }
+let tick = { later.forEach { $0() }; later = [] }
+hh.owner = "dev.x.peek"
+hh.pointer(over: "s1")
+let alt = flags([.option])
+check(hh.handle(alt) === alt, "⌥ goes on")
+check(hovers.isEmpty, "nothing before the delay")
+tick()
+check(hovers == ["dev.x.peek start s1"], "⌥ alone over a row starts it")
+let optB = key(.keyDown, "∫", 11, [.option])
+check(hh.handle(optB) === optB, "⌥+b still reaches the terminal")
+check(hovers.last == "dev.x.peek end s1", "a key-down ends it")
+tick()
+check(hovers.count == 2, "and it stays off while ⌥ is still down")
+_ = hh.handle(flags([]))
+hh.pointer(over: nil)
+_ = hh.handle(alt)
+tick()
+check(hovers.count == 2, "no start with the pointer over the terminal")
+hh.pointer(over: "s2")
+_ = hh.handle(flags([.option, .shift]))
+tick()
+check(hovers.count == 2, "⌥ with another modifier doesn't start it")
+_ = hh.handle(flags([]))
+_ = hh.handle(alt)
+hh.pointer(over: "s3")
+tick()
+check(hovers.last == "dev.x.peek start s3", "the row it starts on")
+windowKey = false
+hh.update()
+check(hovers.last == "dev.x.peek end s3", "losing key ends it")
+windowKey = true
+hh.update()
+_ = hh.handle(flags([]))
+tick()
+check(hovers.count == 4, "a hold cancelled before its delay never starts")
+_ = hh.handle(alt)
+tick()
+hh.pointer(over: "s4")
+check(hovers.suffix(2) == ["dev.x.peek start s3", "dev.x.peek end s3"], "leaving the row ends it")
+tick()
+hh.owner = nil
+check(hovers.last == "dev.x.peek end s4", "the owner going away ends it")
+
 print(failures == 0 ? "keys: all passed" : "keys: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

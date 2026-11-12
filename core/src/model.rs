@@ -166,6 +166,8 @@ pub(crate) struct State {
     taken_chords: HashMap<String, String>,
     /// The one plugin sheet up, across all plugins: (plugin id, panel id).
     sheet: Option<(String, String)>,
+    /// The plugin that took `keys.hover-hold`.
+    hover_owner: Option<String>,
 }
 
 impl State {
@@ -1072,6 +1074,25 @@ impl CoreHandle {
         let mut st = lock(&self.state);
         if st.sheet.as_ref().is_some_and(|(p, i)| p == plugin_id && id.is_none_or(|id| id == i)) {
             st.sheet = None;
+        }
+    }
+
+    /// `plugin_id` takes hover-hold; refused while another plugin has it.
+    pub fn claim_hover(&self, plugin_id: &str) -> Result<(), String> {
+        let mut st = lock(&self.state);
+        match &st.hover_owner {
+            Some(o) if o != plugin_id => Err(format!("{o} has hover-hold")),
+            _ => {
+                st.hover_owner = Some(plugin_id.to_owned());
+                Ok(())
+            }
+        }
+    }
+
+    pub fn release_hover(&self, plugin_id: &str) {
+        let mut st = lock(&self.state);
+        if st.hover_owner.as_deref() == Some(plugin_id) {
+            st.hover_owner = None;
         }
     }
 

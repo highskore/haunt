@@ -61,6 +61,8 @@ impl Guest for Plugin {
     fn on_exec(_job: u64, _outcome: Result<haunt::plugin::exec::Output, String>) {}
 
     fn on_away_changed(_away: bool, _away_ms: u64) {}
+
+    fn on_hover_hold(_held: bool, _surface: String) {}
 }
 
 export!(Plugin);

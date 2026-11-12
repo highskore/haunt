@@ -257,6 +257,8 @@ pub struct HostState {
     user_call: bool,
     /// (id, canonical chord) from `keys.bind`.
     keys: Vec<(String, String)>,
+    /// Set while this plugin has `keys.hover-hold`.
+    hover_hold: bool,
     /// Action ids of this plugin's latest hold summary: the only `"hold"` replies `notify_action` takes.
     hold_actions: Vec<String>,
     /// The manifest's `exec` names.
@@ -272,6 +274,7 @@ impl Drop for HostState {
         if let Some(c) = &self.core {
             c.release_sheet(&self.id, None);
             c.release_notifications(&self.id);
+            c.release_hover(&self.id);
             let _ = c.set_top_row(&self.id, None);
         }
     }
@@ -310,6 +313,7 @@ impl HostState {
             user_call: false,
             keys: Vec::new(),
             hold_actions: Vec::new(),
+            hover_hold: false,
             exec: caps.exec.clone(),
             exec_jobs: Vec::new(),
             events: EventGrant { details: caps.event_details, answers: caps.pty_write },
@@ -744,7 +748,11 @@ impl HostState {
 
     /// A disabled plugin's keys go back to the terminal.
     fn drop_keys(&mut self) {
-        if !std::mem::take(&mut self.keys).is_empty() {
+        let hover = std::mem::take(&mut self.hover_hold);
+        if hover && let Some(c) = &self.core {
+            c.release_hover(&self.id);
+        }
+        if !std::mem::take(&mut self.keys).is_empty() || hover {
             self.outbox.push(HostRequest::KeysChanged { plugin_id: self.id.clone() });
         }
     }
@@ -812,6 +820,26 @@ impl wkeys::Host for HostState {
         if self.keys.len() != before {
             self.outbox.push(HostRequest::KeysChanged { plugin_id: self.id.clone() });
         }
+    }
+
+    fn hover_hold(&mut self, modifier: Option<String>) -> Result<(), String> {
+        let take = match modifier.as_deref() {
+            None => false,
+            Some("alt") => true,
+            Some(m) => return Err(format!("{:?} can't hover-hold; only \"alt\"", visible(m).chars().take(40).collect::<String>())),
+        };
+        if take == self.hover_hold {
+            return Ok(());
+        }
+        let core = self.core.clone().ok_or("no haunt core")?;
+        if take {
+            core.claim_hover(&self.id)?;
+        } else {
+            core.release_hover(&self.id);
+        }
+        self.hover_hold = take;
+        self.outbox.push(HostRequest::KeysChanged { plugin_id: self.id.clone() });
+        Ok(())
     }
 }
 
@@ -1267,6 +1295,19 @@ impl LoadedPlugin {
             return Err(PluginError(format!("no key {id:?}")));
         }
         self.run_user_action(id, if down { "key-down" } else { "key-up" }, terminal_shown)
+    }
+
+    /// Whether this plugin has `keys.hover-hold`.
+    pub fn hover_holds(&self) -> bool {
+        self.store.data().hover_hold
+    }
+
+    /// The user started (`held`) or stopped hover-holding on row `surface`: `on-hover-hold(held, surface)`.
+    pub fn hover_hold(&mut self, held: bool, surface: &str) -> Result<(), PluginError> {
+        if !self.store.data().hover_hold {
+            return Err(PluginError("no hover-hold".into()));
+        }
+        self.call(|b, s| b.call_on_hover_hold(s, held, surface))
     }
 
     pub fn keys(&self) -> Vec<PluginKey> {
@@ -1951,6 +1992,28 @@ mod tests {
         assert_eq!((p.keys.len(), changes), (MAX_KEYS - 1, MAX_KEYS + 2));
         p.drop_keys();
         assert!(p.keys.is_empty());
+    }
+
+    #[test]
+    fn hover_hold_is_alt_only_and_one_plugins_at_a_time() {
+        use wkeys::Host as _;
+        let core = crate::Core::new(&*tempdir("hover"));
+        let caps = Capabilities { keys: true, ..Default::default() };
+        let mut a = HostState::new("dev.x.peek", &caps, None, None, Some(core.handle()));
+        let mut b = HostState::new("dev.x.other", &caps, None, None, Some(core.handle()));
+        assert!(a.hover_hold(Some("cmd".into())).unwrap_err().contains("only \"alt\""));
+        a.hover_hold(Some("alt".into())).unwrap();
+        a.hover_hold(Some("alt".into())).unwrap();
+        assert!(b.hover_hold(Some("alt".into())).unwrap_err().contains("dev.x.peek"));
+        assert_eq!(a.outbox.len(), 1, "taking it twice is one change");
+        a.hover_hold(None).unwrap();
+        b.hover_hold(Some("alt".into())).unwrap();
+        assert!(a.hover_hold(Some("alt".into())).is_err());
+        b.drop_keys();
+        assert!(!b.hover_hold && matches!(b.outbox.last(), Some(HostRequest::KeysChanged { .. })), "a disabled plugin gives it up");
+        a.hover_hold(Some("alt".into())).unwrap();
+        drop(a);
+        b.hover_hold(Some("alt".into())).unwrap();
     }
 
     #[test]

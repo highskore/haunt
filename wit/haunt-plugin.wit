@@ -369,6 +369,11 @@ interface top-row {
 interface keys {
   bind: func(id: string, chord: string) -> result<_, string>;
   unbind: func(id: string);
+  // Calls `on-hover-hold(true, surface)` once the user has held `modifier` (only "alt") alone for a
+  // moment with the pointer on sidebar row `surface` in haunt's key window, and `on-hover-hold(false,
+  // surface)` when they let go, leave the row, press any key or haunt loses focus. Haunt only watches:
+  // every key still reaches the terminal. One plugin at a time; none gives it up.
+  hover-hold: func(modifier: option<string>) -> result<_, string>;
 }
 
 // Capability `exec`, which names the commands it may run, e.g. `exec = ["gh-pr-checks", "git-status"]`.
@@ -506,4 +511,6 @@ world plugin {
   // came back; `away-ms` is how long they were gone, set when `away` is false. Only plugins granted
   // `away` get it.
   export on-away-changed: func(away: bool, away-ms: u64);
+  // See `keys.hover-hold`. Only the plugin holding it gets it.
+  export on-hover-hold: func(held: bool, surface: string);
 }

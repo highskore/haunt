@@ -37,7 +37,7 @@ Every plugin can add palette commands and modes, add entries to a tab's context 
 | `event_details = true` | the `command`, `file-path`, prompt and plan text on events, which can contain secrets; shown in red at install. Without it those fields are none. |
 | `notifications = true` | `notify.notify`, notifications with action buttons; a chosen action arrives at `on-action(action-id, binding or "")` |
 | `sidebar_top = true` | `top-row.set(row)`: one row of its own above every sidebar group; a click calls `on-action(action, "top")` |
-| `keys = true` | `keys.bind(id, chord)`: a chord with cmd of its own; press and release call `on-action(id, "key-down")` and `"key-up"` |
+| `keys = true` | `keys.bind(id, chord)`: a chord with cmd of its own; press and release call `on-action(id, "key-down")` and `"key-up"`. `keys.hover-hold(some("alt"))`: holding ⌥ over a sidebar row calls `on-hover-hold(true, surface)`, then `false` |
 | `exec = ["git-status", ...]` | `exec.run(surface, command)`: fixed git and gh commands in the tab's project folder; the result calls `on-exec(job, outcome)` |
 | `notify_hold = true` | `hold.start(minutes)` / `hold.set-summary(headline, actions)` / `hold.release()`: Haunt's and other plugins' notifications wait, then one summary shows once every holder lets go, with your headline and up to 2 actions (`on-action(id, "hold")`); permission prompts never wait |
 | `pty_write = true` | `pty.answer`: Allow or Deny for the surface's pending permission request, nothing else. A verified `permission_seen` haunt can answer carries its `request-key`. |
