@@ -195,6 +195,68 @@ fn terminal_read_installs_behind_its_consent_line() {
     std::fs::remove_dir_all(home).unwrap();
 }
 
+/// Scaffolds a plugin that takes the ⌥ hover hold and, on every `on-hover-hold`, tries one
+/// `terminal.read` and logs how it went; built in its own temp dir, keeping only the wasm.
+fn hover_reader() -> PathBuf {
+    let parent = home("hoverread-src");
+    std::fs::create_dir_all(&parent).unwrap();
+    let dir = parent.canonicalize().unwrap().join("hoverread");
+    let o = haunt(&parent, &["plugin", "new", "hoverread", "--id", "dev.haunt.hoverread", "--dir", dir.to_str().unwrap()], "");
+    assert!(o.status.success(), "{}", text(&o));
+    let lib = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
+    let lib = lib
+        .replace("use haunt::plugin::palette;", "use haunt::plugin::palette;\nuse haunt::plugin::{keys, terminal};")
+        .replace("    fn init(_settings: String) {\n", "    fn init(_settings: String) {\n        keys::hover_hold(Some(\"alt\")).unwrap();\n")
+        .replace(
+            "    fn on_hover_hold(_held: bool, _surface: String) {}",
+            "    fn on_hover_hold(held: bool, surface: String) {\n        match terminal::read(&surface, 1) {\n            Ok(l) => log(LogLevel::Info, &format!(\"read {held} ok {}\", l.len())),\n            Err(e) => log(LogLevel::Info, &format!(\"read {held} err {e}\")),\n        }\n    }",
+        );
+    assert!(lib.contains("terminal::read") && lib.contains("keys::hover_hold"), "the template changed:\n{lib}");
+    std::fs::write(dir.join("src/lib.rs"), lib).unwrap();
+    let manifest = std::fs::read_to_string(dir.join("haunt-plugin.toml")).unwrap();
+    std::fs::write(dir.join("haunt-plugin.toml"), manifest.replace("[capabilities]", "[capabilities]\nkeys = true\nterminal_read = true")).unwrap();
+    let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+        .args(["build", "--release", "--target", "wasm32-wasip2"])
+        .current_dir(&dir)
+        .env_remove("CARGO_TARGET_DIR")
+        .status()
+        .unwrap();
+    assert!(status.success(), "hover reader build failed");
+    let wasm = std::fs::read(dir.join(WASM)).unwrap();
+    std::fs::remove_dir_all(dir.join("target")).unwrap();
+    std::fs::create_dir_all(dir.join(WASM).parent().unwrap()).unwrap();
+    std::fs::write(dir.join(WASM), wasm).unwrap();
+    dir
+}
+
+#[test]
+fn a_hover_hold_lets_a_plugin_read_only_while_held() {
+    use std::sync::Arc;
+    const ID: &str = "dev.haunt.hoverread";
+    let src = hover_reader();
+    let home = home("hoverread");
+    let o = haunt(&home, &["plugin", "install", src.to_str().unwrap(), "--yes"], "");
+    assert!(o.status.success(), "{}", text(&o));
+    let core = haunt_core::Core::new(&home);
+    let tab = core.register_surface("/tmp").unwrap().surface_id;
+    core.handle().set_screen_reader(Some(Arc::new(|_: &str, _: u32| Some(vec!["$ ls".into()]))));
+    let mut set = Store::open(&home).unwrap().load_all(&PluginHost::new().unwrap(), Some(&core.handle())).unwrap();
+    assert!(set.errors().is_empty(), "{:?}", set.errors());
+    assert_eq!(set.hover_holder().as_deref(), Some(ID));
+    set.take_logs();
+
+    set.hover_hold(ID, true, &tab).unwrap();
+    set.hover_hold(ID, false, &tab).unwrap();
+    set.hover_hold(ID, true, &tab).unwrap();
+    let logs: Vec<String> = set.take_logs().into_iter().map(|(_, l)| l).collect();
+    assert_eq!(logs.len(), 3, "{logs:?}");
+    assert_eq!(logs[0], "info read true ok 1");
+    assert!(logs[1].starts_with("info read false err only while"), "letting go, or just after a held call, reads nothing: {logs:?}");
+    assert_eq!(logs[2], "info read true ok 1");
+    std::fs::remove_dir_all(&home).unwrap();
+    std::fs::remove_dir_all(src.parent().unwrap()).unwrap();
+}
+
 #[test]
 fn same_id_from_another_path_prompts_as_a_replacement() {
     let src = hello();

@@ -61,14 +61,24 @@ fn holding_option_over_a_row_shows_that_tabs_screen_until_let_go() {
     }
     let home = PathBuf::from(format!("/tmp/haunt-fp-peek-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
+    // Built into this run's own folder, never into the plugin's checkout, then installed from a copy
+    // of its manifest pointing at that wasm.
+    let build = home.with_extension("build");
     let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
         .args(["build", "--release", "--target", "wasm32-wasip2"])
         .current_dir(&dir)
-        .env_remove("CARGO_TARGET_DIR")
+        .env("CARGO_TARGET_DIR", build.join("target"))
         .status()
         .unwrap();
     assert!(status.success());
-    let o = Command::new(env!("CARGO_BIN_EXE_haunt")).args(["plugin", "install", dir.to_str().unwrap(), "--yes"]).env("HAUNT_HOME", &home).output().unwrap();
+    let manifest = std::fs::read_to_string(dir.join("haunt-plugin.toml")).unwrap();
+    let entry = manifest.lines().find_map(|l| l.strip_prefix("entry = \"")?.strip_suffix('"')).expect("an entry");
+    let built = build.join("target").join(entry.strip_prefix("target/").expect("entry under target/"));
+    let src = build.join("plugin");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::copy(&built, src.join("plugin.wasm")).unwrap();
+    std::fs::write(src.join("haunt-plugin.toml"), manifest.replace(&format!("entry = \"{entry}\""), "entry = \"plugin.wasm\"")).unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_haunt")).args(["plugin", "install", src.to_str().unwrap(), "--yes"]).env("HAUNT_HOME", &home).output().unwrap();
     assert!(o.status.success(), "{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
 
     let core = Core::new(&home);
@@ -116,4 +126,5 @@ fn holding_option_over_a_row_shows_that_tabs_screen_until_let_go() {
     assert!(matches!(shown.as_slice(), [Some((t, _))] if t == "terminal"), "a tab without an agent: {shown:?}");
 
     std::fs::remove_dir_all(&home).unwrap();
+    std::fs::remove_dir_all(&build).unwrap();
 }

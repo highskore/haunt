@@ -1590,7 +1590,8 @@ impl LoadedPlugin {
         }
         let data = self.store.data_mut();
         data.reads_left = READS_PER_ACTION;
-        data.read_only = Some(surface.to_owned());
+        // `read` compares the clipped surface it is given, so a long id still matches.
+        data.read_only = Some(clip(surface.to_owned()));
         let res = self.call(|b, s| b.call_on_hover_hold(s, true, surface));
         let data = self.store.data_mut();
         data.reads_left = 0;
