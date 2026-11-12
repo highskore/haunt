@@ -229,7 +229,7 @@ final class ReviewCoordinator {
         guard let v = view, let window = host.reviewWindow else { return }
         let id = v.state.surfaceId
         func refuse(_ why: String) {
-            let alert = NSAlert()
+            let alert = NSAlert.haunt()
             alert.messageText = "Not sent"
             alert.informativeText = why
             alert.beginSheetModal(for: window)

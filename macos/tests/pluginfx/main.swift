@@ -81,12 +81,12 @@ func renderTile(to path: String) {
 }
 
 /// The tile image as 32×32 pixels: AppKit hands back its own copy, so compare what it draws.
-func tile() -> Data {
+func tile(_ image: NSImage? = NSApp.applicationIconImage) -> Data {
     let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 32, pixelsHigh: 32, bitsPerSample: 8, samplesPerPixel: 4,
                                hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 128, bitsPerPixel: 32)!
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-    NSApp.applicationIconImage?.draw(in: NSRect(x: 0, y: 0, width: 32, height: 32))
+    image?.draw(in: NSRect(x: 0, y: 0, width: 32, height: 32))
     NSGraphicsContext.restoreGraphicsState()
     return Data(bytes: rep.bitmapData!, count: 32 * 128)
 }
@@ -97,6 +97,7 @@ let app = NSApplication.shared
 app.setActivationPolicy(.prohibited)
 let render = ProcessInfo.processInfo.environment["HAUNT_DOCK_RENDER"]
 let haunt = tile()
+_ = HauntIcon.image
 let (sleepy, awake, needs, blink) = (dockImage("sleepy", fill: .darkGray), dockImage("open", fill: .gray),
                                     dockImage("needs", fill: .lightGray), dockImage("blink", fill: .white))
 let dock = PluginDock()
@@ -112,6 +113,7 @@ if let render { renderTile(to: "\(render)/host-b-dock-idle.png") }
 dock.show(pluginId: p, image: "needs", badge: 1, blink: nil)
 check(NSApp.dockTile.badgeLabel == "1", "needs-you badge: \(NSApp.dockTile.badgeLabel ?? "nil")")
 if let render { renderTile(to: "\(render)/host-b-dock-needs.png") }
+check(tile() != haunt && tile(NSAlert.haunt().icon) == haunt, "an alert shows Haunt's icon, not the plugin's picture")
 dock.show(pluginId: p, image: "needs", badge: 4_000_000_000, blink: nil)
 check(NSApp.dockTile.badgeLabel == "4000000000", "the badge is the number only: \(NSApp.dockTile.badgeLabel ?? "nil")")
 

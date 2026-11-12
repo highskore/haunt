@@ -88,7 +88,7 @@ final class PasteGuard {
     /// Cancel is the default; pasting takes an explicit click.
     static func alert(_ text: String, plugin: String? = nil) -> NSAlert {
         let preview = PastePreview(text, fromPlugin: plugin)
-        let alert = NSAlert()
+        let alert = NSAlert.haunt()
         alert.messageText = preview.lines == 1 ? "Paste 1 line?" : "Paste \(preview.lines) lines?"
         var notes: [String] = []
         if let plugin { notes.append("The plugin \(AgentNotifier.visible(plugin)) copied this. Each line runs as a command if the terminal isn't waiting for text.") }

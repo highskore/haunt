@@ -92,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             Self.logger.error("core start failed: \(String(describing: error), privacy: .public)")
         }
         pushTakenChords()
+        _ = HauntIcon.image // before any plugin can set the Dock picture
         c.bridge.pluginFx = config.pluginFx
         c.bridge.plugins = Self.startPlugins(fixture: fixture, core: core, dir: config.dir, configToml: config.text)
         config.pluginThemes = Dictionary((c.bridge.plugins?.themes() ?? []).map {

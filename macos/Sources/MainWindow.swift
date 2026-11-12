@@ -502,7 +502,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
     private func surfaceWantsClose(_ view: Ghostty.SurfaceView, processAlive: Bool) {
         guard let tab = tab(for: view), let window else { return }
         guard processAlive else { return remove(tab) }
-        let alert = NSAlert()
+        let alert = NSAlert.haunt()
         alert.messageText = "Close this tab?"
         alert.informativeText = "A process is still running in it."
         alert.addButton(withTitle: "Close")
@@ -695,7 +695,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
     /// The core keeps running without its socket; agent rows then only get OSC status.
     func showStartError(_ error: Error) {
         guard let window else { return }
-        let alert = NSAlert()
+        let alert = NSAlert.haunt()
         alert.messageText = "Haunt can't receive agent events"
         alert.informativeText = "The hook socket didn't start: \(error). Agent rows will only show basic status."
         alert.beginSheetModal(for: window)
@@ -784,7 +784,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard ghostty.needsConfirmQuit else { return true }
-        let alert = NSAlert()
+        let alert = NSAlert.haunt()
         alert.messageText = "Close the window?"
         alert.informativeText = "Processes are still running in its tabs."
         alert.addButton(withTitle: "Close")

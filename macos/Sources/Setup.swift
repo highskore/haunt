@@ -146,7 +146,7 @@ final class SetupSheets {
             item.spacing = Tok.App.setupDetailGap
             return item
         }
-        let alert = NSAlert()
+        let alert = NSAlert.haunt()
         alert.messageText = "Which agents do you use?"
         alert.informativeText = "Haunt shows what each agent is doing through a small adapter. You'll see the exact change before it's made, and can change it later in Settings."
         let cont = alert.addButton(withTitle: "Continue")
@@ -261,7 +261,7 @@ final class SetupSheets {
             let sha = lines.last { $0.hasPrefix(marker) }.map { String($0.dropFirst(marker.count)) }
             guard ok, let sha else { return self.report("Couldn't prepare the change", text, on: window, then: back ?? done) }
             let preview = lines.filter { !$0.hasPrefix(marker) }.joined(separator: "\n")
-            let alert = NSAlert()
+            let alert = NSAlert.haunt()
             alert.messageText = title
             alert.informativeText = "This is what `haunt setup \(args.joined(separator: " "))` will do:"
             alert.accessoryView = Self.textBox(preview)
@@ -290,7 +290,7 @@ final class SetupSheets {
     }
 
     private func report(_ title: String, _ text: String, on window: NSWindow, then: @escaping () -> Void) {
-        let alert = NSAlert()
+        let alert = NSAlert.haunt()
         alert.messageText = title
         alert.accessoryView = Self.textBox(text)
         alert.beginSheetModal(for: window) { _ in then() }
