@@ -450,6 +450,7 @@ mod tests {
             if is_blank(c) {
                 assert!(is_hidden(c) && !f && !di && !c.is_control(), "{:x}", c as u32);
                 assert_eq!(clean(&format!("l{c}s")), "l s", "{:x}", c as u32);
+                #[cfg(feature = "plugins")]
                 assert_eq!(crate::plugins::plain(&format!("l{c}s"), 10), "l s", "{:x}", c as u32);
             }
             // Every space separator is blank; line and paragraph separators stay hidden.
