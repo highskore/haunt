@@ -42,6 +42,7 @@ Every plugin can add palette commands and modes, add entries to a tab's context 
 | `decisions_read = true` | `decisions.query`: the verified permission decisions, newest first. Read only. |
 | `allowlist_suggest = true` | `allowlist.approvals` (each exact Bash command approved in haunt at least twice, per project, with its folder) and `allowlist.propose`, which only offers a rule; Haunt writes it when the user accepts. |
 | `decorate = true` | `rows.decorate(surface, decoration)`: a label or a sparkline in the row's right-hand slot (in place of the status), a suffix after its meta line and a thin bar under it. Plain text only: hidden characters are removed, labels cut to 24 characters and suffixes to 64. If two plugins decorate the same row, the one loaded first (installed first) is shown. |
+| `timer = true` | `timer.every(seconds)`: `on-tick(now-ms)` every 15 seconds or more, until `timer.stop()`. Every plugin can read its time zone with `clock.local-offset-min()`. |
 | `sidebar = true` | `sidebar.rows` (tab names, kinds and state groups, no task text) and `sidebar.arrange`: pins, named sections, manual order and colours over Haunt's grouping. Rows needing you always stay first. Drags arrive at `on-row-moved`. |
 
 An fs glob is absolute or starts with `${cwd}/` (the agent's folder, from verified events only, never `$HOME` or the haunt dir). It may use `*` within a path segment, but not `**`, `.` or `..`. Nothing inside the haunt dir is ever reachable.

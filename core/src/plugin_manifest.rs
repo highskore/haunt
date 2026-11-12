@@ -55,6 +55,7 @@ pub struct Capabilities {
     pub allowlist_suggest: bool,
     pub sidebar: bool,
     pub decorate: bool,
+    pub timer: bool,
     pub fs_read: Vec<String>,
     pub fs_write: Vec<String>,
     pub net: Vec<String>,
@@ -183,6 +184,9 @@ impl Capabilities {
         if self.decorate {
             out.push(("can add a label, a bar or a sparkline to your tabs' rows".into(), false));
         }
+        if self.timer {
+            out.push(("can run on its own every 15 seconds or more, not only when an agent event arrives".into(), false));
+        }
         if self.pty_write {
             out.push(("can answer permission prompts in your terminal (Allow or Deny, nothing else)".into(), true));
         }
@@ -210,6 +214,7 @@ impl Capabilities {
             sidebar: self.sidebar && !old.sidebar,
             theme: self.theme && !old.theme,
             decorate: self.decorate && !old.decorate,
+            timer: self.timer && !old.timer,
             fs_read: self.fs_read.iter().filter(|g| !old.fs_read.contains(g)).cloned().collect(),
             fs_write: self.fs_write.iter().filter(|g| !old.fs_write.contains(g)).cloned().collect(),
             ..Default::default()

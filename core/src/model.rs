@@ -933,6 +933,11 @@ impl CoreHandle {
         });
     }
 
+    /// Plugin requests are waiting outside an event delivery (a timer tick): fire the listener.
+    pub fn requests_queued(&self) {
+        requests_queued(&self.state);
+    }
+
     /// Marks a plugin instance loaded with the decorate capability; earlier instances win a row.
     pub fn attach_rows(&self) -> RowsToken {
         let mut st = lock(&self.state);

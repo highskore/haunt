@@ -889,6 +889,15 @@ impl PluginSet {
         }
     }
 
+    /// Ticks the plugins granted `timer` whose interval has passed.
+    pub fn tick(&mut self, now: std::time::Instant) {
+        for (caps, p) in &mut self.plugins {
+            if caps.timer {
+                let _ = p.tick(now);
+            }
+        }
+    }
+
     /// What was wrong with the user's plugin settings at the last load or `set_config`.
     pub fn settings_problems(&self) -> &[String] {
         &self.settings_problems
@@ -950,9 +959,32 @@ impl PluginSet {
     }
 }
 
-/// Sends the core's events to `set`'s plugins for as long as `set` lives. Row decorations are
-/// dropped until the snapshot has a place for them.
+/// How often the tick thread looks for due timers; `timer.every` is at least 15 s, so this is coarse.
+const TICK_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Sends the core's events to `set`'s plugins, and their timer ticks, for as long as `set` lives.
 pub fn attach(core: &crate::Core, set: &Arc<Mutex<PluginSet>>) {
+    if crate::sync::lock(set).plugins.iter().any(|(caps, _)| caps.timer) {
+        let weak = Arc::downgrade(set);
+        let core = core.handle();
+        let spawned = std::thread::Builder::new().name("haunt-tick".into()).spawn(move || {
+            loop {
+                std::thread::sleep(TICK_POLL);
+                let Some(set) = weak.upgrade() else { return };
+                let pending = {
+                    let mut set = crate::sync::lock(&set);
+                    set.tick(std::time::Instant::now());
+                    set.pending_requests() > 0
+                };
+                if pending {
+                    core.requests_queued();
+                }
+            }
+        });
+        if let Err(e) = spawned {
+            crate::sync::lock(set).errors.push(format!("timer ticks are off: {e}"));
+        }
+    }
     let weak = Arc::downgrade(set);
     core.set_event_tap(Some(Arc::new(move |t: &Tapped| {
         let Some(set) = weak.upgrade() else { return false };

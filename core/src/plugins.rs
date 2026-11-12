@@ -27,8 +27,8 @@ mod bindings {
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
-    allowlist as wallow, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows, sidebar as wside,
-    theme as wtheme, typing as wtyping, types as wit,
+    allowlist as wallow, clock as wclock, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
+    sidebar as wside, theme as wtheme, timer as wtimer, typing as wtyping, types as wit,
 };
 use crate::decorate::{self, Decoration, Spark, Tone};
 use crate::model::RowsToken;
@@ -213,6 +213,8 @@ pub struct HostState {
     sidebar: Option<SidebarToken>,
     /// Set while this instance may decorate rows.
     rows: Option<RowsToken>,
+    /// The `timer.every` interval and when `on-tick` is next due.
+    timer: Option<(Duration, Instant)>,
     theme: Arc<Theme>,
     /// The tab focused when the user ran one of this plugin's commands, while that call runs.
     typing_into: Option<String>,
@@ -247,6 +249,7 @@ impl HostState {
                 None => None,
             },
             rows: core.as_ref().filter(|_| caps.decorate).map(|c| c.attach_rows()),
+            timer: None,
             core,
             theme: Theme::default_shared(),
             typing_into: None,
@@ -568,6 +571,41 @@ impl wrows::Host for HostState {
     }
 }
 
+pub const TICK_MIN_SECS: u32 = 15;
+const TICK_MAX_SECS: u32 = 86_400;
+
+impl wtimer::Host for HostState {
+    fn every(&mut self, seconds: u32) -> Result<(), String> {
+        if !(TICK_MIN_SECS..=TICK_MAX_SECS).contains(&seconds) {
+            return Err(format!("seconds must be {TICK_MIN_SECS} to {TICK_MAX_SECS}"));
+        }
+        let every = Duration::from_secs(seconds.into());
+        self.timer = Some((every, Instant::now() + every));
+        Ok(())
+    }
+
+    fn stop(&mut self) {
+        self.timer = None;
+    }
+}
+
+impl wclock::Host for HostState {
+    fn local_offset_min(&mut self) -> i32 {
+        local_offset_min()
+    }
+}
+
+/// Minutes east of UTC in the user's time zone now; 0 if the zone can't be read.
+pub fn local_offset_min() -> i32 {
+    // Safety: `time` with a null pointer only returns; `localtime_r` writes only the `tm` we own.
+    let now = unsafe { libc::time(std::ptr::null_mut()) };
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() {
+        return 0;
+    }
+    (tm.tm_gmtoff / 60) as i32
+}
+
 /// Characters of a command, path or summary a plugin gets.
 pub const EVENT_TEXT: usize = 1024;
 
@@ -767,6 +805,17 @@ impl LoadedPlugin {
         self.call(|b, s| b.call_on_event(s, &ev))
     }
 
+    /// Calls `on-tick` if this plugin's `timer.every` interval has passed by `now`; whether it did.
+    pub fn tick(&mut self, now: Instant) -> Result<bool, PluginError> {
+        let st = self.store.data_mut();
+        match st.timer {
+            Some((every, due)) if now >= due => st.timer = Some((every, now + every)),
+            _ => return Ok(false),
+        }
+        let ms = CoarseWall.now().as_millis() as u64;
+        self.call(|b, s| b.call_on_tick(s, ms)).map(|()| true)
+    }
+
     /// Commands and modes the plugin registered through `palette`.
     pub fn palette(&self) -> &[PaletteItem] {
         &self.store.data().palette
@@ -891,6 +940,10 @@ impl PluginHost {
         wkv::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         wpal::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         wtheme::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        wclock::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        if caps.timer {
+            wtimer::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
         if caps.notifications {
             wnotify::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
@@ -1328,6 +1381,30 @@ mod tests {
         assert!(core.snapshot().groups.iter().flat_map(|g| &g.rows).all(|r| r.decoration.is_none()), "a closed tab's decorations go");
         third.clear_all();
         assert!(third.decorate(b.surface_id, Some(deco("x"))).is_ok());
+    }
+
+    #[test]
+    fn the_timer_needs_its_capability_and_15_seconds() {
+        use wtimer::Host as _;
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/timer@0.5.0" (instance (export "stop" (func)))))"#).unwrap();
+        let e = host.check_links(&c, &Capabilities { decorate: true, sidebar: true, ..Default::default() }).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/timer"), "{e}");
+        host.check_links(&c, &Capabilities { timer: true, ..Default::default() }).unwrap();
+        let clock = Component::new(&host.engine, r#"(component (import "haunt:plugin/clock@0.5.0" (instance (export "local-offset-min" (func (result s32))))))"#).unwrap();
+        host.check_links(&clock, &Capabilities::default()).unwrap();
+        assert!((-14 * 60..=14 * 60).contains(&local_offset_min()));
+
+        let mut st = HostState::new("dev.x.t", &Capabilities { timer: true, ..Default::default() }, None, None, None);
+        assert!(st.every(14).is_err());
+        assert!(st.every(86_401).is_err());
+        let before = Instant::now();
+        st.every(15).unwrap();
+        let (every, due) = st.timer.unwrap();
+        assert_eq!(every, Duration::from_secs(15));
+        assert!(due >= before + every);
+        st.stop();
+        assert!(st.timer.is_none());
     }
 
     #[test]
