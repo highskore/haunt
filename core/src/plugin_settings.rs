@@ -66,6 +66,9 @@ impl PluginConfig {
                 None
             }
         };
+        if doc.contains_key("away_after") {
+            problems.push("away_after moved to [presence]; the top-level one is ignored".into());
+        }
         Self { tables, problems, parsed: true, row_labels, away_after_min }
     }
 
@@ -139,7 +142,9 @@ mod tests {
     #[test]
     fn away_after_is_minutes_in_range() {
         assert_eq!(PluginConfig::parse("[presence]\naway_after = 5\n").away_after_min, Some(5));
-        assert_eq!(PluginConfig::parse("away_after = 5\n").away_after_min, None, "only in [presence]");
+        let top = PluginConfig::parse("away_after = 5\n");
+        assert_eq!(top.away_after_min, None, "only in [presence]");
+        assert_eq!(top.problems, ["away_after moved to [presence]; the top-level one is ignored"]);
         for bad in ["away_after = 0", "away_after = \"5m\"", "away_after = 999"] {
             let c = PluginConfig::parse(&format!("[presence]\n{bad}"));
             assert!(c.away_after_min.is_none() && c.problems[0].contains("away_after"), "{bad}");
