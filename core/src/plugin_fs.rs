@@ -191,11 +191,26 @@ impl FsScope {
         &self.cwds
     }
 
+    /// The `${cwd}` folders every grant (`fs`, `fs-list`) reaches: each strictly inside `$HOME`, never
+    /// `$HOME`, `/` or an ancestor of either, and clear of the haunt dir, however it was added.
+    fn roots(&self) -> impl Iterator<Item = &Path> {
+        let home = self.home.as_deref();
+        self.cwds.iter().map(PathBuf::as_path).filter(move |c| {
+            home.is_some_and(|h| c.starts_with(h) && !h.starts_with(c)) && !c.starts_with(&self.haunt) && !self.haunt.starts_with(c)
+        })
+    }
+
+    /// The project folder `full` (canonical) is in, if no folder between them starts with a dot.
+    fn root_of(&self, full: &Path) -> Option<&Path> {
+        let dotted = |r: &Path| r.components().any(|p| p.as_os_str().as_bytes().starts_with(b"."));
+        self.roots().find(|c| full.strip_prefix(c).is_ok_and(|r| !dotted(r)))
+    }
+
     fn patterns(&self, globs: &[String]) -> Vec<Vec<Vec<u8>>> {
         let mut out = Vec::new();
         for g in globs {
             if let Some(rest) = g.strip_prefix(CWD) {
-                out.extend(self.cwds.iter().map(|c| pattern(c, rest)));
+                out.extend(self.roots().map(|c| pattern(c, rest)));
             } else {
                 out.push(pattern(Path::new("/"), g));
             }
@@ -316,8 +331,7 @@ impl FsScope {
     /// whole project folder, for names and sizes only.
     pub fn entries(&self, path: &str) -> Result<Vec<Entry>, String> {
         let full = canonical(path)?;
-        let dotted = |r: &Path| r.components().any(|p| p.as_os_str().as_bytes().starts_with(b"."));
-        if !self.cwds.iter().filter_map(|c| full.strip_prefix(c).ok()).any(|r| !dotted(r)) {
+        if self.root_of(&full).is_none() {
             return Err(format!("{path}: not inside an agent's project folder"));
         }
         if full.starts_with(&self.haunt) {
@@ -520,6 +534,28 @@ mod tests {
         assert!(s.write(root.join("proj/.claude/settings.json").to_str().unwrap(), b"x").is_err(), "read-only glob");
         assert!(s.read(&format!("{}/proj/.claude/../secret.txt", root.display())).is_err());
         assert!(s.list(root.join("proj").to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn a_tab_in_home_or_a_plain_folder_lists_nothing() {
+        let root = tempdir("wide");
+        std::fs::create_dir_all(root.join("code/plain")).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("Documents/.git")).unwrap();
+        let mut s = FsScope::new(&["${cwd}/*".into()], &[], None);
+        s.home = Some(root.canonicalize().unwrap());
+        for tab in [root.to_path_buf(), root.join("code"), root.join("code/plain"), root.join("Documents")] {
+            assert!(!s.add_cwd(tab.to_str().unwrap()), "{}", tab.display());
+        }
+        for dir in [root.to_path_buf(), root.join("code"), root.join("Documents")] {
+            assert!(s.entries(dir.to_str().unwrap()).unwrap_err().contains("not inside"), "{}", dir.display());
+        }
+        // Even a too-wide folder that got into the list reaches nothing, for listing or reading.
+        s.cwds.push(root.canonicalize().unwrap());
+        assert!(s.entries(root.to_str().unwrap()).is_err());
+        std::fs::write(root.join("notes.txt"), "x").unwrap();
+        assert!(s.read(root.join("notes.txt").to_str().unwrap()).is_err());
+        assert!(s.entries(root.join("proj").to_str().unwrap()).is_err());
     }
 
     #[test]
