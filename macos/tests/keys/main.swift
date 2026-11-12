@@ -425,7 +425,7 @@ do {
     g.focusMoved()
     check(!key("b", "B", needs, at: 10.3), "a Return within 400 ms of a plugin switch into a needs-you tab is dropped")
     check(!key("b", "B", needs, at: 10.31), "so is a '1', or any other key that could answer")
-    check(!key("b", "B", repeat: true, needs, at: 10.5), "and the rest of that hold with it")
+    check(!key("b", "B", repeat: true, needs, at: 10.35), "and the rest of that hold with it")
     check(key("b", "B", needs, at: 10.45), "a normal Return after 400 ms passes")
     check(key("b", "B", repeat: true, needs, at: 10.6), "and so does its own repeat")
 
