@@ -137,6 +137,15 @@ impl FsScope {
         (!private && !haunt && !guarded).then(|| root.to_path_buf())
     }
 
+    /// A tab's repository: the project folder it was opened in, which the app chose (never the live cwd,
+    /// which the pty can steer), and that work tree's git dir, so git needn't discover either.
+    pub fn tab_repo(&self, opened_in: &str) -> Option<crate::plugin_exec::Repo> {
+        let work_tree = self.project_folder(opened_in)?;
+        let git = work_tree.join(".git");
+        let git_dir = if git.is_dir() { git } else { git_file_target(&git)? };
+        Some(crate::plugin_exec::Repo { work_tree, git_dir })
+    }
+
     #[cfg(test)]
     pub(crate) fn set_home(&mut self, home: &Path) {
         self.home = Some(home.canonicalize().unwrap());
@@ -486,6 +495,24 @@ mod tests {
         assert!(!s.add_cwd(home.join(".ssh").to_str().unwrap()) && s.cwds.is_empty());
         assert!(s.add_cwd(home.join("code/p").to_str().unwrap()));
         assert_eq!(s.cwds, [canon("code/p")]);
+    }
+
+    #[test]
+    fn a_tabs_repo_is_where_it_was_opened_with_its_git_dir() {
+        let root = TempDir::created("tab-repo");
+        let home = root.join("home");
+        for d in ["code/p/.git", "code/p/src", "code/m/.git/worktrees/w", "code/w"] {
+            std::fs::create_dir_all(home.join(d)).unwrap();
+        }
+        std::fs::write(home.join("code/m/.git/worktrees/w/commondir"), "../..\n").unwrap();
+        std::fs::write(home.join("code/w/.git"), "gitdir: ../m/.git/worktrees/w\n").unwrap();
+        let mut s = FsScope::new(&[], &[], Some(&root.join("haunt")));
+        s.set_home(&home);
+        let canon = |d: &str| home.join(d).canonicalize().unwrap();
+        let repo = |d: &str| s.tab_repo(home.join(d).to_str().unwrap()).map(|r| (r.work_tree, r.git_dir));
+        assert_eq!(repo("code/p/src"), Some((canon("code/p"), canon("code/p/.git"))));
+        assert_eq!(repo("code/w"), Some((canon("code/w"), canon("code/m/.git/worktrees/w"))), "a worktree's own git dir");
+        assert_eq!(repo(""), None, "opened at ~: no repo");
     }
 
     #[test]

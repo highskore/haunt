@@ -77,6 +77,14 @@ pub struct ExecDone {
 
 pub type ExecSink = Arc<dyn Fn(ExecDone) + Send + Sync>;
 
+/// Where a command runs: the work tree and its git dir, both canonical. git and gh get them as
+/// `GIT_WORK_TREE` and `GIT_DIR`, so discovery can't land in a repository nested inside.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Repo {
+    pub work_tree: PathBuf,
+    pub git_dir: PathBuf,
+}
+
 /// Only system and Homebrew locations, never the user's PATH, which an agent's session can change.
 const BIN_DIRS: [&str; 4] = ["/opt/homebrew/bin", "/usr/local/bin", "/Library/Developer/CommandLineTools/usr/bin", "/Applications/Xcode.app/Contents/Developer/usr/bin"];
 
@@ -145,9 +153,9 @@ fn binary(name: &str) -> Result<PathBuf, String> {
 
 /// Whether the repo's own config (any scope but our pins) defines a filter driver, which `git status` may
 /// run on a changed file; reading config runs nothing. Unknown counts as yes.
-fn defines_filters(git: &Path, dir: &Path) -> bool {
+fn defines_filters(git: &Path, repo: &Repo) -> bool {
     let args = ["config", "--show-scope", "-z", "--get-regexp", r"^filter\."].map(String::from);
-    match run_argv(git, &args, dir, TIMEOUT) {
+    match run_argv(git, &args, Some(repo), &repo.work_tree, TIMEOUT) {
         Ok(o) if o.status == 1 => false,
         Ok(o) if o.status == 0 && !o.truncated => {
             let f: Vec<&str> = o.stdout.split('\0').collect();
@@ -173,20 +181,23 @@ fn read_capped(mut r: impl Read) -> (Vec<u8>, bool) {
     (out, cut)
 }
 
-/// Runs `cmd` in `dir` and waits, at most `TIMEOUT`, then kills its whole process group.
-pub fn run(cmd: &ExecCommand, dir: &Path) -> Result<ExecOutput, String> {
+/// Runs `cmd` in `repo` and waits, at most `TIMEOUT`, then kills its whole process group.
+pub fn run(cmd: &ExecCommand, repo: &Repo) -> Result<ExecOutput, String> {
     let (prog, args) = cmd.argv()?;
     let bin = binary(prog)?;
-    if *cmd == ExecCommand::GitStatus && defines_filters(&bin, dir) {
+    if *cmd == ExecCommand::GitStatus && defines_filters(&bin, repo) {
         return Err("this repository's config defines git filters, which git status could run; Haunt won't".into());
     }
-    run_argv(&bin, &args, dir, TIMEOUT)
+    run_argv(&bin, &args, Some(repo), &repo.work_tree, TIMEOUT)
 }
 
-fn run_argv(bin: &Path, args: &[String], dir: &Path, timeout: Duration) -> Result<ExecOutput, String> {
+fn run_argv(bin: &Path, args: &[String], repo: Option<&Repo>, dir: &Path, timeout: Duration) -> Result<ExecOutput, String> {
     let prog = bin.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let mut c = Command::new(bin);
     environment(&mut c);
+    if let Some(r) = repo {
+        c.env("GIT_DIR", &r.git_dir).env("GIT_WORK_TREE", &r.work_tree);
+    }
     c.args(args).current_dir(dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let mut child = c.spawn().map_err(|e| format!("{prog}: {e}"))?;
     let (out, err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
@@ -256,21 +267,27 @@ mod tests {
         (dir, marker)
     }
 
+    fn repo_at(dir: &Path) -> Repo {
+        let work_tree = dir.canonicalize().unwrap();
+        Repo { git_dir: work_tree.join(".git"), work_tree }
+    }
+
     #[test]
     fn a_hostile_repo_config_runs_nothing() {
         let Ok(_) = binary("git") else { return };
         let (dir, marker) = hostile_repo("exec-hostile");
+        let repo = repo_at(&dir);
         let git_cmds = [ExecCommand::GitStatus, ExecCommand::GitBranch, ExecCommand::GitHead, ExecCommand::GitLog(5)];
         for c in &git_cmds {
-            let o = run(c, &dir).unwrap();
+            let o = run(c, &repo).unwrap();
             assert_eq!(o.status, 0, "{c:?}: {o:?}");
         }
-        assert!(run(&ExecCommand::GitStatus, &dir).unwrap().stdout.contains("# branch.head trunk"));
+        assert!(run(&ExecCommand::GitStatus, &repo).unwrap().stdout.contains("# branch.head trunk"));
         // A filter in the repo's config could run on any changed file, attributes or not: status is refused.
         Command::new(binary("git").unwrap()).args(["config", "filter.evil.clean", &dir.join("evil.sh").display().to_string()]).current_dir(&*dir).output().unwrap();
-        assert!(run(&ExecCommand::GitStatus, &dir).unwrap_err().contains("filters"));
+        assert!(run(&ExecCommand::GitStatus, &repo).unwrap_err().contains("filters"));
         for c in &git_cmds[1..] {
-            assert_eq!(run(c, &dir).unwrap().status, 0, "{c:?}");
+            assert_eq!(run(c, &repo).unwrap().status, 0, "{c:?}");
         }
         assert!(!marker.exists(), "a program from the repo's config ran");
     }
@@ -296,7 +313,7 @@ mod tests {
     fn a_slow_command_and_what_it_started_are_killed_at_the_timeout() {
         let t = Instant::now();
         let args = ["-c", "sleep 30 & echo started; sleep 30"].map(String::from);
-        let o = run_argv(Path::new("/bin/sh"), &args, Path::new("/"), Duration::from_millis(300)).unwrap();
+        let o = run_argv(Path::new("/bin/sh"), &args, None, Path::new("/"), Duration::from_millis(300)).unwrap();
         assert_eq!((o.status, o.stdout.as_str()), (-1, "started\n"));
         assert!(t.elapsed() < Duration::from_secs(3), "the backgrounded sleep must not hold the pipe open");
     }
@@ -304,7 +321,7 @@ mod tests {
     #[test]
     fn output_is_cut_per_stream() {
         let args = ["-c", "head -c 600000 /dev/zero; echo e >&2"].map(String::from);
-        let o = run_argv(Path::new("/bin/sh"), &args, Path::new("/"), TIMEOUT).unwrap();
+        let o = run_argv(Path::new("/bin/sh"), &args, None, Path::new("/"), TIMEOUT).unwrap();
         assert_eq!((o.status, o.stdout.len(), o.stderr.as_str(), o.truncated), (0, OUTPUT_MAX, "e\n", true));
     }
 }

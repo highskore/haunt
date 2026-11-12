@@ -842,10 +842,9 @@ impl HostState {
 }
 
 impl HostState {
+    /// Only the folder the tab was opened in makes a root; the live cwd (OSC 7) is inside it or ignored.
     fn grant_tab_folder(&mut self, t: &Tapped) {
-        if !self.fs.add_cwd(&t.tab_cwd) {
-            self.fs.add_cwd(&t.opened_in);
-        }
+        self.fs.add_cwd(&t.opened_in);
     }
 
     fn release_sheet(&self, id: &str) {
@@ -989,15 +988,14 @@ impl wexec::Host for HostState {
             return Err(format!("at most {} commands at a time", px::MAX_RUNNING));
         }
         let core = self.core.as_ref().ok_or("no haunt core")?;
-        let (cwd, opened) = core.tab_folders(&surface).ok_or("no such tab")?;
-        let dir = self.fs.project_folder(&cwd).or_else(|| self.fs.project_folder(&opened))
-            .ok_or("the tab isn't in a git repository inside your home folder")?;
+        let (_, opened) = core.tab_folders(&surface).ok_or("no such tab")?;
+        let repo = self.fs.tab_repo(&opened).ok_or("the tab wasn't opened in a git repository inside your home folder")?;
         let sink = core.exec_sink().ok_or("commands are off")?;
         let job = NEXT_JOB.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let plugin_id = self.id.clone();
         std::thread::Builder::new()
             .name("haunt-exec".into())
-            .spawn(move || sink(ExecDone { plugin_id, job, outcome: px::run(&cmd, &dir) }))
+            .spawn(move || sink(ExecDone { plugin_id, job, outcome: px::run(&cmd, &repo) }))
             .map_err(|e| e.to_string())?;
         self.exec_jobs.push(job);
         Ok(job)
@@ -1292,8 +1290,8 @@ impl LoadedPlugin {
         self.call(|b, s| b.call_init(s, settings_json))
     }
 
-    /// A `verified` event widens the plugin's `${cwd}` grant to the git root of the tab's cwd, else of the
-    /// folder it was opened in (`FsScope::project_folder`), never to the cwd the event names.
+    /// A `verified` event widens the plugin's `${cwd}` grant to the git root of the folder the tab was opened
+    /// in (`FsScope::project_folder`), never to its live cwd or the cwd the event names.
     pub fn on_event(&mut self, t: &Tapped) -> Result<(), PluginError> {
         if t.verified {
             self.store.data_mut().grant_tab_folder(t);
@@ -2105,25 +2103,83 @@ mod tests {
     }
 
     #[test]
-    fn a_tabs_fs_grant_follows_its_shell_only_into_a_git_root() {
+    fn a_tabs_fs_grant_is_the_repo_it_was_opened_in_whatever_osc7_says() {
         let home = tempdir("osc7-home");
-        for d in ["code/p/.git", ".ssh/.git", "notes"] {
+        for d in ["code/p/.git", "code/p/src", "code/q/.git", ".ssh/.git", "notes"] {
             std::fs::create_dir_all(home.join(d)).unwrap();
         }
+        for f in ["code/p/a.txt", "code/q/secret.txt"] {
+            std::fs::write(home.join(f), "x").unwrap();
+        }
         let core = crate::Core::new(&*tempdir("osc7"));
-        let grant = |shell_cwd: &str| {
-            let tab = core.register_surface(home.to_str().unwrap()).unwrap().surface_id;
+        let st = |opened: &str, shell_cwd: &str| {
+            let tab = core.register_surface(home.join(opened).to_str().unwrap()).unwrap().surface_id;
             core.set_surface_info(&tab, "", home.join(shell_cwd).to_str().unwrap(), None);
             let (tab_cwd, opened_in) = core.handle().tab_folders(&tab).unwrap();
             let mut st = HostState::new("dev.x.fs", &Capabilities { fs_read: vec!["${cwd}/*".into()], ..Default::default() }, None, None, None);
             st.fs.set_home(&home);
             st.grant_tab_folder(&Tapped { surface: tab, tab_cwd, opened_in, ..tapped(EventKind::Stop, true, None) });
-            st.fs.cwds().to_vec()
+            st
         };
-        assert_eq!(grant("code/p"), [home.join("code/p").canonicalize().unwrap()], "~ then cd into a project");
-        assert!(grant(".ssh").is_empty(), "an OSC 7 for ~/.ssh grants nothing, even with a .git there");
-        assert!(grant("notes").is_empty(), "not a git repository");
-        assert!(grant("").is_empty(), "a tab at ~ gets no grant, and never ~ itself");
+        let p = home.join("code/p").canonicalize().unwrap();
+        assert_eq!(st("code/p", "code/p/src").fs.cwds(), std::slice::from_ref(&p), "cd within the repo keeps its root");
+        let steered = st("code/p", "code/q");
+        assert_eq!(steered.fs.cwds(), std::slice::from_ref(&p), "an OSC 7 into a sibling repo adds no root");
+        assert!(steered.fs.read(home.join("code/q/secret.txt").to_str().unwrap()).is_err(), "and gets no access to it");
+        assert!(steered.fs.read(home.join("code/p/a.txt").to_str().unwrap()).is_ok());
+        assert!(st("", "code/p").fs.cwds().is_empty(), "a tab opened at ~ gets no root from cd-ing into a repo");
+        assert!(st(".ssh", ".ssh").fs.cwds().is_empty(), "~/.ssh is never a root, even with a .git there");
+        assert!(st("notes", "notes").fs.cwds().is_empty(), "not a git repository");
+    }
+
+    #[test]
+    fn exec_runs_in_the_repo_the_tab_was_opened_in_not_one_nested_where_its_shell_is() {
+        use wexec::Host as _;
+        if !std::path::Path::new("/usr/bin/git").exists() && !std::path::Path::new("/usr/local/bin/git").exists() {
+            return;
+        }
+        let home = TempDir::created("host-exec-nested");
+        let (p, n) = (home.join("code/p"), home.join("code/p/vendor/n"));
+        let marker = home.join("ran");
+        let evil = home.join("evil.sh");
+        std::fs::write(&evil, format!("#!/bin/sh\ntouch {}\ncat\n", marker.display())).unwrap();
+        std::fs::set_permissions(&evil, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let git = |dir: &std::path::Path, a: &[&str]| {
+            let o = std::process::Command::new("git").args(a).current_dir(dir).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+            assert!(o.status.success(), "{a:?}");
+            String::from_utf8(o.stdout).unwrap()
+        };
+        for (dir, msg) in [(&p, "root"), (&n, "nested")] {
+            std::fs::create_dir_all(dir).unwrap();
+            git(dir, &["init", "-q", "-b", msg]);
+            std::fs::write(dir.join("f"), msg).unwrap();
+            git(dir, &["add", "f"]);
+            git(dir, &["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", msg]);
+        }
+        let e = evil.display().to_string();
+        for (k, v) in [("core.fsmonitor", e.as_str()), ("core.pager", &e), ("core.hooksPath", "."), ("filter.x.clean", &e)] {
+            git(&n, &["config", k, v]);
+        }
+        let root_head = git(&p, &["rev-parse", "HEAD"]);
+
+        let core = crate::Core::new(&*tempdir("exec-nested-core"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        core.handle().set_exec_sink(Some(Arc::new(move |d: crate::plugin_exec::ExecDone| tx.lock().unwrap().send(d).unwrap())));
+        let tab = core.register_surface(p.to_str().unwrap()).unwrap().surface_id;
+        core.set_surface_info(&tab, "", n.to_str().unwrap(), None);
+        let caps = Capabilities { exec: vec!["git-head".into(), "git-status".into()], ..Default::default() };
+        let mut st = HostState::new("dev.x.ci", &caps, None, None, Some(core.handle()));
+        st.fs.set_home(&home);
+        let mut run = |c| {
+            st.run(tab.clone(), c).unwrap();
+            st.exec_jobs.clear();
+            rx.recv_timeout(Duration::from_secs(10)).unwrap().outcome.unwrap()
+        };
+        assert_eq!(run(wexec::Command::GitHead).stdout, root_head, "the root repo's HEAD, not the nested one's");
+        let status = run(wexec::Command::GitStatus);
+        assert!(status.stdout.contains("# branch.head root"), "{status:?}");
+        assert!(!marker.exists(), "the nested repo's config ran a program");
     }
 
     #[test]
@@ -2135,7 +2191,7 @@ mod tests {
         let tab = core.register_surface("/tmp").unwrap().surface_id;
         assert!(p.run(tab.clone(), wexec::Command::GitHead).unwrap_err().contains("not in this plugin's exec list"));
         assert_eq!(p.run("nope".into(), wexec::Command::GitStatus).unwrap_err(), "no such tab");
-        assert!(p.run(tab, wexec::Command::GitStatus).unwrap_err().contains("git repository inside your home"), "/tmp is outside home");
+        assert!(p.run(tab, wexec::Command::GitStatus).unwrap_err().contains("opened in a git repository inside your home"), "/tmp is outside home");
         p.exec_jobs = vec![1, 2];
         assert!(p.run("nope".into(), wexec::Command::GitStatus).unwrap_err().contains("at most 2"));
     }
