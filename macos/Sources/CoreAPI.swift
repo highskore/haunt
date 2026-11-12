@@ -40,6 +40,7 @@ protocol PluginsAPI: AnyObject {
     func presence(locked: Bool, idleSecs: UInt64)
     func appActivated()
     func returnSheetsDue(typed: Bool)
+    func appResigned()
     func hoverHold(pluginId: String, held: Bool, surfaceId: String) throws
     func notifyAction(pluginId: String, actionId: String, binding: String) throws
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws
@@ -150,6 +151,7 @@ final class NoPlugins: PluginsAPI {
     func presence(locked: Bool, idleSecs: UInt64) {}
     func appActivated() {}
     func returnSheetsDue(typed: Bool) {}
+    func appResigned() {}
     func hoverHold(pluginId: String, held: Bool, surfaceId: String) throws {}
     func notifyAction(pluginId: String, actionId: String, binding: String) throws {}
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}
@@ -182,6 +184,7 @@ final class FixturePlugins: PluginsAPI {
     func presence(locked: Bool, idleSecs: UInt64) {}
     func appActivated() {}
     func returnSheetsDue(typed: Bool) {}
+    func appResigned() {}
     func hoverHold(pluginId: String, held: Bool, surfaceId: String) throws {}
     func notifyAction(pluginId: String, actionId: String, binding: String) throws {}
     func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}

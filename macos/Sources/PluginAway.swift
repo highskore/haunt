@@ -11,6 +11,8 @@ final class Presence {
     var activated: (() -> Void)?
     /// That second later, with whether the user typed into Haunt meanwhile (then the sheet is dropped).
     var returnSheetsDue: ((Bool) -> Void)?
+    /// Haunt stopped being active before that second was up: the sheet waits for the next activation.
+    var resigned: (() -> Void)?
     static let returnSheetDelay: TimeInterval = 1
     private var typedMonitor: Any?
     private var due: DispatchWorkItem?
@@ -36,6 +38,8 @@ final class Presence {
             on(ws, NSWorkspace.screensDidWakeNotification.rawValue) { $0.asleep = false },
             (NotificationCenter.default, NotificationCenter.default.addObserver(
                 forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.becameActive() }),
+            (NotificationCenter.default, NotificationCenter.default.addObserver(
+                forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.resignedActive() }),
         ]
         timer = Timer.scheduledTimer(withTimeInterval: Self.every, repeats: true) { [weak self] _ in self?.tick() }
     }
@@ -65,6 +69,12 @@ final class Presence {
         }
         due = item
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.returnSheetDelay, execute: item)
+    }
+
+    private func resignedActive() {
+        guard due != nil else { return }
+        endDue()
+        resigned?()
     }
 
     private func endDue() {

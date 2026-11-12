@@ -314,6 +314,11 @@ impl HauntPlugins {
         haunt_core::sync::lock(&self.set).app_activated(std::time::Instant::now());
     }
 
+    /// Haunt stopped being the active app (`didResignActive`) before `return_sheets_due`.
+    pub fn app_resigned(&self) {
+        haunt_core::sync::lock(&self.set).app_resigned();
+    }
+
     /// A second after `app_activated`: held return sheets show, or go if the user `typed` into Haunt since.
     pub fn return_sheets_due(&self, typed: bool) {
         haunt_core::sync::lock(&self.set).return_sheets_due(typed, std::time::Instant::now());

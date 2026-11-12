@@ -1543,6 +1543,11 @@ impl LoadedPlugin {
         self.store.data_mut().return_activated(now);
     }
 
+    /// Haunt stopped being the active app before a held sheet was due: it waits for the next activation.
+    pub fn app_resigned(&mut self) {
+        self.store.data_mut().activated_at = None;
+    }
+
     /// Shows a held sheet whose delay has passed, or drops it if the user `typed` into Haunt meanwhile.
     pub fn return_sheet_due(&mut self, now: Instant, typed: bool) -> Result<(), PluginError> {
         self.store.data_mut().return_sheet_due(now, typed).map_err(PluginError)

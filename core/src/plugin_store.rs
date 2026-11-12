@@ -1013,6 +1013,15 @@ impl PluginSet {
         }
     }
 
+    /// Haunt stopped being the active app: held return sheets wait for the next activation.
+    pub fn app_resigned(&mut self) {
+        for (caps, p) in &mut self.plugins {
+            if caps.away && p.disabled().is_none() {
+                p.app_resigned();
+            }
+        }
+    }
+
     /// Shows the held return sheets now due, or drops them if the user `typed` into Haunt since it became active.
     pub fn return_sheets_due(&mut self, typed: bool, now: std::time::Instant) {
         for (caps, p) in &mut self.plugins {
