@@ -248,7 +248,7 @@ impl Capabilities {
             out.push(("can list the names and sizes of files in your agents' project folders (not what is in them)".into(), false));
         }
         if !self.open_url.is_empty() {
-            out.push((format!("can open links to {} in your browser when you click one of its buttons", self.open_url.join(", ")), false));
+            out.push((format!("can open links to {} in your browser when you click one of its buttons or notification actions", self.open_url.join(", ")), false));
         }
         if self.pty_type {
             out.push(("can type text into the current tab when you run one of its commands".into(), true));
@@ -326,6 +326,8 @@ pub fn valid_domain(d: &str) -> bool {
                 && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
                 && !l.starts_with('-')
                 && !l.ends_with('-')
+                // Punycode: a listed name could render as a lookalike of another in the consent line.
+                && !l.starts_with("xn--")
         })
 }
 
@@ -573,11 +575,11 @@ mod tests {
     #[test]
     fn open_url_lists_plain_domains_in_its_consent_line() {
         let caps = Manifest::parse(&manifest("open_url = [\"github.com\", \"docs.rs\"]")).unwrap().capabilities;
-        let line = ("can open links to github.com, docs.rs in your browser when you click one of its buttons".to_string(), false);
+        let line = ("can open links to github.com, docs.rs in your browser when you click one of its buttons or notification actions".to_string(), false);
         assert!(caps.describe().contains(&line));
         let more = Capabilities { open_url: vec!["github.com".into(), "docs.rs".into(), "linear.app".into()], ..Default::default() };
-        assert_eq!(more.added_since(&caps), [("can open links to linear.app in your browser when you click one of its buttons".into(), false)]);
-        for bad in ["https://github.com", "github.com:443", "*.github.com", "GitHub.com", "localhost", "github.com/x", "-a.com", "gïthub.com", "a..com"] {
+        assert_eq!(more.added_since(&caps), [("can open links to linear.app in your browser when you click one of its buttons or notification actions".into(), false)]);
+        for bad in ["https://github.com", "github.com:443", "*.github.com", "GitHub.com", "localhost", "github.com/x", "-a.com", "gïthub.com", "a..com", "xn--gthub-cta.com", "github.xn--p1ai"] {
             assert!(Manifest::parse(&manifest(&format!("open_url = [{bad:?}]"))).is_err(), "{bad}");
         }
     }
@@ -634,7 +636,7 @@ mod tests {
         }
         let one = Capabilities { open_url: vec!["github.com".into()], ..Default::default() };
         let two = Capabilities { open_url: vec!["github.com".into(), "docs.rs".into()], ..Default::default() };
-        assert_eq!(two.added_since(&one), [("can open links to docs.rs in your browser when you click one of its buttons".into(), false)], "a new domain is a grown grant");
+        assert_eq!(two.added_since(&one), [("can open links to docs.rs in your browser when you click one of its buttons or notification actions".into(), false)], "a new domain is a grown grant");
         let off = Capabilities { clipboard: Some("none".into()), ..Default::default() };
         let on = Capabilities { clipboard: Some("write".into()), ..Default::default() };
         assert_eq!(on.added_since(&off), on.describe(), "none to write asks again");
