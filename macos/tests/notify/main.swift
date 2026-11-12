@@ -51,6 +51,7 @@ final class FakeCore: CoreAPI {
     func gatePluginRequest(request: HostRequest) -> PtyWrite? { nil }
     func takePluginRefusals() -> [PluginRefusal] { [] }
     func setTakenChords(chords: [String: String]) {}
+    func setScreenReader(reader: TabScreen) {}
 }
 
 func row(_ id: String, _ name: String = "api-refactor", kind: RowKind = .claude, needs: Bool = false,

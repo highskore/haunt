@@ -35,6 +35,13 @@ pub trait CoreListener: Send + Sync {
     fn changed(&self);
 }
 
+/// A tab's visible lines, oldest first, for a plugin's `terminal.read`; called on the plugin call's
+/// thread, None when the tab can't be read there.
+#[uniffi::export(callback_interface)]
+pub trait TabScreen: Send + Sync {
+    fn read(&self, surface_id: String, lines: u32) -> Option<Vec<String>>;
+}
+
 /// The sidebar model and hook intake. See docs/core-api.md.
 #[derive(uniffi::Object)]
 pub struct HauntCore {
@@ -167,6 +174,11 @@ impl HauntCore {
     /// `keys.bind` refuses these. Call it before loading plugins and on every key map change.
     pub fn set_taken_chords(&self, chords: std::collections::HashMap<String, String>) {
         self.core.handle().set_taken_chords(chords);
+    }
+
+    /// How `terminal.read` gets a tab's visible lines.
+    pub fn set_screen_reader(&self, reader: Box<dyn TabScreen>) {
+        self.core.handle().set_screen_reader(Some(std::sync::Arc::new(move |s: &str, n| reader.read(s.to_owned(), n))));
     }
 }
 

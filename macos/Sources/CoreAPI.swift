@@ -20,6 +20,7 @@ protocol CoreAPI: AnyObject {
     /// Plugin answers the gate refused since the last call, to show the user.
     func takePluginRefusals() -> [PluginRefusal]
     func setTakenChords(chords: [String: String])
+    func setScreenReader(reader: TabScreen)
 }
 
 /// `HauntPlugins` as the UI uses it.
@@ -509,6 +510,10 @@ struct ReviewTurn: Equatable, Hashable {
 
 protocol CoreListener: AnyObject, Sendable {
     func changed()
+}
+
+protocol TabScreen: AnyObject, Sendable {
+    func read(surfaceId: String, lines: UInt32) -> [String]?
 }
 #endif
 

@@ -269,6 +269,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, PanelHos
         }
         bridge.onRefused = { [weak self] line in self?.root.toast.show(line) }
         core.setListener(listener: listener)
+        core.setScreenReader(reader: TabScreenReader { [weak self] id in self?.store.visibleText(id) })
 
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: Ghostty.Notification.ghosttyCloseSurface, object: nil, queue: .main) { [weak self] n in

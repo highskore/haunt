@@ -162,6 +162,7 @@ pub(crate) struct State {
     top_row: Option<TopRow>,
     /// Where `exec` jobs report; set while a plugin set is attached.
     exec_sink: Option<crate::plugin_exec::ExecSink>,
+    screen_reader: Option<ScreenReader>,
     /// Canonical chord -> who has it ("haunt" for Haunt's and macOS's, else `[keys]`' "<plugin>/<id>").
     taken_chords: HashMap<String, String>,
     /// The one plugin sheet up, across all plugins: (plugin id, panel id).
@@ -875,6 +876,9 @@ impl Core {
     }
 }
 
+/// The app's reader of a tab's visible lines, oldest first: (surface, at most this many lines).
+pub type ScreenReader = Arc<dyn Fn(&str, u32) -> Option<Vec<String>> + Send + Sync>;
+
 /// The core as plugins see it. Plugin calls hold the plugin lock and then take the core's, so the
 /// core never calls a plugin while holding its own.
 /// One plugin instance's claim on the sidebar, from `CoreHandle::attach_sidebar`.
@@ -1043,6 +1047,14 @@ impl CoreHandle {
 
     pub fn exec_sink(&self) -> Option<crate::plugin_exec::ExecSink> {
         lock(&self.state).exec_sink.clone()
+    }
+
+    pub fn set_screen_reader(&self, reader: Option<ScreenReader>) {
+        lock(&self.state).screen_reader = reader;
+    }
+
+    pub fn screen_reader(&self) -> Option<ScreenReader> {
+        lock(&self.state).screen_reader.clone()
     }
 
     /// `surface`'s cwd now and the one it was opened in; never the cwd an event claims.

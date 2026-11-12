@@ -1326,12 +1326,10 @@ mod tests {
     }
 
     #[test]
-    fn terminal_read_and_remote_sources_are_rejected() {
+    fn remote_sources_are_rejected() {
         let dir = tempdir("reject");
         let store = Store::open(&dir.join("home")).unwrap();
         let host = PluginHost::new().unwrap();
-        let e = store.install(&src(&dir, "terminal_read = true"), &host, &mut |_| true).unwrap_err().to_string();
-        assert!(e.contains("terminal_read is not supported"), "{e}");
         let e = store.install(Path::new("https://github.com/x/y"), &host, &mut |_| true).unwrap_err().to_string();
         assert!(e.contains("only local paths"), "{e}");
         assert!(store.list().unwrap().is_empty());

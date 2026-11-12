@@ -177,7 +177,7 @@ fn tampered_installed_wasm_refuses_to_load() {
 }
 
 #[test]
-fn manifest_asking_for_terminal_read_is_rejected() {
+fn terminal_read_installs_behind_its_consent_line() {
     let src = hello();
     let home = home("termread");
     let bad = home.join("src");
@@ -190,9 +190,8 @@ fn manifest_asking_for_terminal_read_is_rejected() {
     std::fs::write(bad.join("haunt-plugin.toml"), manifest).unwrap();
 
     let o = haunt(&home, &["plugin", "install", bad.to_str().unwrap(), "--yes"], "");
-    assert_eq!(o.status.code(), Some(1));
-    assert!(text(&o).contains("capability terminal_read is not supported"), "{}", text(&o));
-    assert!(!home.join("plugins/dev.haunt.hello").exists());
+    assert!(o.status.success() && text(&o).contains("any tab's screen"), "{}", text(&o));
+    assert!(home.join("plugins/dev.haunt.hello").exists());
     std::fs::remove_dir_all(home).unwrap();
 }
 

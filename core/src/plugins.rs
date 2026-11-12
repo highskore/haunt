@@ -28,7 +28,7 @@ mod bindings {
 use bindings::Plugin;
 use bindings::haunt::plugin::{
     allowlist as wallow, clock as wclock, exec as wexec, hold as whold, keys as wkeys, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
-    sidebar as wside, theme as wtheme, timer as wtimer, typing as wtyping, types as wit,
+    sidebar as wside, terminal as wterm, theme as wtheme, timer as wtimer, typing as wtyping, types as wit,
 };
 pub(crate) use bindings::haunt::plugin::panel as wpanel;
 use crate::plugin_panel::{Panel, PanelPlacement, Panels};
@@ -257,6 +257,8 @@ pub struct HostState {
     user_call: bool,
     /// (id, canonical chord) from `keys.bind`.
     keys: Vec<(String, String)>,
+    /// `terminal.read` calls left in the command or key the user just used; 0 outside one.
+    reads_left: u32,
     /// Set while this plugin has `keys.hover-hold`.
     hover_hold: bool,
     /// Action ids of this plugin's latest hold summary: the only `"hold"` replies `notify_action` takes.
@@ -314,6 +316,7 @@ impl HostState {
             keys: Vec::new(),
             hold_actions: Vec::new(),
             hover_hold: false,
+            reads_left: 0,
             exec: caps.exec.clone(),
             exec_jobs: Vec::new(),
             events: EventGrant { details: caps.event_details, answers: caps.pty_write },
@@ -489,6 +492,32 @@ impl wtyping::Host for HostState {
         }
         self.push_log(format!("info typing surface={surface} bytes={} enter={enter}", text.len()));
         self.request(HostRequest::PtyType { plugin_id: self.id.clone(), surface, text, enter })
+    }
+}
+
+const READS_PER_ACTION: u32 = 8;
+const READ_LINES_MAX: u32 = 50;
+const READ_LINE_CHARS: usize = 512;
+
+impl wterm::Host for HostState {
+    fn read(&mut self, surface: String, lines: u32) -> Result<Vec<String>, String> {
+        if self.reads_left == 0 {
+            return Err("only while handling a command or key the user just used".into());
+        }
+        if !(1..=READ_LINES_MAX).contains(&lines) {
+            return Err(format!("lines is 1 to {READ_LINES_MAX}"));
+        }
+        let core = self.core.as_ref().ok_or("no haunt core")?;
+        let surface = clip(surface);
+        if core.tab_folders(&surface).is_none() {
+            return Err(format!("no tab {:?}", shown(&surface, 40)));
+        }
+        let reader = core.screen_reader().ok_or("haunt can't read screens here")?;
+        self.reads_left -= 1;
+        let got = reader(&surface, lines).ok_or("that tab's screen can't be read now")?;
+        self.push_log(format!("info terminal.read surface={surface} lines={lines}"));
+        let skip = got.len().saturating_sub(lines as usize);
+        Ok(got.iter().skip(skip).map(|l| shown(l, READ_LINE_CHARS)).collect())
     }
 }
 
@@ -1318,8 +1347,11 @@ impl LoadedPlugin {
     fn run_user_action(&mut self, action_id: &str, payload: &str, terminal_shown: bool) -> Result<(), PluginError> {
         let data = self.store.data_mut();
         data.typing_into = data.core.as_ref().and_then(CoreHandle::selected_surface).filter(|_| terminal_shown);
+        data.reads_left = READS_PER_ACTION;
         let res = self.user_call(|p| p.on_action(action_id, payload));
-        self.store.data_mut().typing_into = None;
+        let data = self.store.data_mut();
+        data.typing_into = None;
+        data.reads_left = 0;
         res
     }
 
@@ -1421,6 +1453,9 @@ impl PluginHost {
         }
         if caps.pty_type {
             wtyping::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if caps.terminal_read {
+            wterm::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.decisions_read {
             wdec::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
@@ -1912,6 +1947,31 @@ mod tests {
         assert!(core.snapshot().top.is_none(), "a dropped plugin's row goes");
         other.set(Some(top("mine", None))).unwrap();
         assert!(!core.snapshot().top.unwrap().clickable && other.top_action.is_none());
+    }
+
+    #[test]
+    fn terminal_read_is_linked_alone_and_reads_only_during_a_users_action() {
+        use wterm::Host as _;
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/terminal@0.5.0" (instance (export "read" (func (param "surface" string) (param "lines" u32) (result (result (list string) (error string))))))))"#).unwrap();
+        assert!(host.check_links(&c, &Capabilities { pty_type: true, ..Default::default() }).is_err());
+        host.check_links(&c, &Capabilities { terminal_read: true, ..Default::default() }).unwrap();
+
+        let dir = tempdir("read");
+        let core = crate::Core::new(&*dir);
+        let tab = core.register_surface(dir.to_str().unwrap()).unwrap().surface_id;
+        let mut st = HostState::new("dev.x.read", &Capabilities { terminal_read: true, ..Default::default() }, None, None, Some(core.handle()));
+        assert!(st.read(tab.clone(), 5).unwrap_err().contains("only while"));
+        st.reads_left = READS_PER_ACTION;
+        assert!(st.read(tab.clone(), 5).unwrap_err().contains("can't read"), "no reader in this app");
+        core.handle().set_screen_reader(Some(Arc::new(|_, _| Some(vec!["one".into(), "two\u{1b}[2J".into(), "three".into()]))));
+        assert!(st.read(tab.clone(), 0).is_err() && st.read(tab.clone(), READ_LINES_MAX + 1).is_err());
+        assert!(st.read("nope".into(), 5).unwrap_err().contains("no tab"));
+        assert_eq!(st.read(tab.clone(), 2).unwrap(), ["two\\u{1b}[2J", "three"], "the last lines, hidden characters spelled out");
+        while st.reads_left > 0 {
+            st.read(tab.clone(), 1).unwrap();
+        }
+        assert!(st.read(tab, 1).is_err(), "a few reads per action");
     }
 
     #[test]

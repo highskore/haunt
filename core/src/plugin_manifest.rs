@@ -137,9 +137,6 @@ impl Capabilities {
 
     fn validate(&self) -> Result<(), ManifestError> {
         let err = |m: String| Err(ManifestError(m));
-        if self.terminal_read {
-            return err("capability terminal_read is not supported by this haunt version; remove it from [capabilities]".into());
-        }
         for (name, empty) in [
             ("net", self.net.is_empty()),
             ("hid", self.hid.is_empty()),
@@ -227,6 +224,9 @@ impl Capabilities {
         }
         if self.pty_type {
             out.push(("can type text into the current tab when you run one of its commands".into(), true));
+        }
+        if self.terminal_read {
+            out.push(("can read the text on any tab's screen when you use one of its commands or keys; this can contain secrets".into(), true));
         }
         for g in &self.fs_read {
             out.push((format!("can read files matching {}, which can contain secrets", plain_glob(g)), true));
@@ -487,9 +487,9 @@ mod tests {
     }
 
     #[test]
-    fn terminal_read_is_rejected() {
-        let e = Manifest::parse(&manifest("terminal_read = true")).unwrap_err();
-        assert!(e.0.contains("terminal_read is not supported"), "{e}");
+    fn terminal_read_is_a_red_consent_line() {
+        let m = Manifest::parse(&manifest("terminal_read = true")).unwrap();
+        assert!(m.capabilities.describe().iter().any(|(l, red)| *red && l.contains("any tab's screen")));
     }
 
     #[test]
