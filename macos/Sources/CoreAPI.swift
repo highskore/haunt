@@ -426,6 +426,7 @@ enum HostRequest: Equatable, Hashable {
     case releaseNotifications(pluginId: String)
     case closePanel(pluginId: String, id: String)
     case keysChanged(pluginId: String)
+    case clipboardWrite(pluginId: String, text: String)
 }
 
 struct PluginKey: Equatable, Hashable {

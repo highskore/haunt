@@ -104,6 +104,9 @@ final class PluginBridge {
             case .keysChanged:
                 keysChanged = true
                 hover.owner = plugins.hoverHolder()
+            case let .clipboardWrite(_, text):
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
             case .ptyAnswer, .ptyType:
                 guard let w = core.gatePluginRequest(request: req), let route = PtyRoute(req, w) else { continue }
                 write(route)

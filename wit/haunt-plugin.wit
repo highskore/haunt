@@ -284,6 +284,7 @@ interface panel {
   // warn is orange, for failures; haunt's needs-you colour isn't available to panels.
   enum tone { text, dim, faint, warn }
 
+  // `text` may hold "\n": up to 40 lines, each plain and cut to 256 characters.
   record text-node { text: string, tone: tone, mono: bool, bold: bool }
   record row-node { label: string, sub: option<string>, right: option<string>, tone: tone }
   record button-node { label: string, action: string, primary: bool }
@@ -467,6 +468,13 @@ interface terminal {
   read: func(surface: string, lines: u32) -> result<list<string>, string>;
 }
 
+// Capability `clipboard = "write"`. Puts text on the clipboard, made plain (one line, no hidden
+// characters) and cut to 16 KB. Only once per button, key or palette command the user just used.
+// There is no read.
+interface clipboard {
+  write: func(text: string) -> result<_, string>;
+}
+
 world plugin {
   use types.{agent-event, palette-item, menu-item};
   use exec.{output};
@@ -495,6 +503,7 @@ world plugin {
   import glow;
   import title;
   import terminal;
+  import clipboard;
 
   export init: func(settings: string);
   export on-settings-changed: func(settings: string);

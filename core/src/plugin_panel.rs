@@ -11,6 +11,8 @@ pub const MAX_DEPTH: usize = 8;
 pub const MAX_SHAPES: usize = 4096;
 pub const MAX_PANELS: usize = 4;
 pub const MAX_TEXT: usize = 256;
+/// Lines a text node keeps; each is plain and cut like any other string.
+pub const MAX_LINES: usize = 40;
 pub const SHOWS_PER_SEC: usize = 4;
 pub const MAX_PULSES: usize = 16;
 /// After the user closes a plugin's sheet, it can't show another for this long.
@@ -170,6 +172,10 @@ fn text(s: String) -> String {
     plain(&s, MAX_TEXT)
 }
 
+fn lines(s: String) -> String {
+    s.split('\n').take(MAX_LINES).map(|l| plain(l, MAX_TEXT)).collect::<Vec<_>>().join("\n")
+}
+
 fn tone(t: wpanel::Tone) -> PanelTone {
     match t {
         wpanel::Tone::Text => PanelTone::Text,
@@ -221,7 +227,7 @@ fn kind(n: wpanel::Node, shapes: &mut usize, pulses: &mut usize) -> Result<Panel
         wpanel::Node::Vstack => PanelNodeKind::VStack,
         wpanel::Node::Hstack => PanelNodeKind::HStack,
         wpanel::Node::Divider => PanelNodeKind::Divider,
-        wpanel::Node::Text(t) => PanelNodeKind::Text { text: text(t.text), tone: tone(t.tone), mono: t.mono, bold: t.bold },
+        wpanel::Node::Text(t) => PanelNodeKind::Text { text: lines(t.text), tone: tone(t.tone), mono: t.mono, bold: t.bold },
         wpanel::Node::Row(r) => PanelNodeKind::Row { label: text(r.label), sub: r.sub.map(text), right: r.right.map(text), tone: tone(r.tone) },
         wpanel::Node::Button(b) => {
             let action = text(b.action);
@@ -323,13 +329,25 @@ mod tests {
 
     #[test]
     fn strings_are_plain_and_capped() {
-        let p = build("welcome".into(), Placement::Sheet, "Hi\u{202e}there".into(), vec![node(None, txt(&format!("a\nb{}", "c".repeat(300))))]).unwrap();
-        assert_eq!(p.title, "Hithere");
+        let p = build("welcome".into(), Placement::Sheet, "Hi\u{202e}\nthere".into(), vec![node(None, txt(&format!("a\tb{}", "c".repeat(300))))]).unwrap();
+        assert_eq!(p.title, "Hi there");
         let PanelNodeKind::Text { text, .. } = &p.nodes[0].kind else { panic!() };
         assert!(text.starts_with("a b") && text.chars().count() == MAX_TEXT);
         for bad in ["", "a b", "x\u{200b}", &"a".repeat(65)] {
             assert!(build(bad.into(), Placement::Card, String::new(), vec![]).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_text_node_keeps_up_to_40_plain_lines() {
+        let many = (0..50).map(|i| format!("{i}\r\u{200b}")).collect::<Vec<_>>().join("\n");
+        let long = format!("{}\nend", "x".repeat(300));
+        let p = build("p".into(), Placement::Card, String::new(), vec![node(None, txt(&many)), node(None, txt(&long))]).unwrap();
+        let PanelNodeKind::Text { text, .. } = &p.nodes[0].kind else { panic!() };
+        assert_eq!(text.lines().count(), MAX_LINES);
+        assert!(text.starts_with("0 \n1 \n") && text.ends_with("39 "), "{text:?}");
+        let PanelNodeKind::Text { text, .. } = &p.nodes[1].kind else { panic!() };
+        assert_eq!(text.split('\n').map(|l| l.chars().count()).collect::<Vec<_>>(), [MAX_TEXT, 3]);
     }
 
     #[test]

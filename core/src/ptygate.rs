@@ -56,7 +56,8 @@ impl Core {
             | HostRequest::HoldNotifications { .. }
             | HostRequest::HoldSummary { .. }
             | HostRequest::ReleaseNotifications { .. }
-            | HostRequest::KeysChanged { .. } => None,
+            | HostRequest::KeysChanged { .. }
+            | HostRequest::ClipboardWrite { .. } => None,
         }
     }
 }

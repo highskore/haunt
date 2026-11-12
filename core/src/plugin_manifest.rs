@@ -128,6 +128,10 @@ impl Capabilities {
         self.pty_write || self.pty_type || self.allowlist_suggest || self.decisions_read
     }
 
+    pub fn clipboard_write(&self) -> bool {
+        self.clipboard.as_deref() == Some("write")
+    }
+
     pub fn fs_read_granted(&self) -> bool {
         !self.fs_read.is_empty()
     }
@@ -141,11 +145,13 @@ impl Capabilities {
         for (name, empty) in [
             ("net", self.net.is_empty()),
             ("hid", self.hid.is_empty()),
-            ("clipboard", self.clipboard.as_deref().is_none_or(|c| c == "none")),
         ] {
             if !empty {
                 return err(format!("capability {name} is not supported by this haunt version; remove it from [capabilities]"));
             }
+        }
+        if let Some(c) = self.clipboard.as_deref().filter(|c| !["none", "write"].contains(c)) {
+            return err(format!("clipboard = {c:?} is refused: only \"write\" exists, a plugin never reads the clipboard"));
         }
         if let Some(x) = self.exec.iter().find(|x| !crate::plugin_exec::NAMES.contains(&x.as_str())) {
             return err(format!("unknown exec command {x:?}; known: {}", crate::plugin_exec::NAMES.join(", ")));
@@ -225,6 +231,9 @@ impl Capabilities {
                 .collect();
             let gh = if self.exec.iter().any(|x| x.starts_with("gh-")) { "; gh acts with your GitHub login" } else { "" };
             out.push((format!("can run {} in your agents' project folders and read the output{gh}", what.join(", ")), true));
+        }
+        if self.clipboard_write() {
+            out.push(("can copy text to your clipboard when you use one of its buttons, keys or commands (never read it)".into(), true));
         }
         if self.pty_type {
             out.push(("can type text into the current tab when you run one of its commands".into(), true));
@@ -504,6 +513,20 @@ mod tests {
     fn terminal_read_is_a_red_consent_line() {
         let m = Manifest::parse(&manifest("terminal_read = true")).unwrap();
         assert!(m.capabilities.describe().iter().any(|(l, red)| *red && l.contains("hold ⌥ over that tab's row")));
+    }
+
+    #[test]
+    fn clipboard_is_write_only_and_shown_in_red() {
+        let caps = Manifest::parse(&manifest("clipboard = \"write\"")).unwrap().capabilities;
+        assert!(caps.clipboard_write());
+        let line = ("can copy text to your clipboard when you use one of its buttons, keys or commands (never read it)".to_string(), true);
+        assert!(caps.describe().contains(&line));
+        assert_eq!(caps.added_since(&Capabilities::default()), [line]);
+        assert!(caps.added_since(&caps).is_empty());
+        for bad in ["read", "read-write", "Write"] {
+            let e = Manifest::parse(&manifest(&format!("clipboard = {bad:?}"))).unwrap_err();
+            assert!(e.0.contains("never reads the clipboard"), "{e}");
+        }
     }
 
     #[test]

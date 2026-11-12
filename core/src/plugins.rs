@@ -27,7 +27,7 @@ mod bindings {
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
-    allowlist as wallow, clock as wclock, exec as wexec, hold as whold, keys as wkeys, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
+    allowlist as wallow, clipboard as wclip, clock as wclock, exec as wexec, hold as whold, keys as wkeys, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
     sidebar as wside, terminal as wterm, theme as wtheme, timer as wtimer, typing as wtyping, types as wit,
 };
 pub(crate) use bindings::haunt::plugin::panel as wpanel;
@@ -78,6 +78,8 @@ pub struct AuditClip {
 /// Characters kept of each audited string; the length beyond goes in `clipped`.
 pub const AUDIT_STR_MAX: usize = 64;
 const MAX_STR: usize = 4096;
+/// Bytes a `clipboard.write` keeps.
+pub const CLIPBOARD_MAX: usize = 16 * 1024;
 /// Characters, not bytes, of a registered command or mode title.
 const MAX_TITLE: usize = 80;
 const MAX_DECISIONS: u32 = 1000;
@@ -165,6 +167,8 @@ pub enum HostRequest {
     ClosePanel { plugin_id: String, id: String },
     /// The plugin bound or unbound a key: the app rebuilds its key map from `PluginSet::keys`.
     KeysChanged { plugin_id: String },
+    /// Plain text for the clipboard, from a button, key or command the user just used.
+    ClipboardWrite { plugin_id: String, text: String },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -289,6 +293,8 @@ pub struct HostState {
     /// Set while the plugin handles something the user just did (a command, a key, a panel button) or
     /// the user coming back: only then may a panel be a sheet, which takes the keyboard.
     user_call: bool,
+    /// Set while a button, key or command the user just used runs; a clipboard write spends it.
+    copy_ok: bool,
     /// (id, canonical chord) from `keys.bind`.
     keys: Vec<(String, String)>,
     /// `terminal.read` calls left in the command, key or hover-hold the user just used; 0 outside one.
@@ -357,6 +363,7 @@ impl HostState {
             theme: Theme::default_shared(),
             typing_into: None,
             user_call: false,
+            copy_ok: false,
             keys: Vec::new(),
             hold_actions: Vec::new(),
             hover_hold: false,
@@ -1088,6 +1095,11 @@ impl HostState {
         }
     }
 
+    /// A call that trapped doesn't get to change the clipboard.
+    fn drop_clipboard(&mut self) {
+        self.outbox.retain(|r| !matches!(r, HostRequest::ClipboardWrite { .. }));
+    }
+
     /// A disabled plugin's hold ends, so it can't keep notifications away.
     fn release_hold(&mut self) {
         if self.core.as_ref().is_some_and(|c| c.release_notifications(&self.id)) {
@@ -1265,6 +1277,21 @@ impl whold::Host for HostState {
 
 pub const TICK_MIN_SECS: u32 = 15;
 const TICK_MAX_SECS: u32 = 86_400;
+
+impl wclip::Host for HostState {
+    fn write(&mut self, text: String) -> Result<(), String> {
+        if !std::mem::take(&mut self.copy_ok) {
+            return Err("only once per button, key or command the user just used".into());
+        }
+        let mut text = plain(&text, CLIPBOARD_MAX);
+        let mut end = text.len().min(CLIPBOARD_MAX);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        self.request(HostRequest::ClipboardWrite { plugin_id: self.id.clone(), text })
+    }
+}
 
 impl wtimer::Host for HostState {
     fn every(&mut self, seconds: u32) -> Result<(), String> {
@@ -1494,6 +1521,7 @@ impl LoadedPlugin {
             data.release_hold();
             data.clear_top_row();
             data.drop_keys();
+            data.drop_clipboard();
             PluginError(why)
         })
     }
@@ -1572,7 +1600,10 @@ impl LoadedPlugin {
         if action.is_empty() {
             data.release_sheet(id);
         }
-        self.user_call(|p| p.on_action(action, &format!("panel:{id}")))
+        data.copy_ok = !action.is_empty();
+        let res = self.user_call(|p| p.on_action(action, &format!("panel:{id}")));
+        self.store.data_mut().copy_ok = false;
+        res
     }
 
     /// Runs `f` as the plugin's answer to something the user just did, when a sheet is allowed.
@@ -1696,10 +1727,12 @@ impl LoadedPlugin {
         let data = self.store.data_mut();
         data.typing_into = data.core.as_ref().and_then(CoreHandle::selected_surface).filter(|_| terminal_shown);
         data.reads_left = READS_PER_ACTION;
+        data.copy_ok = true;
         let res = self.user_call(|p| p.on_action(action_id, payload));
         let data = self.store.data_mut();
         data.typing_into = None;
         data.reads_left = 0;
+        data.copy_ok = false;
         res
     }
 
@@ -1820,6 +1853,9 @@ impl PluginHost {
         }
         if caps.decorate {
             wrows::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
+        if caps.clipboard_write() {
+            wclip::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
         if caps.panel {
             wpanel::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
@@ -2045,6 +2081,34 @@ mod tests {
         assert!(wtyping::Host::type_text(&mut st, "ls\nrm -rf ~".into(), false).unwrap_err().contains("not typed"));
         wtyping::Host::type_text(&mut st, "ls".into(), true).unwrap();
         assert_eq!(st.outbox, [HostRequest::PtyType { plugin_id: "dev.haunt.t".into(), surface: "s1".into(), text: "ls".into(), enter: true }]);
+    }
+
+    #[test]
+    fn clipboard_needs_its_capability_and_a_user_action_and_never_reads() {
+        use wclip::Host as _;
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(&host.engine, r#"(component (import "haunt:plugin/clipboard@0.5.0" (instance
+            (export "write" (func (param "text" string) (result (result (error string))))))))"#).unwrap();
+        let e = host.check_links(&c, &Capabilities { panel: true, keys: true, ..Default::default() }).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/clipboard"), "{e}");
+        let caps = Capabilities { clipboard: Some("write".into()), ..Default::default() };
+        host.check_links(&c, &caps).unwrap();
+        let read = Component::new(&host.engine, r#"(component (import "haunt:plugin/clipboard@0.5.0" (instance
+            (export "read" (func (result string))))))"#).unwrap();
+        assert!(host.check_links(&read, &caps).is_err(), "there is no read");
+
+        let mut st = HostState::new("dev.x.relay", &caps, None, None, None);
+        assert!(st.write("x".into()).unwrap_err().contains("only once per button"));
+        st.copy_ok = true;
+        st.write("git push\n\u{1b}[2J\u{202e}ok".into()).unwrap();
+        assert!(st.write("again".into()).is_err(), "one write per user action");
+        assert_eq!(st.outbox, [HostRequest::ClipboardWrite { plugin_id: "dev.x.relay".into(), text: "git push [2Jok".into() }]);
+        st.copy_ok = true;
+        st.write("é".repeat(CLIPBOARD_MAX)).unwrap();
+        let Some(HostRequest::ClipboardWrite { text, .. }) = st.outbox.last() else { panic!() };
+        assert_eq!(text.len(), CLIPBOARD_MAX);
+        st.drop_clipboard();
+        assert!(st.outbox.is_empty(), "a trapped call's writes are dropped");
     }
 
     fn tapped(kind: EventKind, verified: bool, request_key: Option<u64>) -> Tapped {
