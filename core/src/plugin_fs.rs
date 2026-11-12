@@ -301,6 +301,55 @@ impl FsScope {
     }
 }
 
+/// One entry `FsScope::entries` returns: never anything of a file but its name and size.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub name: String,
+    pub size: u64,
+    pub dir: bool,
+}
+
+impl FsScope {
+    /// Files and folders directly in `path`, a folder inside a `${cwd}` (or the `${cwd}` itself) and
+    /// not under a dot-folder; sorted by name. Dot entries, symlinks and anything but regular files and
+    /// folders are left out, and a folder's size is 0. No glob is needed: the `fs_list` grant is the
+    /// whole project folder, for names and sizes only.
+    pub fn entries(&self, path: &str) -> Result<Vec<Entry>, String> {
+        let full = canonical(path)?;
+        let dotted = |r: &Path| r.components().any(|p| p.as_os_str().as_bytes().starts_with(b"."));
+        if !self.cwds.iter().filter_map(|c| full.strip_prefix(c).ok()).any(|r| !dotted(r)) {
+            return Err(format!("{path}: not inside an agent's project folder"));
+        }
+        if full.starts_with(&self.haunt) {
+            return Err(denied(path));
+        }
+        let dir = open_dir_nofollow(&full).map_err(|e| io_err(path, e))?;
+        let mut out = Vec::new();
+        for (i, e) in std::fs::read_dir(&full).map_err(|e| io_err(path, e))?.enumerate() {
+            if i == LIST_SCAN {
+                return Err(format!("{path}: more than {LIST_SCAN} entries"));
+            }
+            let name = e.map_err(|e| io_err(path, e))?.file_name();
+            if name.as_bytes().starts_with(b".") {
+                continue;
+            }
+            let Ok(c) = CString::new(name.as_bytes()) else { continue };
+            let Ok(st) = stat_at(&dir, &c) else { continue };
+            let (size, is_dir) = match st.st_mode & libc::S_IFMT {
+                libc::S_IFREG => (st.st_size as u64, false),
+                libc::S_IFDIR => (0, true),
+                _ => continue,
+            };
+            if out.len() == LIST_CAP {
+                return Err(format!("{path}: more than {LIST_CAP} entries"));
+            }
+            out.push(Entry { name: name.to_string_lossy().into_owned(), size, dir: is_dir });
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+}
+
 fn denied(path: &str) -> String {
     format!("{path}: not covered by this plugin's fs grant")
 }
@@ -471,6 +520,28 @@ mod tests {
         assert!(s.write(root.join("proj/.claude/settings.json").to_str().unwrap(), b"x").is_err(), "read-only glob");
         assert!(s.read(&format!("{}/proj/.claude/../secret.txt", root.display())).is_err());
         assert!(s.list(root.join("proj").to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn entries_are_names_and_sizes_inside_the_project_folder_only() {
+        let root = tempdir("entries");
+        let s = scope(&root);
+        std::fs::create_dir_all(root.join("proj/src")).unwrap();
+        std::fs::write(root.join("proj/src/main.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("proj/.env"), "KEY=1").unwrap();
+        std::fs::write(root.join("outside.txt"), "x").unwrap();
+        symlink(root.join("outside.txt"), root.join("proj/link.txt")).unwrap();
+        symlink(root.join(".."), root.join("proj/up")).unwrap();
+        let proj = root.join("proj");
+        assert_eq!(s.entries(proj.to_str().unwrap()).unwrap(), [Entry { name: "src".into(), size: 0, dir: true }], "no dot entries or symlinks");
+        assert_eq!(s.entries(proj.join("src").to_str().unwrap()).unwrap(), [Entry { name: "main.rs".into(), size: 12, dir: false }]);
+        assert!(s.entries(proj.join(".claude").to_str().unwrap()).is_err(), "not under a dot-folder");
+        assert!(s.entries(root.to_str().unwrap()).unwrap_err().contains("not inside"));
+        assert!(s.entries(&format!("{}/src/..", proj.display())).is_err());
+        assert!(s.entries(proj.join("up").to_str().unwrap()).is_err(), "a symlink resolves outside");
+        assert!(s.entries("proj").is_err(), "absolute paths only");
+        let none = FsScope::new(&[], &[], None);
+        assert!(none.entries(proj.to_str().unwrap()).is_err(), "no project folder seen yet");
     }
 
     #[test]

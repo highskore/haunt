@@ -485,6 +485,15 @@ interface link {
   open-url: func(url: string) -> result<_, string>;
 }
 
+// Capability `fs_list = true`. The files and folders directly in `dir`, an absolute path inside an
+// agent's project folder (as for `fs`) and not under a dot-folder: names and sizes only, never
+// contents. Dot entries and symlinks are left out; a folder's size is 0. At most 4096 entries, else an
+// error; at most 20 calls a second.
+interface fs-list {
+  record entry { name: string, size: u64, dir: bool }
+  entries: func(dir: string) -> result<list<entry>, string>;
+}
+
 world plugin {
   use types.{agent-event, palette-item, menu-item};
   use exec.{output};
@@ -515,6 +524,7 @@ world plugin {
   import terminal;
   import clipboard;
   import link;
+  import fs-list;
 
   export init: func(settings: string);
   export on-settings-changed: func(settings: string);

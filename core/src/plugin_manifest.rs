@@ -73,6 +73,7 @@ pub struct Capabilities {
     pub theme: bool,
     /// Domains `link.open` may open, each exactly (no subdomains).
     pub open_url: Vec<String>,
+    pub fs_list: bool,
 }
 
 const AGENT_EVENTS: &[&str] = &[
@@ -243,6 +244,9 @@ impl Capabilities {
         if self.clipboard_write() {
             out.push(("can copy text to your clipboard when you use one of its buttons, keys or commands (never read it)".into(), true));
         }
+        if self.fs_list {
+            out.push(("can list the names and sizes of files in your agents' project folders (not what is in them)".into(), false));
+        }
         if !self.open_url.is_empty() {
             out.push((format!("can open links to {} in your browser when you click one of its buttons", self.open_url.join(", ")), false));
         }
@@ -266,7 +270,7 @@ impl Capabilities {
         // No `..`: a new capability doesn't build until it is handled here, so an update can't gain it unasked.
         let Capabilities {
             events, event_details, pty_write, pty_type, notifications, decisions_read, allowlist_suggest, sidebar, theme, decorate, timer,
-            panel, notify_hold, sidebar_top, keys, away, fs_read, fs_write, net, hid, exec, terminal_read, clipboard, open_url,
+            panel, notify_hold, sidebar_top, keys, away, fs_read, fs_write, net, hid, exec, terminal_read, clipboard, open_url, fs_list,
         } = self;
         let new = |v: &[String], o: &[String]| v.iter().filter(|x| !o.contains(x)).cloned().collect::<Vec<_>>();
         let grown = Capabilities {
@@ -294,6 +298,7 @@ impl Capabilities {
             terminal_read: *terminal_read && !old.terminal_read,
             clipboard: clipboard.clone().filter(|c| old.clipboard.as_ref() != Some(c)),
             open_url: new(open_url, &old.open_url),
+            fs_list: *fs_list && !old.fs_list,
         };
         grown.describe()
     }
@@ -557,6 +562,15 @@ mod tests {
     }
 
     #[test]
+    fn fs_list_has_its_own_consent_line() {
+        let caps = Manifest::parse(&manifest("fs_list = true")).unwrap().capabilities;
+        let line = ("can list the names and sizes of files in your agents' project folders (not what is in them)".to_string(), false);
+        assert_eq!(caps.describe(), std::slice::from_ref(&line));
+        assert_eq!(caps.added_since(&Capabilities::default()), [line]);
+        assert!(!caps.fs_read_granted());
+    }
+
+    #[test]
     fn open_url_lists_plain_domains_in_its_consent_line() {
         let caps = Manifest::parse(&manifest("open_url = [\"github.com\", \"docs.rs\"]")).unwrap().capabilities;
         let line = ("can open links to github.com, docs.rs in your browser when you click one of its buttons".to_string(), false);
@@ -630,6 +644,7 @@ mod tests {
             notify_hold: true, sidebar_top: true, keys: true, away: true, fs_read: vec!["${cwd}/a".into()],
             fs_write: vec!["${cwd}/a".into()], net: vec!["a.example".into()], hid: vec![1.into()], exec: vec!["git-status".into()],
             terminal_read: true, clipboard: Some("read".into()), theme: true, open_url: vec!["github.com".into()],
+            fs_list: true,
         };
         macro_rules! alone {
             ($($f:ident),*) => {{
@@ -639,7 +654,7 @@ mod tests {
         }
         let each = alone!(events, event_details, pty_write, pty_type, notifications, decisions_read, allowlist_suggest, sidebar, decorate,
             timer, panel, notify_hold, sidebar_top, keys, away, fs_read, fs_write, net, hid, exec, terminal_read, clipboard, theme,
-            open_url);
+            open_url, fs_list);
         for (name, caps) in each {
             // Refused at parse, so never shown.
             if ["net", "hid", "clipboard"].contains(&name) {

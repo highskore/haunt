@@ -27,7 +27,7 @@ mod bindings {
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{
-    allowlist as wallow, clipboard as wclip, clock as wclock, link as wlink, exec as wexec, hold as whold, keys as wkeys, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
+    allowlist as wallow, clipboard as wclip, clock as wclock, fs_list as wfslist, link as wlink, exec as wexec, hold as whold, keys as wkeys, top_row as wtop, decisions as wdec, kv as wkv, log as wlog, notify as wnotify, palette as wpal, pty as wpty, rows as wrows,
     sidebar as wside, terminal as wterm, theme as wtheme, timer as wtimer, typing as wtyping, types as wit,
 };
 pub(crate) use bindings::haunt::plugin::panel as wpanel;
@@ -40,6 +40,7 @@ const TICK: Duration = Duration::from_millis(10);
 /// 5 ticks of 10 ms: the plan's 50 ms per call.
 const CALL_TICKS: u64 = 5;
 const PTY_PER_SEC: usize = 10;
+const FS_LIST_PER_SEC: usize = 20;
 const MAX_PALETTE: usize = 64;
 const MAX_OUTBOX: usize = 256;
 const MAX_NOTIFIED: usize = 64;
@@ -276,6 +277,7 @@ pub struct HostState {
     outbox: Vec<HostRequest>,
     fs: FsScope,
     pty_times: VecDeque<Instant>,
+    list_times: VecDeque<Instant>,
     core: Option<CoreHandle>,
     /// Set while this instance may arrange the sidebar.
     sidebar: Option<SidebarToken>,
@@ -352,6 +354,7 @@ impl HostState {
             outbox: Vec::new(),
             fs: FsScope::new(&cwd_globs(&caps.fs_read), &cwd_globs(&caps.fs_write), haunt_dir),
             pty_times: VecDeque::new(),
+            list_times: VecDeque::new(),
             sidebar: match &core {
                 Some(c) if caps.sidebar => Some(c.attach_sidebar()),
                 Some(c) => {
@@ -490,15 +493,7 @@ impl HostState {
     }
 
     fn pty_rate_ok(&mut self) -> bool {
-        let now = Instant::now();
-        while self.pty_times.front().is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(1)) {
-            self.pty_times.pop_front();
-        }
-        if self.pty_times.len() >= PTY_PER_SEC {
-            return false;
-        }
-        self.pty_times.push_back(now);
-        true
+        per_sec_ok(&mut self.pty_times, PTY_PER_SEC)
     }
 
     /// An id with a hidden character is refused, and a title loses its hidden characters and is cut to
@@ -526,6 +521,19 @@ impl HostState {
             surface_id: None,
         });
     }
+}
+
+/// Records a call in `times` unless `max` already happened in the last second.
+fn per_sec_ok(times: &mut VecDeque<Instant>, max: usize) -> bool {
+    let now = Instant::now();
+    while times.front().is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(1)) {
+        times.pop_front();
+    }
+    if times.len() >= max {
+        return false;
+    }
+    times.push_back(now);
+    true
 }
 
 impl WasiView for HostState {
@@ -1334,6 +1342,16 @@ impl wclip::Host for HostState {
     }
 }
 
+impl wfslist::Host for HostState {
+    fn entries(&mut self, dir: String) -> Result<Vec<wfslist::Entry>, String> {
+        if !per_sec_ok(&mut self.list_times, FS_LIST_PER_SEC) {
+            return Err(format!("fs-list rate limit ({FS_LIST_PER_SEC}/s)"));
+        }
+        let entries = self.fs.entries(&dir)?;
+        Ok(entries.into_iter().map(|e| wfslist::Entry { name: e.name, size: e.size, dir: e.dir }).collect())
+    }
+}
+
 impl wlink::Host for HostState {
     fn open_url(&mut self, url: String) -> Result<(), String> {
         let clicked = self.clicked.take().ok_or("only once per click on one of its panel buttons")?;
@@ -1927,6 +1945,9 @@ impl PluginHost {
         if caps.clipboard_write() {
             wclip::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
+        if caps.fs_list {
+            wfslist::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
+        }
         if !caps.open_url.is_empty() {
             wlink::add_to_linker::<_, HasSelf<_>>(&mut l, |s| s)?;
         }
@@ -2182,6 +2203,27 @@ mod tests {
         assert_eq!(text.len(), CLIPBOARD_MAX);
         st.drop_user_effects();
         assert!(st.outbox.is_empty(), "a trapped call's writes are dropped");
+    }
+
+    #[test]
+    fn fs_list_needs_its_own_grant_and_is_rate_limited() {
+        use wfslist::Host as _;
+        let host = PluginHost::new().unwrap();
+        let c = Component::new(&host.engine, r#"(component
+            (type $e (record (field "name" string) (field "size" u64) (field "dir" bool)))
+            (import "haunt:plugin/fs-list@0.5.0" (instance
+                (export "entry" (type $entry (eq $e)))
+                (export "entries" (func (param "dir" string) (result (result (list $entry) (error string))))))))"#).unwrap();
+        let e = host.check_links(&c, &Capabilities { fs_read: vec!["${cwd}/*".into()], ..Default::default() }).unwrap_err().0;
+        assert!(e.contains("haunt:plugin/fs-list"), "fs_read doesn't grant listing: {e}");
+        let caps = Capabilities { fs_list: true, ..Default::default() };
+        host.check_links(&c, &caps).unwrap();
+
+        let mut st = HostState::new("dev.x.map", &caps, None, None, None);
+        for _ in 0..FS_LIST_PER_SEC {
+            assert!(st.entries("/".into()).unwrap_err().contains("not inside"), "no project folder seen");
+        }
+        assert!(st.entries("/".into()).unwrap_err().contains("rate limit"));
     }
 
     #[test]
