@@ -87,7 +87,10 @@ final class PluginPanels {
             if let main = host?.window {
                 main.addChildWindow(w, ordered: .above)
                 let top = main.frame.maxY - TitleBarView.height(zen: false) - Self.inset
-                w.setFrameTopLeftPoint(NSPoint(x: main.frame.maxX - w.frame.width - Self.inset, y: top))
+                // Beside the right pane, not over it.
+                let pane = rightOwner.flatMap { shown[$0]?.frame.superview as? RightPane }
+                let right = main.frame.maxX - (pane.map { $0.frame.width } ?? 0)
+                w.setFrameTopLeftPoint(NSPoint(x: right - w.frame.width - Self.inset, y: top))
             }
             w.orderFront(nil)
             window = w
