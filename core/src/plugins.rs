@@ -2331,6 +2331,24 @@ mod tests {
     }
 
     #[test]
+    fn retitle_cleans_a_title_exactly_as_registering_does() {
+        use wpal::Host as _;
+        let mut st = HostState::new("dev.x.p", &Capabilities::default(), None, None, None);
+        for raw in ["Open\u{202e}gnihtemos", "a\nb\tc\u{200b}d", "\u{1b}[2J Settings…", &"é".repeat(200)] {
+            st.command("added".into(), raw.into(), None);
+            st.command("renamed".into(), "x".into(), None);
+            st.retitle("renamed".into(), raw.into()).unwrap();
+            let title = |id: &str| st.palette.iter().find(|p| p.id == id).unwrap().title.clone();
+            assert_eq!(title("renamed"), title("added"), "{raw:?}");
+        }
+        for blank in ["", " ", "\u{200b}\u{202e}", "\n\t"] {
+            st.command("blank".into(), blank.into(), None);
+            assert!(!st.palette.iter().any(|p| p.id == "blank"), "add refuses {blank:?}");
+            assert!(st.retitle("renamed".into(), blank.into()).is_err(), "retitle refuses {blank:?}");
+        }
+    }
+
+    #[test]
     fn palette_entries_are_removed_and_retitled_by_their_own_plugin() {
         use wpal::Host as _;
         let mut st = HostState::new("dev.x.p", &Capabilities::default(), None, None, None);
