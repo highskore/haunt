@@ -152,7 +152,10 @@ final class PluginBridge {
                 NSWorkspace.shared.open(u)
             case let .focusTab(_, surface):
                 openTab?(surface)
-            case let .dockImages(pluginId, images):
+            case let .dockImages(pluginId, images, dropped):
+                for id in dropped {
+                    AppDelegate.logger.error("plugin \(pluginId, privacy: .public) dock image \(id, privacy: .public) doesn't decode; dropped")
+                }
                 dock.register(pluginId: pluginId, images: images)
             case let .dockShow(pluginId, image, badge, blink, seq):
                 if slots.admit(.dock, pluginId, seq: seq, letGo: image == nil && badge == nil) {

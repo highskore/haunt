@@ -27,7 +27,7 @@ mod bindings {
 
 #[path = "plugin_fx.rs"]
 mod fx;
-pub use fx::{DockImage, GlowLabel, Stage, SoundName};
+pub use fx::{DockBatch, DockImage, GlowLabel, Stage, SoundName, decode_dock};
 
 use bindings::Plugin;
 use bindings::haunt::plugin::{

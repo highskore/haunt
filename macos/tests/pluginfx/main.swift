@@ -41,7 +41,7 @@ func dockImage(_ id: String, fill: NSColor) -> DockImage {
     let dir = ProcessInfo.processInfo.environment["HAUNT_DOCK_ASSETS"]
         ?? NSHomeDirectory() + "/code/haunt-plugins/haunt-dock-ghost/assets"
     let art = NSImage(contentsOfFile: "\(dir)/\(id).png")
-    let side = art.map { Int($0.representations.first?.pixelsWide ?? 256) } ?? 256
+    let side = min(512, art.map { Int($0.representations.first?.pixelsWide ?? 256) } ?? 256)
     var px = [UInt8](repeating: 0, count: side * side * 4)
     let ctx = CGContext(data: &px, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
                         space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
@@ -137,7 +137,7 @@ dock.register(pluginId: p, images: [sleepy, needs, blink, open])
 
 let other = "dev.haunt.other"
 dock.register(pluginId: other, images: [DockImage(id: "short", width: 64, height: 64, rgba: Data(count: 64 * 64 * 4 - 1)),
-                                        DockImage(id: "wide", width: 1025, height: 1, rgba: Data(count: 1025 * 4)),
+                                        DockImage(id: "wide", width: 513, height: 1, rgba: Data(count: 513 * 4)),
                                         DockImage(id: "empty", width: 0, height: 1, rgba: Data())])
 check(tile() == working, "another plugin's images leave the shown tile alone")
 dock.show(pluginId: other, image: "short", badge: 2, blink: nil)

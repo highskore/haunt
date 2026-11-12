@@ -29,7 +29,7 @@ struct PluginSlots {
 final class PluginDock {
     private static let blinkEvery: TimeInterval = 4
     private static let blinkFor: TimeInterval = 0.4
-    private static let pixelsMax = 1024
+    private static let pixelsMax = 512
 
     var enabled = true {
         didSet { if enabled != oldValue { apply() } }

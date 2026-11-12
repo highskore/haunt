@@ -62,7 +62,7 @@ pub enum HostRequest {
     #[cfg(feature = "plugins")]
     SayStop { plugin_id: String },
     /// The plugin's Dock images, decoded, replacing the ones it sent before; none drops them. Sent once, so a show
-    /// names them by id.
+    /// names them by id. `dropped`: the ids of those that didn't decode, which a show then can't draw.
     #[cfg(feature = "plugins")]
-    DockImages { plugin_id: String, images: Vec<crate::plugins::DockImage> },
+    DockImages { plugin_id: String, images: Vec<crate::plugins::DockImage>, dropped: Vec<String> },
 }

@@ -438,7 +438,7 @@ enum HostRequest: Equatable, Hashable {
     case clipboardWrite(pluginId: String, pluginName: String, text: String)
     case openUrl(pluginId: String, url: String)
     case focusTab(pluginId: String, surface: String)
-    case dockImages(pluginId: String, images: [DockImage])
+    case dockImages(pluginId: String, images: [DockImage], dropped: [String])
     case dockShow(pluginId: String, image: String?, badge: UInt32?, blink: String?, seq: UInt64)
     case glowShow(pluginId: String, label: GlowLabel, seq: UInt64)
     case glowHide(pluginId: String, seq: UInt64)

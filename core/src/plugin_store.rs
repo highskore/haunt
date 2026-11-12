@@ -573,7 +573,7 @@ impl Store {
         let cache = CwasmCache::open(&self.cache_dir());
         // Plugins with the same grants share a linker.
         let mut linkers: Vec<(Capabilities, Linker<HostState>)> = Vec::new();
-        let stage = crate::plugins::Stage::default();
+        let stage = set.stage.clone();
         for e in self.read_lock()?.plugins {
             if e.sha256_wasm.is_empty() {
                 match self.verify_data(&e) {
@@ -824,6 +824,8 @@ pub struct PluginSet {
     core: Option<CoreHandle>,
     /// Where `drain_audit` appends; None in sets not loaded from a store.
     audit_log: Option<PathBuf>,
+    /// The plugins' shared `Stage`, for the Dock images waiting to be decoded.
+    stage: crate::plugins::Stage,
 }
 
 /// Any app can put Haunt's plugin-copy type on the pasteboard, so its id counts only when it is a valid
@@ -1303,11 +1305,16 @@ pub fn drain_audit_final(set: &Mutex<PluginSet>) -> (Vec<AuditLine>, Option<Stri
 }
 
 pub fn take_requests_now(set: &Mutex<PluginSet>) -> Vec<HostRequest> {
-    match set.try_lock() {
-        Ok(mut s) => s.take_requests(),
-        Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner().take_requests(),
-        Err(std::sync::TryLockError::WouldBlock) => Vec::new(),
-    }
+    let take = |s: &mut PluginSet| (s.stage.take_dock(), s.take_requests());
+    let (dock, requests) = match set.try_lock() {
+        Ok(mut s) => take(&mut s),
+        Err(std::sync::TryLockError::Poisoned(e)) => take(&mut e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => return Vec::new(),
+    };
+    // The lock is released: decoding holds up no plugin.
+    let mut out = crate::plugins::decode_dock(dock);
+    out.extend(requests);
+    out
 }
 
 #[cfg(test)]

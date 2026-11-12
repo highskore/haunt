@@ -22,11 +22,33 @@ pub(crate) enum Slot {
     Title,
 }
 
-/// Who owns each `Slot`, shared by every plugin of one set.
+/// Who owns each `Slot`, and the Dock images waiting to be decoded, shared by every plugin of one set.
 #[derive(Debug, Clone, Default)]
-pub struct Stage(Arc<Mutex<Vec<(Slot, String)>>>);
+pub struct Stage(Arc<Mutex<Vec<(Slot, String)>>>, Arc<Mutex<Vec<DockBatch>>>);
+
+/// One plugin's checked PNGs, by id, for `decode_dock` once the plugin call and the set lock are over; none
+/// drops the plugin's images.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DockBatch {
+    pub plugin_id: String,
+    pub pngs: Vec<(String, Vec<u8>)>,
+}
 
 impl Stage {
+    /// Queues `plugin`'s images, replacing any of its own still waiting, so the queue holds one batch a plugin.
+    fn queue_dock(&self, plugin: &str, pngs: Vec<(String, Vec<u8>)>) {
+        let mut q = crate::sync::lock(&self.1);
+        match q.iter_mut().find(|b| b.plugin_id == plugin) {
+            Some(b) => b.pngs = pngs,
+            None => q.push(DockBatch { plugin_id: plugin.to_owned(), pngs }),
+        }
+    }
+
+    /// The images waiting to be decoded, for `decode_dock`.
+    pub fn take_dock(&self) -> Vec<DockBatch> {
+        std::mem::take(&mut *crate::sync::lock(&self.1))
+    }
+
     /// Takes `slot` for `plugin`, or keeps it; refused while another plugin has it.
     pub(crate) fn claim(&self, slot: Slot, plugin: &str) -> Result<(), String> {
         let mut owners = crate::sync::lock(&self.0);
@@ -88,10 +110,11 @@ impl Rate {
     }
 }
 
-pub const DOCK_IMAGES_MAX: usize = 8;
+/// A state each for idle, working, needs-you and a blink.
+pub const DOCK_IMAGES_MAX: usize = 4;
 pub const DOCK_PNG_MAX: usize = 1 << 20;
-/// Pixels each way; the Dock draws a tile at most 512 points, 1024 pixels on Retina.
-pub const DOCK_PIXELS_MAX: u32 = 1024;
+/// Pixels each way: a Dock tile at 2x.
+pub const DOCK_PIXELS_MAX: u32 = 512;
 const DOCK_ID_MAX: usize = 32;
 const SHOWS_PER_SEC: usize = 4;
 
@@ -144,16 +167,30 @@ fn dock_id_ok(id: &str) -> bool {
     (1..=DOCK_ID_MAX).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-/// The PNG with only the chunks haunt reads: a still image of at most `DOCK_PIXELS_MAX` pixels each way,
-/// every chunk whole with a good CRC, an IHDR first and IEND last. Other ancillary chunks (colour profiles,
-/// text, Exif) are dropped unread; an unknown critical chunk or an animation (`acTL`) is refused.
+/// Whether `png` is a still image of at most `DOCK_PIXELS_MAX` pixels each way, every chunk whole with a
+/// good CRC, an IHDR first and IEND last, with no unknown critical chunk and no animation (`acTL`). Cheap
+/// enough for the plugin's own call: it reads the bytes once and allocates nothing.
+pub(crate) fn check_png(png: &[u8]) -> Result<(), String> {
+    walk_png(png, None)
+}
+
+/// `png`, checked by `check_png`, with only the chunks haunt reads; other ancillary chunks (colour profiles,
+/// text, Exif) are dropped unread.
 pub(crate) fn keep_chunks(png: &[u8]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(png.len());
+    walk_png(png, Some(&mut out))?;
+    Ok(out)
+}
+
+fn walk_png(png: &[u8], mut out: Option<&mut Vec<u8>>) -> Result<(), String> {
     const SIG: &[u8] = b"\x89PNG\r\n\x1a\n";
     if png.len() > DOCK_PNG_MAX {
         return Err(format!("larger than {DOCK_PNG_MAX} bytes"));
     }
     let mut rest = png.strip_prefix(SIG).ok_or("not a PNG")?;
-    let mut out = SIG.to_vec();
+    if let Some(o) = out.as_deref_mut() {
+        o.extend_from_slice(SIG);
+    }
     let mut first = true;
     loop {
         if rest.len() < 12 {
@@ -179,16 +216,38 @@ pub(crate) fn keep_chunks(png: &[u8]) -> Result<Vec<u8>, String> {
             return Err("two PNG headers".into());
         }
         match kind {
-            b"IHDR" | b"PLTE" | b"tRNS" | b"IDAT" | b"IEND" => out.extend_from_slice(whole),
+            b"IHDR" | b"PLTE" | b"tRNS" | b"IDAT" | b"IEND" => {
+                if let Some(o) = out.as_deref_mut() {
+                    o.extend_from_slice(whole);
+                }
+            }
             b"acTL" => return Err("an animated PNG; send each frame as its own image".into()),
             [k, ..] if k.is_ascii_lowercase() && kind.iter().all(u8::is_ascii_alphabetic) => {}
             _ => return Err(format!("a PNG chunk {:?} haunt doesn't read", String::from_utf8_lossy(kind))),
         }
         rest = &rest[12 + len..];
         if kind == b"IEND" {
-            return if rest.is_empty() { Ok(out) } else { Err("bytes after the PNG's end".into()) };
+            return if rest.is_empty() { Ok(()) } else { Err("bytes after the PNG's end".into()) };
         }
     }
+}
+
+/// Decodes the queued images, outside any plugin call and the set lock: each batch becomes a `DockImages`,
+/// an image that doesn't decode left out and named in `dropped`.
+pub fn decode_dock(batches: Vec<DockBatch>) -> Vec<HostRequest> {
+    batches
+        .into_iter()
+        .map(|b| {
+            let (mut images, mut dropped) = (Vec::new(), Vec::new());
+            for (id, png) in b.pngs {
+                match decode_png(&png) {
+                    Ok((width, height, rgba)) => images.push(DockImage { id, width, height, rgba }),
+                    Err(_) => dropped.push(id),
+                }
+            }
+            HostRequest::DockImages { plugin_id: b.plugin_id, images, dropped }
+        })
+        .collect()
 }
 
 /// `png` decoded to straight-alpha RGBA, after `keep_chunks`.
@@ -226,7 +285,7 @@ impl HostState {
             self.outbox.push(HostRequest::DockShow { plugin_id: self.id.clone(), image: None, badge: None, blink: None, seq: next_seq() });
         }
         if !std::mem::take(&mut self.fx.dock_images).is_empty() {
-            self.outbox.push(HostRequest::DockImages { plugin_id: self.id.clone(), images: Vec::new() });
+            self.stage.queue_dock(&self.id, Vec::new());
         }
         if self.stage.release(Slot::Glow, &self.id) {
             self.outbox.push(HostRequest::GlowHide { plugin_id: self.id.clone(), seq: next_seq() });
@@ -259,19 +318,14 @@ impl wdock::Host for HostState {
             if images[..i].iter().any(|(other, _)| other == id) {
                 return Err(format!("image id {id:?} twice"));
             }
-            keep_chunks(png).map_err(|e| format!("image {id:?}: {e}"))?;
+            check_png(png).map_err(|e| format!("image {id:?}: {e}"))?;
         }
         if !self.fx.dock_images_rate.ok() {
             return Err("images at most once a second".into());
         }
-        let mut decoded = Vec::with_capacity(images.len());
-        for (id, png) in images {
-            let (width, height, rgba) = decode_png(&png).map_err(|e| format!("image {id:?}: {e}"))?;
-            decoded.push(DockImage { id, width, height, rgba });
-        }
-        let ids = decoded.iter().map(|i| i.id.clone()).collect();
-        self.request(HostRequest::DockImages { plugin_id: self.id.clone(), images: decoded })?;
-        self.fx.dock_images = ids;
+        // Decoding waits for the app's drain (`decode_dock`), off this plugin's CPU budget.
+        self.fx.dock_images = images.iter().map(|(id, _)| id.clone()).collect();
+        self.stage.queue_dock(&self.id, images);
         Ok(())
     }
 
@@ -517,12 +571,13 @@ pub(super) mod tests {
 
     #[test]
     fn dock_images_are_still_capped_pngs() {
-        let (w, h, rgba) = decode_png(&png(1024, 1024, &[])).unwrap();
-        assert_eq!((w, h, rgba.len()), (1024, 1024, 1024 * 1024 * 4));
+        let (w, h, rgba) = decode_png(&png(512, 512, &[])).unwrap();
+        assert_eq!((w, h, rgba.len()), (512, 512, 512 * 512 * 4));
         let mut bad_crc = png(64, 64, &[]);
         bad_crc[29] ^= 1;
         for (bad, why) in [
-            (header_only(1025, 10), "pixels"),
+            (header_only(513, 10), "pixels"),
+            (header_only(10, u32::MAX), "pixels"),
             (header_only(0, 10), "pixels"),
             (png(64, 64, &chunk(b"acTL", &[0; 8])), "animated"),
             (png(64, 64, &chunk(b"ZZZZ", &[1])), "doesn't read"),
@@ -537,6 +592,9 @@ pub(super) mod tests {
         ] {
             let e = decode_png(&bad).unwrap_err();
             assert!(e.contains(why), "{why}: {e}");
+            if why != "doesn't decode" {
+                assert_eq!(check_png(&bad).unwrap_err(), e, "the plugin's own call refuses it the same");
+            }
         }
     }
 
@@ -579,21 +637,52 @@ pub(super) mod tests {
         let stage = Stage::default();
         let mut st = state("dev.haunt.a", &stage);
         let img = |id: &str| (id.to_owned(), png(64, 64, &[]));
-        let nine: Vec<_> = (0..9).map(|i| img(&format!("s{i}"))).collect();
-        assert!(wdock::Host::images(&mut st, nine).unwrap_err().contains("at most 8"));
+        let five: Vec<_> = (0..5).map(|i| img(&format!("s{i}"))).collect();
+        assert!(wdock::Host::images(&mut st, five).unwrap_err().contains("at most 4"));
+        assert!(wdock::Host::images(&mut st, vec![("a".into(), header_only(513, 1))]).unwrap_err().contains("at most 512"));
         for bad in ["", "a b", "ghost\u{202e}", "../x", &"x".repeat(33)] {
             assert!(wdock::Host::images(&mut st, vec![img(bad)]).unwrap_err().contains("must be"), "{bad:?}");
         }
         assert!(wdock::Host::images(&mut st, vec![img("a"), img("a")]).unwrap_err().contains("twice"));
         assert!(wdock::Host::images(&mut st, vec![("a".into(), b"no".to_vec())]).unwrap_err().contains("not a PNG"));
-        assert!(wdock::Host::images(&mut st, vec![("a".into(), header_only(8, 8))]).unwrap_err().contains("doesn't decode"));
-        st.fx.dock_images_rate = Rate::new(1, Duration::from_secs(1));
-        assert!(st.outbox.is_empty());
-        wdock::Host::images(&mut st, vec![img("idle"), img("busy")]).unwrap();
+        assert!(stage.take_dock().is_empty());
+        wdock::Host::images(&mut st, vec![img("idle"), ("bad".into(), header_only(8, 8)), img("busy")]).unwrap();
         assert!(wdock::Host::images(&mut st, vec![img("idle")]).unwrap_err().contains("once a second"));
-        let [HostRequest::DockImages { images, .. }] = &st.outbox[..] else { panic!("{:?}", st.outbox) };
+        assert!(st.outbox.is_empty(), "nothing is decoded in the plugin's call");
+        let [HostRequest::DockImages { plugin_id, images, dropped }] = &decode_dock(stage.take_dock())[..] else { panic!() };
         assert_eq!(images.iter().map(|i| (i.id.as_str(), i.rgba.len())).collect::<Vec<_>>(), [("idle", 64 * 64 * 4), ("busy", 64 * 64 * 4)]);
+        assert_eq!((plugin_id.as_str(), &dropped[..]), ("dev.haunt.a", &["bad".to_owned()][..]), "one that doesn't decode is dropped and named");
         assert_eq!(stage.owner(Slot::Dock), None, "images alone take nothing on screen");
+    }
+
+    #[test]
+    fn a_plugin_waits_on_checks_only_never_the_decode() {
+        // The worst four: the most pixels, each padded with an ancillary chunk to the byte cap, every CRC read.
+        let stage = Stage::default();
+        let mut st = state("dev.haunt.a", &stage);
+        let max = |i: usize| {
+            let base = png(DOCK_PIXELS_MAX, DOCK_PIXELS_MAX, &[]);
+            let pad = DOCK_PNG_MAX - base.len() - 12;
+            (format!("s{i}"), png(DOCK_PIXELS_MAX, DOCK_PIXELS_MAX, &chunk(b"zTXt", &vec![7; pad])))
+        };
+        let four: Vec<_> = (0..DOCK_IMAGES_MAX).map(max).collect();
+        assert!(four.iter().all(|(_, p)| p.len() == DOCK_PNG_MAX));
+        let t = Instant::now();
+        wdock::Host::images(&mut st, four).unwrap();
+        let took = t.elapsed();
+        assert!(took < Duration::from_millis(25), "{took:?} of the 50 ms budget");
+        assert_eq!(decode_dock(stage.take_dock()).len(), 1);
+    }
+
+    #[test]
+    fn the_queue_keeps_one_batch_a_plugin_latest_first() {
+        let stage = Stage::default();
+        let mut a = state("dev.haunt.a", &stage);
+        wdock::Host::images(&mut a, vec![("idle".into(), png(8, 8, &[]))]).unwrap();
+        a.release_fx();
+        let batches = stage.take_dock();
+        assert_eq!(batches, [DockBatch { plugin_id: "dev.haunt.a".into(), pngs: vec![] }], "a let-go replaces the waiting images");
+        assert!(matches!(&decode_dock(batches)[..], [HostRequest::DockImages { images, dropped, .. }] if images.is_empty() && dropped.is_empty()));
     }
 
     #[test]
@@ -602,7 +691,6 @@ pub(super) mod tests {
         let (mut a, mut b) = (state("dev.haunt.a", &stage), state("dev.haunt.b", &stage));
         for st in [&mut a, &mut b] {
             wdock::Host::images(st, vec![("idle".into(), png(64, 64, &[])), ("blink".into(), png(64, 64, &[]))]).unwrap();
-            st.outbox.clear();
         }
         assert!(wdock::Host::show(&mut a, Some("nope".into()), None, None).unwrap_err().contains("no image"));
         assert!(wdock::Host::show(&mut a, None, Some(3), Some("blink".into())).unwrap_err().contains("blink needs"));
@@ -632,11 +720,8 @@ pub(super) mod tests {
         wdock::Host::show(&mut a, Some("idle".into()), None, None).unwrap();
         a.outbox.clear();
         a.release_fx();
-        assert!(
-            matches!(&a.outbox[..], [HostRequest::DockShow { image: None, badge: None, blink: None, .. }, HostRequest::DockImages { images, .. }] if images.is_empty()),
-            "{:?}",
-            a.outbox
-        );
+        assert!(matches!(&a.outbox[..], [HostRequest::DockShow { image: None, badge: None, blink: None, .. }]), "{:?}", a.outbox);
+        assert_eq!(stage.take_dock(), [DockBatch { plugin_id: "dev.haunt.a".into(), pngs: vec![] }], "and the app drops its images");
         assert_eq!(stage.owner(Slot::Dock), None);
         drop(a);
         let mut b = state("dev.haunt.b", &stage);
