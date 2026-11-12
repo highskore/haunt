@@ -254,7 +254,7 @@ interface timer {
   stop: func();
 }
 
-// Always linked. WASI clocks are UTC.
+// Capability `timer`, which a plugin needs to do anything with the time of day. WASI clocks are UTC.
 interface clock {
   // Minutes east of UTC for the user's time zone now.
   local-offset-min: func() -> s32;
@@ -267,20 +267,22 @@ interface panel {
   // sheet: over the window; right: a pane beside the terminal; card: a small floating card;
   // window: its own window, which the user can move to another display.
   enum placement { sheet, right, card, window }
-  enum tone { text, dim, faint, accent }
+  // warn is orange, for failures; haunt's needs-you colour isn't available to panels.
+  enum tone { text, dim, faint, warn }
 
   record text-node { text: string, tone: tone, mono: bool, bold: bool }
   record row-node { label: string, sub: option<string>, right: option<string>, tone: tone }
   record button-node { label: string, action: string, primary: bool }
 
   // `rows` × `columns` cells, row by row, each 0 to 1 (shaded from the background to the text
-  // colour) or below 0 for an empty cell. `marked` cells get an accent outline.
+  // colour) or below 0 for an empty cell. `marked` cells get a warn outline. At most 2048 points
+  // each way.
   record grid-node { rows: u32, columns: u32, cell: u32, cells: list<f32>, marked: list<u32> }
 
   // A fixed canvas of `width` × `height` points; shapes in drawing order. `shade` is 0 to 1 as in
-  // the grid; `accent` draws in the accent colour instead.
-  record dot { x: f32, y: f32, r: f32, shade: f32, accent: bool, pulse: bool }
-  record rect { x: f32, y: f32, w: f32, h: f32, shade: f32, accent: bool, label: option<string> }
+  // the grid; `warn` draws in the warn orange instead. At most 16 dots per panel pulse.
+  record dot { x: f32, y: f32, r: f32, shade: f32, warn: bool, pulse: bool }
+  record rect { x: f32, y: f32, w: f32, h: f32, shade: f32, warn: bool, label: option<string> }
   record line { x1: f32, y1: f32, x2: f32, y2: f32, shade: f32 }
   record label { x: f32, y: f32, text: string, tone: tone }
   variant shape { dot(dot), rect(rect), line(line), label(label) }
@@ -305,7 +307,9 @@ interface panel {
   }
 
   // Shows or replaces panel `id`. At most 512 nodes, 8 levels, 4096 shapes and 4 panels; strings
-  // lose hidden characters and are cut to 256 characters; 4 updates a second.
+  // lose hidden characters and are cut to 256 characters; 4 updates a second. One sheet at a time,
+  // and none for 10 s after the user closes one. Haunt draws a header naming the plugin, with a
+  // close button, above every panel; no button is bound to Return.
   show: func(id: string, placement: placement, title: string, nodes: list<panel-node>) -> result<_, string>;
   close: func(id: string);
 }

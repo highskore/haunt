@@ -111,7 +111,7 @@ pub enum HostRequest {
     PtyAnswer { plugin_id: String, surface: String, allow: bool, request_id: u64 },
     PtyType { plugin_id: String, surface: String, text: String, enter: bool },
     /// Show `panel`, or replace the one this plugin showed with its id.
-    ShowPanel { plugin_id: String, panel: Panel },
+    ShowPanel { plugin_id: String, plugin_name: String, panel: Panel },
     ClosePanel { plugin_id: String, id: String },
 }
 
@@ -139,6 +139,8 @@ impl From<std::io::Error> for PluginError {
 #[derive(Debug, Clone, Default)]
 pub struct LoadSpec {
     pub id: String,
+    /// The manifest's name, which the app shows on the plugin's panels.
+    pub name: String,
     pub caps: Capabilities,
     pub kv_path: Option<PathBuf>,
     pub settings_json: String,
@@ -204,6 +206,7 @@ impl Drop for Kv {
 
 pub struct HostState {
     id: String,
+    name: String,
     logs: Vec<String>,
     wasi: WasiCtx,
     table: ResourceTable,
@@ -238,6 +241,7 @@ impl HostState {
     fn new(id: &str, caps: &Capabilities, kv_path: Option<PathBuf>, haunt_dir: Option<&Path>, core: Option<CoreHandle>) -> Self {
         Self {
             id: id.to_owned(),
+            name: id.to_owned(),
             logs: Vec::new(),
             wasi: WasiCtx::builder().wall_clock(CoarseWall).monotonic_clock(CoarseMono(Instant::now())).build(),
             table: ResourceTable::new(),
@@ -586,12 +590,13 @@ fn cwd_globs(globs: &[String]) -> Vec<String> {
 
 impl wpanel::Host for HostState {
     fn show(&mut self, id: String, placement: wpanel::Placement, title: String, nodes: Vec<wpanel::PanelNode>) -> Result<(), String> {
-        let panel = crate::plugin_panel::build(id, placement, title, nodes)?;
+        let mut panel = crate::plugin_panel::build(id, placement, title, nodes)?;
         if self.outbox.len() >= MAX_OUTBOX {
             return Err("too many pending requests".into());
         }
-        self.panels.show(&panel)?;
-        self.request(HostRequest::ShowPanel { plugin_id: self.id.clone(), panel })
+        self.panels.show(&mut panel)?;
+        let plugin_name = self.name.clone();
+        self.request(HostRequest::ShowPanel { plugin_id: self.id.clone(), plugin_name, panel })
     }
 
     fn close(&mut self, id: String) {
@@ -867,17 +872,18 @@ impl LoadedPlugin {
         self.call(|b, s| b.call_on_tick(s, ms)).map(|()| true)
     }
 
-    /// The user pressed a button on panel `id`, or closed it (`action` empty): `on-action(action, "panel:<id>")`.
-    /// Anything but an open panel's own button is refused.
-    pub fn panel_action(&mut self, id: &str, action: &str) -> Result<(), PluginError> {
-        let panels = &mut self.store.data_mut().panels;
-        if !panels.has_action(id, action) {
-            return Err(PluginError(format!("panel {id} has no action {action:?}")));
-        }
-        if action.is_empty() {
-            panels.close(id);
+    /// The user pressed a button on show `generation` of panel `id`, or closed it (`action` empty):
+    /// `on-action(action, "panel:<id>")`. Anything but that show's own button is refused.
+    pub fn panel_action(&mut self, id: &str, generation: u64, action: &str) -> Result<(), PluginError> {
+        if !self.store.data_mut().panels.user_action(id, generation, action) {
+            return Err(PluginError(format!("panel {id} (show {generation}) has no action {action:?}")));
         }
         self.on_action(action, &format!("panel:{id}"))
+    }
+
+    /// Another plugin's right pane took this one's place: it is closed, without an `on-action`.
+    pub(crate) fn panel_displaced(&mut self, id: &str) {
+        self.store.data_mut().panels.close(id);
     }
 
     /// Commands and modes the plugin registered through `palette`.
@@ -1061,6 +1067,9 @@ impl PluginHost {
     /// `instantiate` with a linker for `spec.caps` the caller may share between loads.
     pub fn instantiate_with(&self, component: &Component, spec: &LoadSpec, linker: &Linker<HostState>) -> Result<LoadedPlugin, PluginError> {
         let mut store = Store::new(&self.engine, HostState::new(&spec.id, &spec.caps, spec.kv_path.clone(), spec.haunt_dir.as_deref(), spec.core.clone()));
+        if !spec.name.is_empty() {
+            store.data_mut().name = spec.name.clone();
+        }
         store.limiter(|s| &mut s.limits);
         // Instantiation runs the component's start functions, which get the same budget as a call.
         store.set_epoch_deadline(CALL_TICKS);
@@ -1532,9 +1541,9 @@ mod tests {
         assert!(st.show("bad id".into(), wpanel::Placement::Sheet, String::new(), vec![]).is_err());
         st.close("w".into());
         assert!(matches!(&st.outbox[..], [
-            HostRequest::ShowPanel { plugin_id, panel },
+            HostRequest::ShowPanel { plugin_id, plugin_name, panel },
             HostRequest::ClosePanel { id, .. },
-        ] if plugin_id == "dev.x.p" && panel.title == "Welcome back" && id == "w"));
+        ] if plugin_id == "dev.x.p" && plugin_name == "dev.x.p" && panel.title == "Welcome back" && panel.generation == 1 && id == "w"));
     }
 
     #[test]

@@ -196,7 +196,7 @@ impl Capabilities {
             out.push(("can run on its own every 15 seconds or more, not only when an agent event arrives".into(), false));
         }
         if self.panel {
-            out.push(("can show its own panels: a sheet, a side pane, a small card or a window".into(), false));
+            out.push(("can show its own panels: a sheet, a side pane, a small card or a window".into(), true));
         }
         if self.pty_write {
             out.push(("can answer permission prompts in your terminal (Allow or Deny, nothing else)".into(), true));
@@ -468,10 +468,11 @@ mod tests {
 
     #[test]
     fn new_0_5_capabilities_parse_and_reading_files_is_shown_in_red() {
-        let m = Manifest::parse(&manifest("decorate = true\ntimer = true\nevent_details = true\nfs_read = [\"${cwd}/x\"]")).unwrap();
+        let m = Manifest::parse(&manifest("decorate = true\ntimer = true\npanel = true\nevent_details = true\nfs_read = [\"${cwd}/x\"]")).unwrap();
         let lines = m.capabilities.describe();
         assert!(lines.iter().any(|(l, red)| l.contains("label, a bar or a sparkline") && !red));
         assert!(lines.iter().any(|(l, red)| l.contains("every 15 seconds") && !red));
+        assert!(lines.iter().any(|(l, red)| l.starts_with("can show its own panels") && *red));
         assert!(lines.iter().any(|(l, red)| l.starts_with("can read files matching <agent folder>/x") && *red));
         assert!(lines.iter().any(|(l, red)| l.starts_with("reads the commands, file paths and prompts") && *red));
     }

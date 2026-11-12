@@ -17,6 +17,7 @@ use crate::plugin_manifest::{ALWAYS, Capabilities, MANIFEST, Manifest, valid_id}
 use crate::plugin_pack::{self, ThemeContribution};
 use crate::plugin_settings::PluginConfig;
 use crate::plugin_theme::{Theme, ThemeToken};
+use crate::plugin_panel::PanelPlacement;
 use crate::plugins::{HostRequest, HostState, LoadSpec, LoadedPlugin, PaletteItem, PluginError, PluginHost, RowMenuItem};
 
 pub const LOCKFILE: &str = "plugins.lock";
@@ -566,6 +567,7 @@ impl Store {
                 mkdir_private(&data)?;
                 let spec = LoadSpec {
                     id: e.id.clone(),
+                    name: manifest.plugin.name.clone(),
                     caps: e.granted.clone(),
                     kv_path: Some(data.join("kv.json")),
                     settings_json: capped_settings(config, &e.id, &manifest.settings, &mut set.settings_problems)
@@ -789,6 +791,8 @@ pub struct PluginSet {
     /// The `[plugins]` tables last applied; None until a config.toml that parses.
     config_tables: Option<BTreeMap<String, toml::Table>>,
     themes: Vec<ThemeContribution>,
+    /// The (plugin, panel) that has the right pane.
+    right_pane: Option<(String, String)>,
 }
 
 /// The most settings JSON one plugin gets.
@@ -889,9 +893,12 @@ impl PluginSet {
         }
     }
 
-    /// A button on one of `plugin_id`'s panels, or the user closing it (`action` empty).
-    pub fn panel_action(&mut self, plugin_id: &str, panel_id: &str, action: &str) -> Result<(), PluginError> {
-        self.plugin(plugin_id)?.panel_action(panel_id, action)
+    /// A button on show `generation` of one of `plugin_id`'s panels, or the user closing it (`action` empty).
+    pub fn panel_action(&mut self, plugin_id: &str, panel_id: &str, generation: u64, action: &str) -> Result<(), PluginError> {
+        if action.is_empty() && self.right_pane.as_ref().is_some_and(|(p, i)| p == plugin_id && i == panel_id) {
+            self.right_pane = None;
+        }
+        self.plugin(plugin_id)?.panel_action(panel_id, generation, action)
     }
 
     /// Ticks the plugins granted `timer` whose interval has passed.
@@ -952,8 +959,16 @@ impl PluginSet {
         self.plugins.iter().map(|(_, p)| p.pending_requests()).sum()
     }
 
+    /// The plugins' requests, oldest plugin first, with the right pane's owner applied (`own_right_pane`).
     pub fn take_requests(&mut self) -> Vec<HostRequest> {
-        self.plugins.iter_mut().flat_map(|(_, p)| p.take_requests()).collect()
+        let all: Vec<HostRequest> = self.plugins.iter_mut().flat_map(|(_, p)| p.take_requests()).collect();
+        let (out, displaced) = own_right_pane(&mut self.right_pane, all);
+        for (plugin_id, id) in displaced {
+            if let Ok(p) = self.plugin(&plugin_id) {
+                p.panel_displaced(&id);
+            }
+        }
+        out
     }
 
     pub fn take_logs(&mut self) -> Vec<(String, String)> {
@@ -1002,6 +1017,29 @@ pub fn attach(core: &crate::Core, set: &Arc<Mutex<PluginSet>>) {
 
 /// `take_requests` without waiting: empty while a plugin is handling an event, whose tap then
 /// signals again (see `attach`). The UI thread drains with this, so a slow plugin never stalls it.
+/// There is one right pane: a show there closes the pane another (plugin, panel) had, with no
+/// `on-action` for it, and only the owner's close clears it. Returns the requests and who lost the pane.
+fn own_right_pane(owner: &mut Option<(String, String)>, requests: Vec<HostRequest>) -> (Vec<HostRequest>, Vec<(String, String)>) {
+    let (mut out, mut displaced) = (Vec::with_capacity(requests.len()), Vec::new());
+    for r in requests {
+        match &r {
+            HostRequest::ShowPanel { plugin_id, panel, .. } if panel.placement == PanelPlacement::Right => {
+                let me = (plugin_id.clone(), panel.id.clone());
+                if let Some(old) = owner.replace(me.clone()).filter(|old| *old != me) {
+                    out.push(HostRequest::ClosePanel { plugin_id: old.0.clone(), id: old.1.clone() });
+                    displaced.push(old);
+                }
+            }
+            HostRequest::ClosePanel { plugin_id, id } if owner.as_ref().is_some_and(|(p, i)| p == plugin_id && i == id) => {
+                *owner = None;
+            }
+            _ => {}
+        }
+        out.push(r);
+    }
+    (out, displaced)
+}
+
 pub fn take_requests_now(set: &Mutex<PluginSet>) -> Vec<HostRequest> {
     match set.try_lock() {
         Ok(mut s) => s.take_requests(),
@@ -1017,6 +1055,28 @@ mod tests {
 
     fn tempdir(tag: &str) -> TempDir {
         TempDir::created(&format!("store-{tag}"))
+    }
+
+    #[test]
+    fn a_new_right_pane_closes_the_old_owners_and_only_the_owner_clears_it() {
+        let show = |plugin: &str, id: &str, placement| HostRequest::ShowPanel {
+            plugin_id: plugin.into(),
+            plugin_name: plugin.into(),
+            panel: crate::plugin_panel::Panel { id: id.into(), generation: 1, placement, title: String::new(), nodes: vec![] },
+        };
+        let close = |plugin: &str, id: &str| HostRequest::ClosePanel { plugin_id: plugin.into(), id: id.into() };
+        let is_close = |r: &HostRequest, plugin: &str, panel: &str| matches!(r, HostRequest::ClosePanel { plugin_id, id } if plugin_id == plugin && id == panel);
+        let mut owner = None;
+        let (out, lost) = own_right_pane(&mut owner, vec![show("a", "map", PanelPlacement::Right), show("a", "map", PanelPlacement::Right)]);
+        assert!(out.len() == 2 && lost.is_empty(), "the owner may show again");
+        let (out, lost) = own_right_pane(&mut owner, vec![show("b", "x", PanelPlacement::Card), close("b", "map"), show("b", "map", PanelPlacement::Right)]);
+        assert_eq!(lost, [("a".to_string(), "map".to_string())]);
+        assert!(is_close(&out[2], "a", "map") && matches!(&out[3], HostRequest::ShowPanel { plugin_id, .. } if plugin_id == "b"));
+        assert_eq!(owner, Some(("b".into(), "map".into())), "another plugin's close of the same id doesn't clear it");
+        own_right_pane(&mut owner, vec![close("a", "map")]);
+        assert!(owner.is_some());
+        own_right_pane(&mut owner, vec![close("b", "map")]);
+        assert!(owner.is_none());
     }
 
     #[test]

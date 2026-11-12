@@ -6,7 +6,9 @@ import UserNotifications
 final class PluginBridge {
     let panels = PluginPanels()
     /// Set once the core has started, so the decision log is loaded before plugins read it.
-    var plugins: PluginsAPI?
+    var plugins: PluginsAPI? {
+        didSet { panels.closeAll() }
+    }
     private let core: CoreAPI
     private let write: (PtyRoute) -> Void
     /// A plugin's answer the gate refused, as one line of the host's own text.
@@ -18,9 +20,9 @@ final class PluginBridge {
     init(core: CoreAPI, write: @escaping (PtyRoute) -> Void) {
         self.core = core
         self.write = write
-        panels.onAction = { [weak self] plugin, panel, action in
+        panels.onAction = { [weak self] plugin, panel, generation, action in
             self?.run("plugin \(plugin) panel \(panel) action \(action)") {
-                try $0.panelAction(pluginId: plugin, panelId: panel, action: action)
+                try $0.panelAction(pluginId: plugin, panelId: panel, generation: generation, action: action)
             }
         }
     }
@@ -33,8 +35,8 @@ final class PluginBridge {
             switch req {
             case let .notify(pluginId, title, body, _, _):
                 Self.notify(pluginId: pluginId, title: title, body: body)
-            case let .showPanel(pluginId, panel):
-                panels.show(pluginId: pluginId, panel: panel)
+            case let .showPanel(pluginId, pluginName, panel):
+                panels.show(pluginId: pluginId, pluginName: pluginName, panel: panel)
             case let .closePanel(pluginId, id):
                 panels.close(pluginId: pluginId, id: id)
             case .ptyAnswer, .ptyType:

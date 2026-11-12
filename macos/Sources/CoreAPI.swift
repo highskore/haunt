@@ -30,7 +30,7 @@ protocol PluginsAPI: AnyObject {
     func takeRequests() -> [HostRequest]
     func rowMenuItems(surfaceId: String) -> [RowMenuItem]
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws
-    func panelAction(pluginId: String, panelId: String, action: String) throws
+    func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?)
     func setTheme(name: String, tokens: [ThemeToken]) throws
     func settingsProblems() -> [String]
@@ -130,7 +130,7 @@ final class NoPlugins: PluginsAPI {
     func takeRequests() -> [HostRequest] { [] }
     func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
-    func panelAction(pluginId: String, panelId: String, action: String) throws {}
+    func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?) {}
     func setTheme(name: String, tokens: [ThemeToken]) throws {}
     func settingsProblems() -> [String] { [] }
@@ -152,7 +152,7 @@ final class FixturePlugins: PluginsAPI {
     func takeRequests() -> [HostRequest] { [] }
     func rowMenuItems(surfaceId: String) -> [RowMenuItem] { [] }
     func invokeRowMenuItem(pluginId: String, itemId: String, surfaceId: String) throws {}
-    func panelAction(pluginId: String, panelId: String, action: String) throws {}
+    func panelAction(pluginId: String, panelId: String, generation: UInt64, action: String) throws {}
     func rowMoved(surfaceId: String, groupId: String, beforeSurfaceId: String?) {}
     func setTheme(name: String, tokens: [ThemeToken]) throws {}
     func settingsProblems() -> [String] { [] }
@@ -373,7 +373,7 @@ enum HostRequest: Equatable, Hashable {
     case notify(pluginId: String, title: String, body: String, actions: [NotifyAction], binding: String?)
     case ptyAnswer(pluginId: String, surface: String, allow: Bool, requestId: UInt64)
     case ptyType(pluginId: String, surface: String, text: String, enter: Bool)
-    case showPanel(pluginId: String, panel: Panel)
+    case showPanel(pluginId: String, pluginName: String, panel: Panel)
     case closePanel(pluginId: String, id: String)
 }
 
@@ -382,12 +382,12 @@ enum PanelPlacement: Equatable, Hashable {
 }
 
 enum PanelTone: Equatable, Hashable {
-    case text, dim, faint, accent
+    case text, dim, faint, warn
 }
 
 enum PanelShape: Equatable, Hashable {
-    case dot(x: Float, y: Float, r: Float, shade: Float, accent: Bool, pulse: Bool)
-    case rect(x: Float, y: Float, w: Float, h: Float, shade: Float, accent: Bool, label: String?)
+    case dot(x: Float, y: Float, r: Float, shade: Float, warn: Bool, pulse: Bool)
+    case rect(x: Float, y: Float, w: Float, h: Float, shade: Float, warn: Bool, label: String?)
     case line(x1: Float, y1: Float, x2: Float, y2: Float, shade: Float)
     case label(x: Float, y: Float, text: String, tone: PanelTone)
 }
@@ -409,6 +409,7 @@ struct PanelNode: Equatable, Hashable {
 
 struct Panel: Equatable, Hashable {
     var id: String
+    var generation: UInt64
     var placement: PanelPlacement
     var title: String
     var nodes: [PanelNode]

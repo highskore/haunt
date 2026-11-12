@@ -12,6 +12,10 @@ pub const MAX_SHAPES: usize = 4096;
 pub const MAX_PANELS: usize = 4;
 pub const MAX_TEXT: usize = 256;
 pub const SHOWS_PER_SEC: usize = 4;
+pub const MAX_PULSES: usize = 16;
+/// After the user closes a plugin's sheet, it can't show another for this long.
+pub const SHEET_COOLDOWN: Duration = Duration::from_secs(10);
+const GRID_GAP: u32 = 2;
 const MAX_ID: usize = 64;
 const MAX_GRID_CELLS: u32 = 4096;
 const MAX_CELL: u32 = 64;
@@ -32,14 +36,15 @@ pub enum PanelTone {
     Text,
     Dim,
     Faint,
-    Accent,
+    /// The plugin warn orange, never haunt's needs-you colour.
+    Warn,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 pub enum PanelShape {
-    Dot { x: f32, y: f32, r: f32, shade: f32, accent: bool, pulse: bool },
-    Rect { x: f32, y: f32, w: f32, h: f32, shade: f32, accent: bool, label: Option<String> },
+    Dot { x: f32, y: f32, r: f32, shade: f32, warn: bool, pulse: bool },
+    Rect { x: f32, y: f32, w: f32, h: f32, shade: f32, warn: bool, label: Option<String> },
     Line { x1: f32, y1: f32, x2: f32, y2: f32, shade: f32 },
     Label { x: f32, y: f32, text: String, tone: PanelTone },
 }
@@ -70,23 +75,44 @@ pub struct PanelNode {
 #[cfg_attr(feature = "ffi", derive(uniffi::Record))]
 pub struct Panel {
     pub id: String,
+    /// Bumped on every show; the app passes it back so a close of an older show can't close a newer one.
+    pub generation: u64,
     pub placement: PanelPlacement,
     pub title: String,
     pub nodes: Vec<PanelNode>,
 }
 
-/// One plugin instance's open panels (id to their buttons' actions) and its recent shows.
+#[derive(Debug)]
+struct Open {
+    placement: PanelPlacement,
+    generation: u64,
+    actions: Vec<String>,
+}
+
+/// One plugin instance's open panels and its recent shows.
 #[derive(Debug, Default)]
 pub struct Panels {
-    open: BTreeMap<String, Vec<String>>,
+    open: BTreeMap<String, Open>,
     shows: VecDeque<Instant>,
+    generation: u64,
+    /// When the user last closed one of this plugin's sheets.
+    sheet_closed: Option<Instant>,
 }
 
 impl Panels {
-    /// Checks the rate and the open-panel cap for a show of `p`, then records it as open.
-    pub fn show(&mut self, p: &Panel) -> Result<(), String> {
+    /// Checks the caps, the rate and the sheet rules for a show of `p`, then records it as open with
+    /// its generation set.
+    pub fn show(&mut self, p: &mut Panel) -> Result<(), String> {
         if !self.open.contains_key(&p.id) && self.open.len() >= MAX_PANELS {
             return Err(format!("at most {MAX_PANELS} panels open"));
+        }
+        if p.placement == PanelPlacement::Sheet {
+            if self.open.iter().any(|(id, o)| o.placement == PanelPlacement::Sheet && *id != p.id) {
+                return Err("one sheet at a time".into());
+            }
+            if self.sheet_closed.is_some_and(|t| t.elapsed() < SHEET_COOLDOWN) {
+                return Err("the user just closed a sheet; try later".into());
+            }
         }
         let now = Instant::now();
         while self.shows.front().is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(1)) {
@@ -96,8 +122,10 @@ impl Panels {
             return Err(format!("panel rate limit ({SHOWS_PER_SEC}/s)"));
         }
         self.shows.push_back(now);
+        self.generation += 1;
+        p.generation = self.generation;
         let actions = p.nodes.iter().filter_map(|n| if let PanelNodeKind::Button { action, .. } = &n.kind { Some(action.clone()) } else { None });
-        self.open.insert(p.id.clone(), actions.collect());
+        self.open.insert(p.id.clone(), Open { placement: p.placement, generation: p.generation, actions: actions.collect() });
         Ok(())
     }
 
@@ -110,9 +138,18 @@ impl Panels {
         self.open.keys().cloned().collect()
     }
 
-    /// Whether panel `id` is open with a button for `action`; the empty action (closed by the user) for any open one.
-    pub fn has_action(&self, id: &str, action: &str) -> bool {
-        self.open.get(id).is_some_and(|a| action.is_empty() || a.iter().any(|x| x == action))
+    /// The user pressed `action` on show `generation` of panel `id`, or closed it (`action` empty).
+    /// Anything else, including a stale generation, is refused. A close is recorded.
+    pub fn user_action(&mut self, id: &str, generation: u64, action: &str) -> bool {
+        let Some(o) = self.open.get(id).filter(|o| o.generation == generation) else { return false };
+        if !action.is_empty() {
+            return o.actions.iter().any(|a| a == action);
+        }
+        if o.placement == PanelPlacement::Sheet {
+            self.sheet_closed = Some(Instant::now());
+        }
+        self.open.remove(id);
+        true
     }
 }
 
@@ -125,7 +162,7 @@ fn tone(t: wpanel::Tone) -> PanelTone {
         wpanel::Tone::Text => PanelTone::Text,
         wpanel::Tone::Dim => PanelTone::Dim,
         wpanel::Tone::Faint => PanelTone::Faint,
-        wpanel::Tone::Accent => PanelTone::Accent,
+        wpanel::Tone::Warn => PanelTone::Warn,
     }
 }
 
@@ -149,7 +186,7 @@ fn shape(s: wpanel::Shape) -> Result<PanelShape, String> {
             y: coord(d.y)?,
             r: num(d.r)?.clamp(0.0, MAX_CANVAS as f32),
             shade: shade(d.shade)?,
-            accent: d.accent,
+            warn: d.warn,
             pulse: d.pulse,
         },
         wpanel::Shape::Rect(r) => PanelShape::Rect {
@@ -158,7 +195,7 @@ fn shape(s: wpanel::Shape) -> Result<PanelShape, String> {
             w: num(r.w)?.clamp(0.0, MAX_CANVAS as f32),
             h: num(r.h)?.clamp(0.0, MAX_CANVAS as f32),
             shade: shade(r.shade)?,
-            accent: r.accent,
+            warn: r.warn,
             label: r.label.map(text),
         },
         wpanel::Shape::Line(l) => PanelShape::Line { x1: coord(l.x1)?, y1: coord(l.y1)?, x2: coord(l.x2)?, y2: coord(l.y2)?, shade: shade(l.shade)? },
@@ -166,7 +203,7 @@ fn shape(s: wpanel::Shape) -> Result<PanelShape, String> {
     })
 }
 
-fn kind(n: wpanel::Node, shapes: &mut usize) -> Result<PanelNodeKind, String> {
+fn kind(n: wpanel::Node, shapes: &mut usize, pulses: &mut usize) -> Result<PanelNodeKind, String> {
     Ok(match n {
         wpanel::Node::Vstack => PanelNodeKind::VStack,
         wpanel::Node::Hstack => PanelNodeKind::HStack,
@@ -188,6 +225,10 @@ fn kind(n: wpanel::Node, shapes: &mut usize) -> Result<PanelNodeKind, String> {
             if !(2..=MAX_CELL).contains(&g.cell) {
                 return Err(format!("a grid cell is 2 to {MAX_CELL} points"));
             }
+            let side = |n: u32| n.saturating_mul(g.cell + GRID_GAP) <= MAX_CANVAS;
+            if !side(g.rows) || !side(g.columns) {
+                return Err(format!("a grid is at most {MAX_CANVAS} points each way"));
+            }
             if g.marked.iter().any(|&m| m >= n) || g.marked.len() > n as usize {
                 return Err("a marked cell is outside the grid".into());
             }
@@ -201,6 +242,10 @@ fn kind(n: wpanel::Node, shapes: &mut usize) -> Result<PanelNodeKind, String> {
             *shapes += c.shapes.len();
             if *shapes > MAX_SHAPES {
                 return Err(format!("at most {MAX_SHAPES} shapes in a panel"));
+            }
+            *pulses += c.shapes.iter().filter(|s| matches!(s, wpanel::Shape::Dot(d) if d.pulse)).count();
+            if *pulses > MAX_PULSES {
+                return Err(format!("at most {MAX_PULSES} pulsing dots in a panel"));
             }
             PanelNodeKind::Canvas { width: c.width, height: c.height, shapes: c.shapes.into_iter().map(shape).collect::<Result<_, _>>()? }
         }
@@ -219,7 +264,7 @@ pub fn build(id: String, placement: wpanel::Placement, title: String, nodes: Vec
     }
     let mut out: Vec<PanelNode> = Vec::with_capacity(nodes.len());
     let mut depth = Vec::with_capacity(nodes.len());
-    let mut shapes = 0;
+    let (mut shapes, mut pulses) = (0, 0);
     for (i, n) in nodes.into_iter().enumerate() {
         let d = match n.parent {
             None => 1,
@@ -235,7 +280,7 @@ pub fn build(id: String, placement: wpanel::Placement, title: String, nodes: Vec
             return Err(format!("at most {MAX_DEPTH} levels"));
         }
         depth.push(d);
-        out.push(PanelNode { parent: n.parent, kind: kind(n.node, &mut shapes)? });
+        out.push(PanelNode { parent: n.parent, kind: kind(n.node, &mut shapes, &mut pulses)? });
     }
     let placement = match placement {
         wpanel::Placement::Sheet => PanelPlacement::Sheet,
@@ -243,7 +288,7 @@ pub fn build(id: String, placement: wpanel::Placement, title: String, nodes: Vec
         wpanel::Placement::Card => PanelPlacement::Card,
         wpanel::Placement::Window => PanelPlacement::Window,
     };
-    Ok(Panel { id, placement, title: text(title), nodes: out })
+    Ok(Panel { id, generation: 0, placement, title: text(title), nodes: out })
 }
 
 #[cfg(test)]
@@ -299,27 +344,65 @@ mod tests {
         }
         assert!(build("g".into(), Placement::Window, String::new(), vec![node(None, grid(u32::MAX, 2, vec![], vec![]))]).is_err(), "no overflow");
 
-        let dot = |x: f32| wpanel::Shape::Dot(wpanel::Dot { x, y: 1.0, r: 2.0, shade: 3.0, accent: false, pulse: true });
+        let dot = |x: f32, pulse| wpanel::Shape::Dot(wpanel::Dot { x, y: 1.0, r: 2.0, shade: 3.0, warn: false, pulse });
         let canvas = |shapes: Vec<wpanel::Shape>| Node::Canvas(wpanel::CanvasNode { width: 100, height: 50, shapes });
-        let p = build("c".into(), Placement::Card, String::new(), vec![node(None, canvas(vec![dot(1.0)]))]).unwrap();
+        let p = build("c".into(), Placement::Card, String::new(), vec![node(None, canvas(vec![dot(1.0, true)]))]).unwrap();
         let PanelNodeKind::Canvas { shapes, .. } = &p.nodes[0].kind else { panic!() };
         assert!(matches!(shapes[0], PanelShape::Dot { shade, .. } if shade == 1.0));
-        assert!(build("c".into(), Placement::Card, String::new(), vec![node(None, canvas(vec![dot(f32::INFINITY)]))]).is_err());
-        let half = || node(None, canvas((0..MAX_SHAPES / 2 + 1).map(|_| dot(0.0)).collect()));
+        assert!(build("c".into(), Placement::Card, String::new(), vec![node(None, canvas(vec![dot(f32::INFINITY, false)]))]).is_err());
+        let half = || node(None, canvas((0..MAX_SHAPES / 2 + 1).map(|_| dot(0.0, false)).collect()));
         assert!(build("c".into(), Placement::Card, String::new(), vec![half(), half()]).unwrap_err().contains("shapes"));
+        let pulsing = |n| node(None, canvas((0..n).map(|_| dot(0.0, true)).collect()));
+        assert!(build("c".into(), Placement::Card, String::new(), vec![pulsing(MAX_PULSES)]).is_ok());
+        assert!(build("c".into(), Placement::Card, String::new(), vec![pulsing(1), pulsing(MAX_PULSES)]).unwrap_err().contains("pulsing"));
+    }
+
+    #[test]
+    fn a_grid_draws_no_bigger_than_a_canvas() {
+        let grid = |columns: u32, cell| Node::Grid(wpanel::GridNode { rows: 1, columns, cell, cells: vec![0.0; columns as usize], marked: vec![] });
+        assert!(build("g".into(), Placement::Window, String::new(), vec![node(None, grid(MAX_CANVAS / (32 + GRID_GAP), 32))]).is_ok());
+        assert!(build("g".into(), Placement::Window, String::new(), vec![node(None, grid(MAX_CANVAS / (32 + GRID_GAP) + 1, 32))]).unwrap_err().contains("points each way"));
+    }
+
+    fn panel(id: &str, placement: Placement) -> Panel {
+        build(id.into(), placement, String::new(), vec![node(None, button("go"))]).unwrap()
     }
 
     #[test]
     fn open_panels_and_shows_are_limited() {
         let mut panels = Panels::default();
-        let p = |id: &str| build(id.into(), Placement::Card, String::new(), vec![node(None, button("go"))]).unwrap();
         for i in 0..MAX_PANELS {
-            panels.show(&p(&i.to_string())).unwrap();
+            panels.show(&mut panel(&i.to_string(), Placement::Card)).unwrap();
         }
-        assert!(panels.show(&p("extra")).unwrap_err().contains("panels open"));
-        assert!(panels.show(&p("0")).unwrap_err().contains("rate"), "replacing is fine, but not a fifth show this second");
-        assert!(panels.has_action("0", "go") && panels.has_action("0", "") && !panels.has_action("0", "other") && !panels.has_action("x", ""));
+        assert!(panels.show(&mut panel("extra", Placement::Card)).unwrap_err().contains("panels open"));
+        assert!(panels.show(&mut panel("0", Placement::Card)).unwrap_err().contains("rate"), "replacing is fine, but not a fifth show this second");
         assert!(panels.close("0") && !panels.close("0"));
-        assert!(!panels.has_action("0", ""));
+        assert_eq!(panels.ids(), ["1", "2", "3"]);
+    }
+
+    #[test]
+    fn only_the_current_show_answers_and_a_close_ends_it() {
+        let mut panels = Panels::default();
+        let (mut a, mut b) = (panel("p", Placement::Card), panel("p", Placement::Card));
+        panels.show(&mut a).unwrap();
+        panels.show(&mut b).unwrap();
+        assert_eq!((a.generation, b.generation), (1, 2));
+        assert!(!panels.user_action("p", 1, "go") && !panels.user_action("p", 1, ""), "an older show's buttons and close are stale");
+        assert!(panels.user_action("p", 2, "go") && !panels.user_action("p", 2, "other") && !panels.user_action("x", 2, ""));
+        assert!(panels.user_action("p", 2, "") && !panels.user_action("p", 2, "go"));
+    }
+
+    #[test]
+    fn one_sheet_at_a_time_and_a_pause_after_the_user_closes_one() {
+        let mut panels = Panels::default();
+        let mut s = panel("s", Placement::Sheet);
+        panels.show(&mut s).unwrap();
+        assert!(panels.show(&mut panel("t", Placement::Sheet)).unwrap_err().contains("one sheet"));
+        panels.show(&mut panel("s", Placement::Sheet)).unwrap();
+        assert!(panels.user_action("s", 2, ""));
+        assert!(panels.show(&mut panel("s", Placement::Sheet)).unwrap_err().contains("just closed"));
+        panels.show(&mut panel("c", Placement::Card)).unwrap();
+        panels.sheet_closed = Some(Instant::now() - SHEET_COOLDOWN);
+        panels.show(&mut panel("s", Placement::Sheet)).unwrap();
     }
 }
