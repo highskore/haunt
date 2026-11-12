@@ -73,10 +73,20 @@ fn pattern(base: &Path, rest: &str) -> Vec<Vec<u8>> {
 /// Folders under `$HOME` macOS guards with its own permission prompts: never a project root themselves.
 const TCC_ROOTS: [&str; 7] = ["Documents", "Desktop", "Downloads", "Pictures", "Movies", "Music", "Library/Mobile Documents"];
 
+/// A one-line git pointer file (`.git`, `commondir`), as git reads it: trailing `\n` and `\r` dropped and
+/// nothing else. Anything git would read differently from a careful reader (another line, or leading or
+/// trailing whitespace) is refused, so the path checked is the path git uses.
+fn git_pointer(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok().filter(|t| t.len() < 4096)?;
+    let line = text.trim_end_matches(['\n', '\r']);
+    let odd = line.contains(['\n', '\r']) || line.starts_with(char::is_whitespace) || line.ends_with(char::is_whitespace);
+    (!odd && !line.is_empty()).then(|| line.to_owned())
+}
+
 /// Where a `gitdir: <path>` file points, canonical; relative paths are from the file's folder.
 fn git_file_target(git: &Path) -> Option<PathBuf> {
-    let text = std::fs::read_to_string(git).ok().filter(|t| t.len() < 4096)?;
-    let target = text.strip_prefix("gitdir:")?.trim();
+    let line = git_pointer(git)?;
+    let target = line.strip_prefix("gitdir: ").filter(|t| !t.starts_with(char::is_whitespace))?;
     git.parent()?.join(target).canonicalize().ok()
 }
 
@@ -115,7 +125,7 @@ impl FsScope {
 
     /// The git work tree `cwd` is in, canonical, if it may be a `${cwd}`. A tab's cwd comes from the shell
     /// (OSC 7), which an agent can steer, so only a repository's root counts, found by walking up from
-    /// `cwd` without reaching `$HOME`; a `.git` file must point inside `$HOME`. The root must be strictly
+    /// `cwd` without reaching `$HOME`; a `.git` file must point where `gitdir_allowed` says. The root must be strictly
     /// inside `$HOME`, not under a dot-folder or `~/Library`, neither inside the haunt dir nor containing
     /// it, and not itself one of the folders macOS guards (`TCC_ROOTS`), though a project inside one is
     /// fine. `exec` runs only in such a folder.
@@ -126,15 +136,37 @@ impl FsScope {
             let git = d.join(".git");
             match std::fs::symlink_metadata(&git) {
                 Ok(m) if m.is_dir() => true,
-                Ok(m) if m.is_file() => git_file_target(&git).is_some_and(|t| t.starts_with(home)),
+                Ok(m) if m.is_file() => git_file_target(&git).is_some_and(|t| self.gitdir_allowed(&t)),
                 _ => false,
             }
         })?;
-        let rel = root.strip_prefix(home).ok()?;
+        self.may_be_root(root).then(|| root.to_path_buf())
+    }
+
+    /// `dir` (canonical) is strictly inside `$HOME`, not under a dot-folder or `~/Library`, clear of the
+    /// haunt dir both ways, and not a folder macOS guards.
+    fn may_be_root(&self, dir: &Path) -> bool {
+        let Some(rel) = self.home.as_ref().and_then(|h| dir.strip_prefix(h).ok()).filter(|r| !r.as_os_str().is_empty()) else { return false };
         let private = rel.components().any(|p| p.as_os_str().as_bytes().starts_with(b".")) || rel.starts_with("Library");
-        let haunt = root.starts_with(&self.haunt) || self.haunt.starts_with(root);
+        let haunt = dir.starts_with(&self.haunt) || self.haunt.starts_with(dir);
         let guarded = TCC_ROOTS.iter().any(|t| rel == Path::new(t));
-        (!private && !haunt && !guarded).then(|| root.to_path_buf())
+        !private && !haunt && !guarded
+    }
+
+    /// Where a `.git` file may point (canonical): into the `.git` folder of a work tree that may itself be
+    /// a root (a worktree's or submodule's gitdir), or at a folder that may be a root. A worktree's
+    /// `commondir` must pass the same test, so neither half of the repository lives somewhere private.
+    fn gitdir_allowed(&self, dir: &Path) -> bool {
+        let ok = |d: &Path| match d.ancestors().find(|a| a.file_name().is_some_and(|n| n == ".git")) {
+            Some(dot_git) => dot_git.parent().is_some_and(|w| self.may_be_root(w)),
+            None => self.may_be_root(d),
+        };
+        let file = dir.join("commondir");
+        let common = match std::fs::symlink_metadata(&file) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(dir.to_path_buf()),
+            _ => git_pointer(&file).and_then(|t| dir.join(t).canonicalize().ok()),
+        };
+        ok(dir) && common.is_some_and(|c| ok(&c))
     }
 
     /// A tab's repository: the project folder it was opened in, which the app chose (never the live cwd,
@@ -495,6 +527,60 @@ mod tests {
         assert!(!s.add_cwd(home.join(".ssh").to_str().unwrap()) && s.cwds.is_empty());
         assert!(s.add_cwd(home.join("code/p").to_str().unwrap()));
         assert_eq!(s.cwds, [canon("code/p")]);
+    }
+
+    #[test]
+    fn a_git_file_points_only_into_a_repo_that_could_be_a_root() {
+        let root = TempDir::created("gitdir");
+        let home = root.join("home");
+        let mkdir = |d: &str| std::fs::create_dir_all(home.join(d)).unwrap();
+        let write = |f: &str, text: &str| std::fs::write(home.join(f), text).unwrap();
+        for d in ["code/m/.git/worktrees/w", "code/m/.git/worktrees/evil", "code/super/.git/modules/sub", "code/super/sub", ".ssh/.git", "Library/x", ".haunt/r"] {
+            mkdir(d);
+        }
+        write("code/m/.git/worktrees/w/commondir", "../..\n");
+        write("code/m/.git/worktrees/evil/commondir", "../../../../../.ssh/.git\n");
+        write("code/super/sub/.git", "gitdir: ../.git/modules/sub\n");
+        let git_file = |name: &str, target: &str| {
+            mkdir(&format!("code/{name}"));
+            write(&format!("code/{name}/.git"), &format!("gitdir: {target}\n"));
+        };
+        git_file("w", "../m/.git/worktrees/w");
+        git_file("evil-common", "../m/.git/worktrees/evil");
+        git_file("to-ssh", "../../.ssh");
+        git_file("to-ssh-git", "../../.ssh/.git");
+        git_file("to-library", "../../Library/x");
+        git_file("to-haunt", "../../.haunt/r");
+        git_file("to-home", "../..");
+        let mut s = FsScope::new(&[], &[], Some(&home.join(".haunt")));
+        s.set_home(&home);
+        let resolved = |d: &str| s.project_folder(home.join(d).to_str().unwrap());
+        let canon = |d: &str| home.join(d).canonicalize().unwrap();
+        assert_eq!(resolved("code/w"), Some(canon("code/w")), "a worktree of a repo under home");
+        assert_eq!(resolved("code/super/sub"), Some(canon("code/super/sub")), "a submodule");
+        for d in ["code/evil-common", "code/to-ssh", "code/to-ssh-git", "code/to-library", "code/to-haunt", "code/to-home"] {
+            assert_eq!(resolved(d), None, "{d}");
+        }
+
+        // Read as git reads them: only trailing newlines go, so whitespace git keeps is refused, not trimmed.
+        mkdir("code/m/.git/worktrees/w2");
+        write("code/m/.git/worktrees/w2/commondir", "../..\r\n");
+        git_file("crlf", "../m/.git/worktrees/w2\r");
+        assert_eq!(resolved("code/crlf"), Some(canon("code/crlf")), "CRLF endings are fine");
+        for (name, body) in [
+            ("lead", "gitdir:  ../m/.git/worktrees/w"), ("trail", "gitdir: ../m/.git/worktrees/w "), ("tab", "gitdir: ../m/.git/worktrees/w\t"),
+            ("nospace", "gitdir:../m/.git/worktrees/w"), ("two-lines", "gitdir: ../m/.git/worktrees/w\nx"),
+        ] {
+            mkdir(&format!("code/{name}"));
+            write(&format!("code/{name}/.git"), &format!("{body}\n"));
+            assert_eq!(resolved(&format!("code/{name}")), None, "{name}");
+        }
+        for (name, common) in [("c-lead", " ../.."), ("c-trail", "../.. "), ("c-lines", "../..\n../..")] {
+            mkdir(&format!("code/m/.git/worktrees/{name}"));
+            write(&format!("code/m/.git/worktrees/{name}/commondir"), &format!("{common}\n"));
+            git_file(name, &format!("../m/.git/worktrees/{name}"));
+            assert_eq!(resolved(&format!("code/{name}")), None, "{name}");
+        }
     }
 
     #[test]
