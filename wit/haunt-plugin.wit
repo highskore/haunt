@@ -481,8 +481,8 @@ interface terminal {
 }
 
 // Capability `clipboard = "write"`. Puts text on the clipboard: "\n" is kept, CR goes, each line is made
-// plain (no tabs or hidden characters); at most 400 lines and 16 KB. Only once per button, key,
-// palette command or notification action the user just used. Trailing line breaks are cut, a first
+// plain (no tabs or hidden characters); at most 400 lines and 16 KB. Only once per button, key press
+// (not its release), palette command or notification action the user just used. Trailing line breaks are cut, a first
 // line with nothing visible is refused, and Haunt always shows a multi-line paste of it first.
 // There is no read.
 interface clipboard {

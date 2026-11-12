@@ -1849,7 +1849,7 @@ impl LoadedPlugin {
     /// tab focused now, until the call returns, but only if `terminal_shown`: none while the agents view
     /// or the review screen hides the terminal.
     pub fn run_command(&mut self, action_id: &str, terminal_shown: bool) -> Result<(), PluginError> {
-        self.run_user_action(action_id, "", terminal_shown)
+        self.run_user_action(action_id, "", terminal_shown, true)
     }
 
     /// The user pressed (`down`) or released one of this plugin's keys: `on-action(id, "key-down" or
@@ -1858,7 +1858,8 @@ impl LoadedPlugin {
         if !self.store.data().keys.iter().any(|(i, _)| i == id) {
             return Err(PluginError(format!("no key {id:?}")));
         }
-        self.run_user_action(id, if down { "key-down" } else { "key-up" }, terminal_shown)
+        // Only the press may copy: a release is the same gesture, not a second one.
+        self.run_user_action(id, if down { "key-down" } else { "key-up" }, terminal_shown, down)
     }
 
     /// The tab hold summary action `action_id` brings forward, while that tab is still open.
@@ -1895,11 +1896,11 @@ impl LoadedPlugin {
         self.store.data().keys.iter().map(|(i, c)| PluginKey { plugin_id: id.to_owned(), id: i.clone(), chord: c.clone() }).collect()
     }
 
-    fn run_user_action(&mut self, action_id: &str, payload: &str, terminal_shown: bool) -> Result<(), PluginError> {
+    fn run_user_action(&mut self, action_id: &str, payload: &str, terminal_shown: bool, copy: bool) -> Result<(), PluginError> {
         let data = self.store.data_mut();
         data.typing_into = data.core.as_ref().and_then(CoreHandle::selected_surface).filter(|_| terminal_shown);
         data.reads_left = READS_PER_ACTION;
-        data.arm(true, None);
+        data.arm(copy, None);
         let res = self.user_call(|p| p.on_action(action_id, payload));
         let data = self.store.data_mut();
         data.typing_into = None;
@@ -3399,6 +3400,12 @@ mod tests {
         assert!(disarmed(&p), "run_user_action disarms afterwards");
         p.run_command(idle, true).unwrap();
         assert!(disarmed(&p), "an unspent command is disarmed too");
+        p.store.data_mut().keys.push((pr.into(), "cmd+k".into()));
+        p.key_action(pr, true, true).unwrap();
+        assert_eq!(effects(&mut p), (vec!["copied".to_string()], vec![]), "a key press may copy once");
+        p.key_action(pr, false, true).unwrap();
+        assert_eq!(effects(&mut p), (vec![], vec![]), "its release may not copy again");
+        assert!(disarmed(&p));
         p.on_event(&tapped(EventKind::Stop, true, None)).unwrap();
         assert_eq!(effects(&mut p), (vec![], vec![]));
 
