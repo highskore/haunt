@@ -856,7 +856,7 @@ final class PaletteView: NSView {
 
     /// `[effects] palette.icons`: the sidebar's icons, a tab's kind or the shell glyph.
     private func drawIcon(_ kind: RowKind, in r: NSRect, ctx: CGContext) {
-        if Draw.pixelIcon(kind, in: r) { return }
+        if kind != .codex, Draw.pixelIcon(claude: kind == .claude, in: r) { return }
         switch kind {
         case .claude:
             let s = Tok.Size.claudeIcon

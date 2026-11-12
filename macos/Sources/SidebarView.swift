@@ -758,7 +758,7 @@ final class SidebarView: NSView, NSTextFieldDelegate {
     }
 
     private func drawIcon(_ kind: RowKind, in r: NSRect, ctx: CGContext) {
-        if Draw.pixelIcon(kind, in: r) { return }
+        if kind != .codex, Draw.pixelIcon(claude: kind == .claude, in: r) { return }
         switch kind {
         case .claude:
             let s = Tok.Size.claudeIcon

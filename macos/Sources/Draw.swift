@@ -275,16 +275,12 @@ enum Draw {
         }
     }
 
-    /// `icon.style = "pixel"`: the claude and shell icons as pixel art; false for the vector style or a kind without one.
-    static func pixelIcon(_ kind: RowKind, in r: NSRect) -> Bool {
+    /// `icon.style = "pixel"`: the claude icon, or else the shell's, as pixel art; false for the vector style.
+    static func pixelIcon(claude: Bool, in r: NSRect) -> Bool {
         guard Theme.current.effects.iconStyle == "pixel" else { return false }
-        switch kind {
-        case .claude: pixelStar(in: r)
-        case .shell:
-            pixels(dosPixels, ["k": .black, "b": NSColor(srgbRed: 0, green: 0, blue: 0.5, alpha: 1), "g": NSColor(white: 0.75, alpha: 1)],
-                   at: NSPoint(x: r.minX, y: r.minY), scale: r.width / 16)
-        case .codex: return false
-        }
+        if claude { pixelStar(in: r); return true }
+        pixels(dosPixels, ["k": .black, "b": NSColor(srgbRed: 0, green: 0, blue: 0.5, alpha: 1), "g": NSColor(white: 0.75, alpha: 1)],
+               at: NSPoint(x: r.minX, y: r.minY), scale: r.width / 16)
         return true
     }
 
