@@ -45,7 +45,8 @@ impl ExecCommand {
         Ok(match self {
             Self::GhPrChecks => ("gh", s(&["pr", "checks", "--json", "name,state,bucket,startedAt,completedAt,link"])),
             Self::GhPrView => ("gh", s(&["pr", "view", "--json", "number,url,title,state,isDraft,headRefName"])),
-            Self::GitStatus => ("git", s(&["status", "--porcelain=v2", "--branch"])),
+            // A submodule's own status would need a second git; its commit moving is still reported.
+            Self::GitStatus => ("git", s(&["status", "--porcelain=v2", "--branch", "--ignore-submodules=dirty"])),
             Self::GitBranch => ("git", s(&["rev-parse", "--abbrev-ref", "HEAD"])),
             Self::GitHead => ("git", s(&["rev-parse", "HEAD"])),
             Self::GitLog(n) => {
@@ -165,6 +166,28 @@ fn defines_filters(git: &Path, repo: &Repo) -> bool {
     }
 }
 
+/// macOS's sandbox runner; deprecated by Apple but still shipped, and without it git doesn't run.
+#[cfg(target_os = "macos")]
+const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+
+/// A command that runs `bin`. On macOS git runs under `sandbox-exec` with a profile that lets it start no
+/// process but itself, so no filter, hook, pager, fsmonitor, signing or other program a repository could
+/// name runs, whatever its config or attributes say and whenever they change. Elsewhere (tests) as is.
+fn command(bin: &Path) -> Result<Command, String> {
+    #[cfg(target_os = "macos")]
+    if bin.file_name().is_some_and(|n| n == "git") {
+        let path = bin.to_str().filter(|p| !p.contains(['"', '\\'])).ok_or("git's path can't go in a sandbox profile")?;
+        if !Path::new(SANDBOX_EXEC).is_file() {
+            return Err(format!("{SANDBOX_EXEC} is missing, and Haunt runs git only inside it"));
+        }
+        let mut c = Command::new(SANDBOX_EXEC);
+        let profile = format!("(version 1)(allow default)(deny process-fork)(deny process-exec)(allow process-exec (literal \"{path}\"))");
+        c.arg("-p").arg(profile).arg(bin);
+        return Ok(c);
+    }
+    Ok(Command::new(bin))
+}
+
 /// Reads at most `OUTPUT_MAX` and drains the rest, so the child never blocks on a full pipe.
 fn read_capped(mut r: impl Read) -> (Vec<u8>, bool) {
     let mut out = Vec::new();
@@ -193,7 +216,7 @@ pub fn run(cmd: &ExecCommand, repo: &Repo) -> Result<ExecOutput, String> {
 
 fn run_argv(bin: &Path, args: &[String], repo: Option<&Repo>, dir: &Path, timeout: Duration) -> Result<ExecOutput, String> {
     let prog = bin.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let mut c = Command::new(bin);
+    let mut c = command(bin)?;
     environment(&mut c);
     if let Some(r) = repo {
         c.env("GIT_DIR", &r.git_dir).env("GIT_WORK_TREE", &r.work_tree);
@@ -221,12 +244,12 @@ fn run_argv(bin: &Path, args: &[String], repo: Option<&Repo>, dir: &Path, timeou
     unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
     let (out, cut_out) = out.join().unwrap_or_default();
     let (err, cut_err) = err.join().unwrap_or_default();
-    Ok(ExecOutput {
-        status,
-        stdout: String::from_utf8_lossy(&out).into_owned(),
-        stderr: String::from_utf8_lossy(&err).into_owned(),
-        truncated: cut_out || cut_err,
-    })
+    let stderr = String::from_utf8_lossy(&err).into_owned();
+    // sandbox-exec reports its own failures (a profile it can't apply, a git it can't start) this way.
+    if stderr.starts_with("sandbox-exec:") {
+        return Err(format!("{prog} couldn't start in its sandbox: {}", stderr.lines().next().unwrap_or_default()));
+    }
+    Ok(ExecOutput { status, stdout: String::from_utf8_lossy(&out).into_owned(), stderr, truncated: cut_out || cut_err })
 }
 
 #[cfg(test)]
@@ -290,6 +313,97 @@ mod tests {
             assert_eq!(run(c, &repo).unwrap().status, 0, "{c:?}");
         }
         assert!(!marker.exists(), "a program from the repo's config ran");
+    }
+
+    /// `git args` in `dir` with nothing pinned but a global config of /dev/null: what the sandbox alone stops.
+    /// Run in a pty (`script`), so git also starts a pager.
+    #[cfg(target_os = "macos")]
+    fn bare_git(sandboxed: bool, dir: &Path, args: &[&str]) -> std::process::Output {
+        let git = binary("git").unwrap();
+        let inner = if sandboxed { command(&git).unwrap() } else { Command::new(&git) };
+        let mut c = Command::new("/usr/bin/script");
+        c.args(["-q", "/dev/null"]).arg(inner.get_program()).args(inner.get_args()).args(args);
+        c.current_dir(dir).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").stdin(Stdio::null()).output().unwrap()
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_filter_added_after_the_check_never_runs_and_status_still_completes() {
+        let Ok(git) = binary("git") else { return };
+        let (dir, marker) = hostile_repo("exec-race");
+        std::fs::remove_file(dir.join(".gitattributes")).unwrap();
+        let repo = repo_at(&dir);
+        assert!(!defines_filters(&git, &repo), "nothing defines a filter yet");
+        // The race: between the check and the status, the repo gains a filter and an attribute naming it in
+        // .git/info/attributes, which GIT_ATTR_SOURCE doesn't cover.
+        let evil = dir.join("evil.sh").display().to_string();
+        assert!(bare_git(false, &dir, &["config", "filter.evil.clean", &evil]).status.success());
+        std::fs::write(dir.join(".git/info/attributes"), "* filter=evil\n").unwrap();
+        let args = ExecCommand::GitStatus.argv().unwrap().1;
+        let o = run_argv(&git, &args, Some(&repo), &repo.work_tree, TIMEOUT).unwrap();
+        assert_eq!(o.status, 0, "{o:?}");
+        assert!(o.stdout.contains("# branch.head trunk") && o.stdout.contains("a.txt"), "{o:?}");
+        assert!(!marker.exists(), "the filter ran");
+        // The same status outside the sandbox, all pins kept, does run it: the fixture is a real race.
+        let mut c = Command::new(&git);
+        environment(&mut c);
+        c.args(&args).current_dir(&repo.work_tree).env("GIT_DIR", &repo.git_dir).env("GIT_WORK_TREE", &repo.work_tree).output().unwrap();
+        assert!(marker.exists(), "without the sandbox the pins alone let it run");
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn the_sandbox_alone_stops_fsmonitor_pager_and_gpg_programs() {
+        let Ok(_) = binary("git") else { return };
+        let (dir, marker) = hostile_repo("exec-sandbox");
+        let evil = dir.join("evil.sh").display().to_string();
+        let fsmonitor = ["-c", &format!("core.fsmonitor={evil}"), "status", "--porcelain"].map(String::from);
+        let pager = ["-c", &format!("core.pager={evil}"), "--paginate", "log", "-1"].map(String::from);
+        let gpg = ["-c", &format!("gpg.program={evil}"), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qS", "--allow-empty", "-m", "s"].map(String::from);
+        for (what, args) in [("fsmonitor", &fsmonitor[..]), ("pager", &pager[..]), ("gpg", &gpg[..])] {
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let _ = std::fs::remove_file(&marker);
+            bare_git(true, &dir, &args);
+            assert!(!marker.exists(), "{what} ran inside the sandbox");
+            bare_git(false, &dir, &args);
+            assert!(marker.exists(), "{what} should run outside it, or this test proves nothing");
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn git_needs_no_other_process_for_what_haunt_runs() {
+        let Ok(_) = binary("git") else { return };
+        let dir = crate::testdir::TempDir::created("exec-nofork");
+        let sub = crate::testdir::TempDir::created("exec-nofork-sub");
+        let git = |d: &Path, a: &[&str]| assert!(bare_git(false, d, a).status.success(), "{a:?}");
+        let commit = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "c"];
+        git(&sub, &["init", "-q", "-b", "trunk"]);
+        git(&sub, &[&commit[..], &["--allow-empty"]].concat());
+        git(&dir, &["init", "-q", "-b", "trunk"]);
+        git(&dir, &["config", "core.untrackedCache", "true"]);
+        git(&dir, &["config", "core.fsmonitor", "true"]);
+        std::fs::write(dir.join(".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n").unwrap();
+        std::fs::write(dir.join("big.bin"), "version https://git-lfs.github.com/spec/v1\noid sha256:0000000000000000000000000000000000000000000000000000000000000000\nsize 1\n").unwrap();
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        git(&dir, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", sub.to_str().unwrap(), "sub"]);
+        git(&dir, &["add", "-A"]);
+        git(&dir, &commit);
+        git(&dir, &["update-index", "--untracked-cache"]);
+        std::fs::write(dir.join("a.txt"), "two\n").unwrap();
+        std::fs::write(dir.join("new.txt"), "n\n").unwrap();
+        let repo = repo_at(&dir);
+        for c in [ExecCommand::GitStatus, ExecCommand::GitBranch, ExecCommand::GitHead, ExecCommand::GitLog(3)] {
+            let o = run(&c, &repo).unwrap();
+            assert_eq!(o.status, 0, "{c:?}: {o:?}");
+            assert!(o.stderr.is_empty(), "{c:?} wanted another process: {}", o.stderr);
+        }
+        let status = run(&ExecCommand::GitStatus, &repo).unwrap().stdout;
+        assert!(status.contains(" a.txt") && status.contains("? new.txt"), "{status}");
+        // The review screen's working-tree diff, as macos/Sources/GitDiff.swift runs it.
+        let diff = bare_git(true, &dir, &["-c", "core.fsmonitor=false", "--no-pager", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--ignore-submodules=dirty", "HEAD", "--"]);
+        let out = String::from_utf8_lossy(&diff.stdout);
+        assert!(diff.status.success() && out.contains("+two") && !out.contains("fork") && !out.contains("not permitted"), "{out}");
     }
 
     #[test]

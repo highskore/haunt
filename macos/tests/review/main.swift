@@ -227,8 +227,7 @@ check(Highlight.spans("letter = selfish").allSatisfy { $0.1 == .plain }, "keywor
 
 // MARK: A real repository
 
-// The app takes only a root-owned git (GitRunner.trusted); the tests use a newer one if there is one,
-// so the working-tree paths that need git 2.40 run too.
+// The app takes only a git no one else can change (GitRunner.trusted); the tests use Homebrew's if there is one.
 let appGit = GitRunner.gitPath
 if let newer = ["/opt/homebrew/bin/git", "/usr/local/bin/git"].first(where: FileManager.default.isExecutableFile(atPath:)) {
     GitRunner.gitPath = newer
@@ -345,13 +344,37 @@ case let .failure(e):
 }
 check(!exists("FILTERED"), "no filter driver ran")
 // A filter that appears after the check: the attributes come from the empty tree, so the worktree's don't apply.
-if GitRunner.supportsAttrSource {
-    _ = GitRunner.run(["diff", "--no-ext-diff", "--no-textconv"], cwd: repo)
-    _ = GitRunner.run(["diff", "--quiet", "--no-ext-diff", "--no-textconv", "HEAD", "--"], cwd: repo)
-    check(!exists("FILTERED"), "GIT_ATTR_SOURCE keeps the worktree's .gitattributes out")
-} else {
-    print("review: git < 2.40, skipping the GIT_ATTR_SOURCE check")
-}
+_ = GitRunner.run(["diff", "--no-ext-diff", "--no-textconv"], cwd: repo)
+_ = GitRunner.run(["diff", "--quiet", "--no-ext-diff", "--no-textconv", "HEAD", "--"], cwd: repo)
+check(!exists("FILTERED"), "GIT_ATTR_SOURCE keeps the worktree's .gitattributes out")
+
+// The race the empty tree doesn't cover: after the check passes, the repo gains a filter in .git/config and an
+// attribute naming it in .git/info/attributes. The sandbox lets git start nothing, so it never runs.
+fresh()
+write("a.txt", "one\n")
+sh(["git", "init", "-q", "-b", "main"], repo)
+sh(["git", "add", "-A"], repo)
+sh(["git", "commit", "-q", "-m", "one"], repo)
+write("evil.sh", "#!/bin/sh\ntouch \(repo)/FILTERED\ncat\n")
+sh(["chmod", "+x", "evil.sh"], repo)
+check(GitRunner.definesDrivers(cwd: repo) == false, "no filter at the check")
+sh(["git", "config", "filter.race.clean", repo + "/evil.sh"], repo)
+write(".git/info/attributes", "* filter=race\n")
+sleep(1)
+write("a.txt", "one\ntwo\n")
+let raced = GitRunner.run(["diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"], cwd: repo)
+check(raced?.status == 0 && raced?.text.contains("+two") == true, "the diff still completes \(raced?.text ?? "nil")")
+check(!exists("FILTERED"), "the sandbox stops a filter named after the check")
+sh(["git", "diff", "HEAD"], repo)
+check(exists("FILTERED"), "plain git runs it (test is live)")
+
+// No sandbox-exec, no git: never run it unsandboxed.
+let realSandbox = GitRunner.sandboxExec
+GitRunner.sandboxExec = "/nonexistent/sandbox-exec"
+check(GitRunner.run(["version"], cwd: "/") == nil, "git doesn't run without its sandbox")
+check(ReviewLoader.load(cwd: repo, headAtStart: nil) == .failure(.failed("git can't start inside /nonexistent/sandbox-exec, and Haunt runs it nowhere else.")),
+      "and the review says why")
+GitRunner.sandboxExec = realSandbox
 
 // A textconv or external diff driver alone also keeps the working tree out; harmless diff settings don't.
 for (k, v) in [("diff.evil.textconv", "true"), ("diff.evil.command", "true"), ("diff.external", "true"), ("diff.renames", "true")] {
@@ -398,7 +421,7 @@ try! FileManager.default.createSymbolicLink(atPath: repo + "/link", withDestinat
 // Trojan Source: a bidi override in a line, a zero-width space in a name.
 write("trojan.txt", "ok\nif (admin) {\u{202E} } \u{2066}// check\n")
 write("zero\u{200B}width.txt", "x\n")
-if GitRunner.supportsAttrSource {
+do {
     var loaded: Result<ReviewDiff, ReviewLoader.LoadError>?
     let fifoTime = elapsed { loaded = ReviewLoader.load(cwd: repo, headAtStart: nil) }
     check(fifoTime < 5, "a FIFO doesn't stall the review (\(fifoTime)s)")
@@ -418,8 +441,6 @@ if GitRunner.supportsAttrSource {
     } else {
         check(false, "load with a FIFO failed")
     }
-} else {
-    print("review: git < 2.40, skipping the untracked-file checks")
 }
 try? FileManager.default.removeItem(atPath: repo)
 
@@ -432,7 +453,7 @@ sh(["git", "add", "-A"], repo)
 sh(["git", "commit", "-q", "-m", "one"], repo)
 write(literal, "one\ntwo\n")
 write(real, "impostor\n")
-if GitRunner.supportsAttrSource, case let .success(d) = ReviewLoader.load(cwd: repo, headAtStart: nil) {
+if case let .success(d) = ReviewLoader.load(cwd: repo, headAtStart: nil) {
     let lit = d.files.first { $0.path == literal }, imp = d.files.first { $0.path == real }
     check(d.files.count == 2 && lit?.status == .modified && imp?.status == .added, "both listed \(d.files.map(\.path))")
     check(lit?.shown == "a⟨U+27E8⟩U+202E⟩b.txt" && imp?.shown == "a⟨U+202E⟩b.txt", "drawn differently")
@@ -441,7 +462,7 @@ if GitRunner.supportsAttrSource, case let .success(d) = ReviewLoader.load(cwd: r
     st.viewed.insert(literal)
     check(!st.viewed.contains(real), "viewed state doesn't carry over")
 } else {
-    check(GitRunner.supportsAttrSource == false, "load with look-alike names failed")
+    check(false, "load with look-alike names failed")
 }
 try? FileManager.default.removeItem(atPath: repo)
 
@@ -496,7 +517,7 @@ check(GitRunner.trusted("/sbin/../usr/sbin/nonexistent-git") == nil, "a missing 
 for p in ["/opt/homebrew/bin/git", "/usr/local/bin/git"] where FileManager.default.fileExists(atPath: p) {
     check(GitRunner.trusted(p) == real(p), "Homebrew's git as installed here is trusted: \(p) -> \(real(p))")
 }
-if let g = appGit { check(GitRunner.trusted(g) == g || g == "/usr/bin/git", "the app's own pick is trusted: \(g)") }
+if let g = appGit { check(GitRunner.trusted(g) == g, "the app's own pick is trusted, never the /usr/bin/git shim: \(g)") }
 
 // A submodule with its own filter: the parent's config is clean, so only never looking inside keeps it from running.
 fresh()

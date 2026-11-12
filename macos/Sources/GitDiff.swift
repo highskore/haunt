@@ -263,29 +263,35 @@ enum GitRunner {
         }
     }
 
-    /// git 2.40 added `GIT_ATTR_SOURCE`; older versions ignore it, so working-tree attributes would still apply.
-    static var supportsAttrSource: Bool {
-        if let known = attrSourceKnown, known.path == gitPath { return known.ok }
-        var ok = false
-        if let o = run(["version"], cwd: "/"), o.status == 0 {
-            let nums = o.text.split(separator: " ").dropFirst(2).first?.split(separator: ".").compactMap { Int($0) } ?? []
-            ok = nums.count >= 2 && (nums[0], nums[1]) >= (2, 40)
-        }
-        attrSourceKnown = (gitPath, ok)
-        return ok
-    }
-    private static var attrSourceKnown: (path: String?, ok: Bool)?
-
     /// Set once at first use; the review tests point it at a newer git.
     static var gitPath: String? = defaultGit()
 
+    /// macOS's sandbox runner (deprecated by Apple, still shipped). git runs only inside it; the tests move it.
+    static var sandboxExec = "/usr/bin/sandbox-exec"
+
     private static func defaultGit() -> String? {
-        for p in ["/opt/homebrew/bin/git", "/usr/local/bin/git"] { if let t = trusted(p) { return t } }
-        // /usr/bin/git is a shim that pops an install dialog when the developer tools are missing.
-        let fm = FileManager.default
-        let tools = ["/Library/Developer/CommandLineTools/usr/bin/git", "/Applications/Xcode.app/Contents/Developer/usr/bin/git"]
-        return tools.contains(where: fm.isExecutableFile(atPath:)) ? "/usr/bin/git" : nil
+        // The tools' git itself: /usr/bin/git is a shim that starts it, which the sandbox wouldn't allow.
+        let candidates = ["/opt/homebrew/bin/git", "/usr/local/bin/git", "/Library/Developer/CommandLineTools/usr/bin/git",
+                          "/Applications/Xcode.app/Contents/Developer/usr/bin/git"]
+        return candidates.lazy.compactMap(trusted).first
     }
+
+    /// `sandbox-exec` arguments that run `git` able to start no process but itself, so no filter, hook,
+    /// pager, fsmonitor or other program a repository names can run, whatever its config or attributes say
+    /// when git reads them. Nil when that can't be set up, and then git doesn't run at all.
+    static func sandboxed(_ git: String) -> [String]? {
+        guard let c = realpath(git, nil) else { return nil }
+        let real = String(cString: c)
+        free(c)
+        guard !real.contains("\""), !real.contains("\\"), FileManager.default.isExecutableFile(atPath: sandboxExec) else { return nil }
+        let args = ["-p", "(version 1)(allow default)(deny process-fork)(deny process-exec)(allow process-exec (literal \"\(real)\"))", real]
+        if sandboxWorks?.git != real || sandboxWorks?.runner != sandboxExec {
+            let probe = spawn(sandboxExec, args + ["version"], cwd: "/", env: environment(), timeout: 10, maxBytes: 4096)
+            sandboxWorks = (real, sandboxExec, probe?.status == 0 && probe?.text.hasPrefix("git version") == true)
+        }
+        return sandboxWorks?.ok == true ? args : nil
+    }
+    private static var sandboxWorks: (git: String, runner: String, ok: Bool)?
 
     /// `path` with links resolved, if it and every folder up to / belong to root or the user and only they,
     /// admin or wheel (who can sudo anyway) can write to them; a git anyone else can replace would run on every review.
@@ -321,9 +327,9 @@ enum GitRunner {
 
     /// Blocks the calling thread; call it off the main thread. Output past `maxBytes` is cut and git killed.
     static func run(_ args: [String], cwd: String, timeout: TimeInterval = 10, maxBytes: Int = 16 << 20) -> Output? {
-        guard let git = gitPath else { return nil }
-        return spawn(git, safeConfig.flatMap { ["-c", $0] } + ["--no-pager"] + args, cwd: cwd, env: environment(),
-                     timeout: timeout, maxBytes: maxBytes)
+        guard let git = gitPath, let sandbox = sandboxed(git) else { return nil }
+        return spawn(sandboxExec, sandbox + safeConfig.flatMap { ["-c", $0] } + ["--no-pager"] + args, cwd: cwd,
+                     env: environment(), timeout: timeout, maxBytes: maxBytes)
     }
 
     /// Runs `exe` without a shell in a process group of its own, so a timeout or the output cap kills
@@ -437,7 +443,10 @@ enum ReviewLoader {
 
     /// Runs several git commands; call it off the main thread.
     static func load(cwd: String, headAtStart: String?) -> Result<ReviewDiff, LoadError> {
-        guard GitRunner.gitPath != nil else { return .failure(.noGit) }
+        guard let gitPath = GitRunner.gitPath else { return .failure(.noGit) }
+        guard GitRunner.sandboxed(gitPath) != nil else {
+            return .failure(.failed("git can't start inside \(GitRunner.sandboxExec), and Haunt runs it nowhere else."))
+        }
         guard let top = GitRunner.run(["rev-parse", "--show-toplevel"], cwd: cwd), top.status == 0 else {
             return .failure(.notARepo(cwd))
         }
@@ -467,20 +476,16 @@ enum ReviewLoader {
 
         // Reading the working tree can run a filter driver; comparing two commits never does.
         let readTree: Bool
-        switch (GitRunner.definesDrivers(cwd: root), GitRunner.supportsAttrSource) {
-        case (false?, true):
+        switch GitRunner.definesDrivers(cwd: root) {
+        case false?:
             readTree = true
-        case (true?, _):
+        case true?:
             readTree = false
             notes.append("This repository defines git filters or diff drivers, so the working-tree diff is skipped "
                          + "and only committed changes are shown.")
-        case (nil, _):
+        case nil:
             readTree = false
             notes.append("Haunt couldn't read this repository's filter settings, so only committed changes are shown.")
-        case (false?, false):
-            readTree = false
-            notes.append("Uncommitted changes need git 2.40 or newer, which can ignore the working tree's .gitattributes; "
-                         + "only committed changes are shown.")
         }
         let range: [String]? = readTree ? [base] : (head.map { base == $0 ? nil : [base, $0] } ?? nil)
         var files: [FileDiff] = []
