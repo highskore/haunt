@@ -484,7 +484,8 @@ struct AuditDrain: Equatable, Hashable {
 }
 
 enum GlowLabel: Equatable, Hashable {
-    case count(n: UInt8)
+    case noLabel
+    case needs
     case row(surface: String, head: String, waitedSecs: UInt64)
 }
 

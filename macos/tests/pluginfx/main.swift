@@ -11,7 +11,8 @@ struct DockImage: Equatable, Hashable {
 }
 
 enum GlowLabel: Equatable, Hashable {
-    case count(n: UInt8)
+    case noLabel
+    case needs
     case row(surface: String, head: String, waitedSecs: UInt64)
 }
 
@@ -175,7 +176,8 @@ do {
 
 // MARK: The glow's words
 
-check(PluginGlow.label(count: 0) == nil && PluginGlow.label(count: 1) == "1 needs you" && PluginGlow.label(count: 3) == "3 need you", "counts")
+check(PluginGlow.label(count: 0) == nil && PluginGlow.label(count: 1) == "1 needs you" && PluginGlow.label(count: 3) == "3 need you"
+      && PluginGlow.label(count: 120) == "99+ need you", "counts")
 check(PluginGlow.label(head: "api · git push?", waited: 72) == "api · git push? · 1m12s", PluginGlow.label(head: "api · git push?", waited: 72))
 check(PluginGlow.elapsed(0) == "0s" && PluginGlow.elapsed(3599) == "59m59s" && PluginGlow.elapsed(7500) == "2h05m" && PluginGlow.elapsed(-5) == "0s", "elapsed")
 let longest = PluginGlow.label(head: String(repeating: "x", count: 23), waited: 3599)

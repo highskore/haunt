@@ -471,10 +471,12 @@ interface dock {
 interface glow {
   use rows.{tone};
   variant glow-label {
-    // 0 to 99: "1 needs you", "3 need you", nothing for 0.
-    count(u8),
+    none,
+    // Haunt's own count of the tabs that need you, kept up to date: "1 needs you", "3 need you",
+    // nothing for 0.
+    needs,
     // A tab that needs you: "<tab> · <command>? · <time waiting>", the command only with
-    // `event_details`. Once that tab doesn't need you, or if it didn't, haunt's count of those that do.
+    // `event_details`. Once that tab doesn't need you, or if it didn't, `needs`.
     row(string),
   }
   show: func(tone: tone, label: glow-label) -> result<_, string>;

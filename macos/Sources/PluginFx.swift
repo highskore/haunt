@@ -115,9 +115,11 @@ final class PluginGlow {
                                                                     queue: .main) { [weak self] _ in self?.apply() }
         }
     }
-    private enum Shown { case count(UInt8), row(surface: String, head: String, since: Date) }
+    private enum Shown { case noLabel, needs, row(surface: String, head: String, since: Date) }
     /// Shown while set.
     private var shown: Shown?
+    /// The tabs that need you, as of the last sidebar snapshot.
+    private var needing: Set<String> = []
     private var panel: GlowPanel?
     /// Counts a row label's waiting time on.
     private var ticker: Timer?
@@ -142,18 +144,27 @@ final class PluginGlow {
 
     func show(_ label: GlowLabel) {
         switch label {
-        case let .count(n): shown = .count(n)
+        case .noLabel: shown = .noLabel
+        case .needs: shown = .needs
         case let .row(surface, head, waitedSecs):
             shown = .row(surface: surface, head: head, since: Date(timeIntervalSinceNow: -TimeInterval(waitedSecs)))
         }
         apply()
     }
 
-    /// The tabs that need you, from each sidebar snapshot: a row label whose tab no longer does becomes the count.
+    /// The tabs that need you, from each sidebar snapshot: the count follows it, and a row label whose tab no
+    /// longer needs you becomes the count.
     func needYou(_ surfaces: Set<String>) {
-        guard case let .row(surface, _, _) = shown, !surfaces.contains(surface) else { return }
-        shown = .count(UInt8(min(surfaces.count, 99)))
-        apply()
+        guard surfaces != needing else { return }
+        needing = surfaces
+        switch shown {
+        case let .row(surface, _, _) where !surfaces.contains(surface):
+            shown = .needs
+            apply()
+        case .needs where enabled && showsLabel:
+            panel?.glow.setLabel(text)
+        default: break
+        }
     }
 
     func hide() {
@@ -162,10 +173,11 @@ final class PluginGlow {
     }
 
     /// Haunt's words, never the plugin's, cut to 32 characters.
-    static func label(count: UInt8) -> String? {
+    static func label(count: Int) -> String? {
         switch count {
-        case 0: nil
+        case ...0: nil
         case 1: "1 needs you"
+        case 100...: "99+ need you"
         default: "\(count) need you"
         }
     }
@@ -184,7 +196,8 @@ final class PluginGlow {
 
     private var text: String? {
         switch shown {
-        case let .count(n): Self.label(count: n)
+        case .noLabel: nil
+        case .needs: Self.label(count: needing.count)
         case let .row(_, head, since): Self.label(head: head, waited: Date().timeIntervalSince(since))
         case nil: nil
         }
