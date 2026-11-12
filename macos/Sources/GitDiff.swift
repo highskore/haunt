@@ -35,6 +35,30 @@ struct FileDiff: Equatable {
     var hiddenChars = false
     /// A FIFO, socket or device among the untracked files: listed, never read.
     var special = false
+    /// For a binary file: what changed, since its content isn't shown.
+    var blob = BinaryInfo()
+
+    struct BinaryInfo: Equatable {
+        var oldHash: String?
+        var newHash: String?
+        var oldSize: Int?
+        var newSize: Int?
+    }
+
+    /// "Binary file, not shown · 12.0 KB → 14.1 KB · 1a2b3c4 → 5d6e7f8", with what's known.
+    var binaryNote: String {
+        func size(_ n: Int?) -> String {
+            guard let n else { return "?" }
+            if n < 1024 { return "\(n) B" }
+            if n < 1 << 20 { return String(format: "%.1f KB", Double(n) / 1024) }
+            return String(format: "%.1f MB", Double(n) / Double(1 << 20))
+        }
+        var parts = ["Binary file, not shown"]
+        let (o, n) = (status == .added ? "none" : size(blob.oldSize), status == .deleted ? "none" : size(blob.newSize))
+        if blob.oldSize != nil || blob.newSize != nil { parts.append("\(o) → \(n)") }
+        if blob.oldHash != nil || blob.newHash != nil { parts.append("\(blob.oldHash ?? "none") → \(blob.newHash ?? "none")") }
+        return parts.joined(separator: " · ")
+    }
 
     var shown: String { Visible.text(path) }
     var name: String { (shown as NSString).lastPathComponent }
@@ -124,6 +148,12 @@ enum DiffParser {
                 f.path = unquote(String(line.dropFirst(10)))
             } else if line.hasPrefix("Binary files ") || line == "GIT binary patch" {
                 f.binary = true
+            } else if line.hasPrefix("index "), let range = line.dropFirst(6).split(separator: " ").first {
+                let ends = range.components(separatedBy: "..")
+                if ends.count == 2 {
+                    let hash = { (h: String) -> String? in h.allSatisfy { $0 == "0" } || !h.allSatisfy(\.isHexDigit) ? nil : String(h.prefix(7)) }
+                    (f.blob.oldHash, f.blob.newHash) = (hash(ends[0]), hash(ends[1]))
+                }
             } else if line.hasPrefix("+++ ") {
                 let p = unquote(String(line.dropFirst(4)))
                 if p != "/dev/null" { f.path = p.hasPrefix("b/") ? String(p.dropFirst(2)) : p }
@@ -237,6 +267,9 @@ enum GitRunner {
         var data: Data
         var truncated: Bool
         var timedOut: Bool
+        /// Past the cap: bytes read and dropped, and how many `diff --git` headers they held.
+        var dropped = 0
+        var droppedFiles = 0
         var text: String { String(decoding: data, as: UTF8.self) }
     }
 
@@ -335,7 +368,7 @@ enum GitRunner {
         return out
     }
 
-    /// Blocks the calling thread; call it off the main thread. Output past `maxBytes` is cut and git killed.
+    /// Blocks the calling thread; call it off the main thread. Output past `maxBytes` is counted, not kept.
     static func run(_ args: [String], cwd: String, timeout: TimeInterval = 10, maxBytes: Int = 16 << 20) -> Output? {
         guard let git = gitPath, let sandbox = sandboxed(git) else { return nil }
         return spawn(sandboxExec, sandbox + safeConfig.flatMap { ["-c", $0] } + ["--no-pager"] + args, cwd: cwd,
@@ -381,7 +414,11 @@ enum GitRunner {
         final class Sink: @unchecked Sendable {
             let lock = NSLock()
             var data = Data(), truncated = false, abandoned = false
+            var dropped = 0, droppedFiles = 0
+            /// The last bytes seen, so a header split across reads is still counted.
+            var tail: [UInt8] = []
         }
+        let header = Array("\ndiff --git ".utf8)
         let sink = Sink()
         let reader = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .utility).async {
@@ -393,13 +430,16 @@ enum GitRunner {
                 sink.lock.lock()
                 defer { sink.lock.unlock() }
                 if sink.abandoned { break }
-                if sink.data.count + n > maxBytes {
-                    sink.data.append(contentsOf: buf[..<(maxBytes - sink.data.count)])
+                let keep = max(0, min(n, maxBytes - sink.data.count))
+                sink.data.append(contentsOf: buf[..<keep])
+                if keep < n {
+                    // Past the cap: read on to the end (or the timeout), counting what isn't kept.
                     sink.truncated = true
-                    kill(-pid, SIGKILL)
-                    break
+                    sink.dropped += n - keep
+                    let seen = (sink.tail.isEmpty ? Array(sink.data.suffix(header.count - 1)) : sink.tail) + buf[keep..<n]
+                    sink.droppedFiles += (0...max(0, seen.count - header.count)).filter { seen.count >= header.count && seen[$0..<$0 + header.count].elementsEqual(header) }.count
+                    sink.tail = Array(seen.suffix(header.count - 1))
                 }
-                sink.data.append(contentsOf: buf[..<n])
             }
             close(rd)
             reader.signal()
@@ -417,7 +457,7 @@ enum GitRunner {
         defer { sink.lock.unlock() }
         sink.abandoned = true
         return Output(status: status & 0x7f == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f), data: sink.data,
-                      truncated: sink.truncated, timedOut: timedOut)
+                      truncated: sink.truncated, timedOut: timedOut, dropped: sink.dropped, droppedFiles: sink.droppedFiles)
     }
 }
 
@@ -448,6 +488,14 @@ enum ReviewLoader {
     static let maxUntracked = 100
     static let maxUntrackedBytes = 1 << 20
     static let maxNoIndexBytes = 2 << 20
+
+    /// How much a cut diff left out: "1.5 MB more, in 3 more files, isn't shown" ("at least" when git timed out).
+    static func cut(_ o: GitRunner.Output) -> String {
+        let n = o.dropped
+        let size = n < 1 << 20 ? String(format: "%.1f KB", Double(n) / 1024) : String(format: "%.1f MB", Double(n) / Double(1 << 20))
+        let files = o.droppedFiles == 0 ? "" : o.droppedFiles == 1 ? ", in 1 more file," : ", in \(o.droppedFiles) more files,"
+        return (o.timedOut ? "at least " : "") + size + " more" + files + " isn't shown"
+    }
 
     enum LoadError: Error, Equatable { case noGit, notARepo(String), failed(String) }
 
@@ -505,8 +553,16 @@ enum ReviewLoader {
             guard let out = git(diffArgs) else { return .failure(.failed("git diff didn't start.")) }
             guard out.status == 0 || out.truncated || out.timedOut else { return .failure(.failed("git diff failed (exit \(out.status)).")) }
             if out.timedOut { notes.append("git diff timed out; the list may be incomplete.") }
-            if out.truncated { notes.append("The diff is over 16 MB and was cut.") }
+            if out.truncated { notes.append("The diff is over 16 MB and was cut: " + ReviewLoader.cut(out) + "; the last file shown may be incomplete.") }
             files = DiffParser.parse(out.text)
+            for i in files.indices where files[i].binary {
+                let size = { (h: String?) in h.flatMap { line(["cat-file", "-s", $0]) }.flatMap { Int($0) } }
+                files[i].blob.oldSize = files[i].status == .added ? nil : size(files[i].blob.oldHash)
+                // A working-tree file's blob isn't in the object database; its size is on disk.
+                var st = stat()
+                let onDisk = readTree && lstat((root as NSString).appendingPathComponent(files[i].path), &st) == 0 ? Int(st.st_size) : nil
+                files[i].blob.newSize = files[i].status == .deleted ? nil : size(files[i].blob.newHash) ?? onDisk
+            }
         }
         let tracked = Set(files.map(\.path))
         let dirty = readTree ? (head.map { git(["diff", "--quiet", "--no-ext-diff", "--no-textconv", "--ignore-submodules=dirty", $0, "--"])?.status == 1 } ?? !files.isEmpty) : false
@@ -545,7 +601,9 @@ enum ReviewLoader {
                     continue
                 }
                 if Int(st.st_size) > maxUntrackedBytes {
-                    files.append(DiffParser.visible(FileDiff(path: p, status: .added, binary: true)))
+                    var big = DiffParser.visible(FileDiff(path: p, status: .added, binary: true))
+                    big.blob.newSize = Int(st.st_size)
+                    files.append(big)
                     notes.append("\(shown) is over 1 MB and isn't shown.")
                     continue
                 }
@@ -553,9 +611,12 @@ enum ReviewLoader {
                 guard let d = GitRunner.run(["diff", "--no-index", "--text", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",
                                              "--dst-prefix=b/", "--", "/dev/null", p], cwd: root, maxBytes: maxNoIndexBytes),
                       d.status <= 1 || d.truncated else { continue }
-                if d.truncated { notes.append("\(shown)'s diff is over 2 MB and was cut.") }
+                if d.truncated { notes.append("\(shown)'s diff is over 2 MB and was cut: " + ReviewLoader.cut(d) + ".") }
                 var parsed = DiffParser.parse(d.text)
-                for k in parsed.indices { parsed[k].status = .added; parsed[k].path = p; parsed[k].hiddenChars = parsed[k].hiddenChars || Visible.hasHidden(p) }
+                for k in parsed.indices {
+                    parsed[k].status = .added; parsed[k].path = p; parsed[k].hiddenChars = parsed[k].hiddenChars || Visible.hasHidden(p)
+                    parsed[k].blob.newSize = Int(st.st_size)
+                }
                 files += parsed.isEmpty ? [DiffParser.visible(FileDiff(path: p, status: .added))] : parsed
             }
         }

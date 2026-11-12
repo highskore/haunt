@@ -384,6 +384,10 @@ case let .success(d):
     check(a?.binary == false && a?.additions == 1 && a?.hunks.first?.lines.contains { $0.text == "sneaky" } == true, "-diff text is shown \(String(describing: a))")
     let b = d.files.first { $0.path == "bin.dat" }
     check(b?.binary == true && b?.hunks.isEmpty == true, "a NUL is binary \(String(describing: b))")
+    let note = b?.binaryNote ?? ""
+    let hashes = note.split(separator: "·").last.map { $0.split(separator: " ").filter { $0 != "→" } } ?? []
+    check(note.hasPrefix("Binary file, not shown · 4 B → 4 B · ") && hashes.count == 2 && hashes[0] != hashes[1]
+          && hashes.allSatisfy { $0.count == 7 && $0.allSatisfy(\.isHexDigit) }, "a binary change shows its sizes and hashes: \(note)")
 case let .failure(e):
     check(false, "load failed: \(e)")
 }
@@ -395,6 +399,27 @@ check(GitRunner.run(["version"], cwd: "/") == nil, "git doesn't run without its 
 check(ReviewLoader.load(cwd: repo, headAtStart: nil) == .failure(.failed("git can't start inside /nonexistent/sandbox-exec, and Haunt runs it nowhere else.")),
       "and the review says why")
 GitRunner.sandboxExec = realSandbox
+
+// A cut diff counts what it left out: bytes, and the files whose headers fell past the cap.
+fresh()
+for i in 0..<6 { write("f\(i).txt", String(repeating: "line \(i)\n", count: 200)) }
+sh(["git", "init", "-q", "-b", "main"], repo)
+sh(["git", "add", "-A"], repo)
+sh(["git", "commit", "-q", "-m", "one"], repo)
+for i in 0..<6 { write("f\(i).txt", String(repeating: "changed \(i)\n", count: 200)) }
+let diffArgs = ["diff", "--text", "--no-ext-diff", "--no-textconv", "HEAD", "--"]
+let whole = GitRunner.run(diffArgs, cwd: repo)!.data
+let cap = whole.count / 3
+let part = GitRunner.run(diffArgs, cwd: repo, maxBytes: cap)!
+let marker = Array("\ndiff --git ".utf8), bytes = Array(whole)
+let past = (max(0, cap - marker.count + 1)...(bytes.count - marker.count)).filter { bytes[$0..<$0 + marker.count].elementsEqual(marker) }.count
+check(part.truncated && part.data.count == cap && part.dropped == whole.count - cap && part.droppedFiles == past && past >= 3,
+      "cut at \(cap): dropped \(part.dropped) of \(whole.count - cap), \(part.droppedFiles) files of \(past)")
+check(ReviewLoader.cut(part) == String(format: "%.1f KB more, in \(past) more files, isn't shown", Double(whole.count - cap) / 1024), ReviewLoader.cut(part))
+var slow = part
+slow.timedOut = true
+slow.droppedFiles = 1
+check(ReviewLoader.cut(slow).hasPrefix("at least ") && ReviewLoader.cut(slow).contains(", in 1 more file,"), ReviewLoader.cut(slow))
 
 // Reviews load on background threads; the sandbox probe's cache is shared and locked. A new runner path
 // empties it, so the threads race to fill it.

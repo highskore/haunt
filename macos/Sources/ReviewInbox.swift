@@ -602,7 +602,7 @@ private final class InboxDiffView: NSView {
                 add(.header(fi), fhH)
                 if f.binary || f.special || (f.hunks.isEmpty && f.droppedLines == 0) {
                     add(.note(f.special ? "Special file (not a regular file or link), not shown"
-                              : f.binary ? "Binary file, not shown" : "No changes to show"), hunkH)
+                              : f.binary ? f.binaryNote : "No changes to show"), hunkH)
                     continue
                 }
                 for (hi, h) in f.hunks.enumerated() {

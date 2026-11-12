@@ -735,7 +735,7 @@ final class DiffDocView: NSView {
                 add(.header(file: fi, top: n > 0), TS.reviewFhH)
             }
             if f.binary || f.special || f.hunks.isEmpty, f.droppedLines == 0 {
-                add(f.special ? .notice("Special file (not a regular file or link), not shown") : .binary, hunkH)
+                add(f.special ? .notice("Special file (not a regular file or link), not shown") : f.binary ? .notice(f.binaryNote) : .binary, hunkH)
                 continue
             }
             for (hi, h) in f.hunks.enumerated() {
