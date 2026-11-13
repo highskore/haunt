@@ -1,3 +1,3 @@
 # The adapter commits make-app.sh bundles: <name> <repo> <rev>. Bump a rev after pushing the adapter.
-claude ssh://git@github.com/highskore/haunt-claude.git bf7cb1aa20d91add2cdb40ced86ea80daf862587
+claude ssh://git@github.com/highskore/haunt-claude.git 44e3bca
 codex ssh://git@github.com/highskore/haunt-codex.git b1da2e3b6c983cbb7b5f0118d14d4b36ff516aaa
